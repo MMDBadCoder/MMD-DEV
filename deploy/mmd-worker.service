@@ -1,0 +1,31 @@
+[Unit]
+Description=MMD-DEV billing and lifecycle worker
+After=network-online.target postgresql.service incus.service mmd-api.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+# Holds a METRICS-type Incus certificate (read-only, /1.0/metrics only) plus
+# the restricted client cert for stopping workspaces that run out of credit.
+User=mmd
+Group=mmd
+WorkingDirectory=/opt/mmd/control
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=/etc/mmd/api.env
+ExecStart=/opt/mmd/venv/bin/python -m mmd.worker
+Restart=on-failure
+RestartSec=5
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/mmd
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

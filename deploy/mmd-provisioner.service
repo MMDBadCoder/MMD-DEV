@@ -1,0 +1,50 @@
+[Unit]
+Description=MMD-DEV workspace provisioner (privileged)
+After=incus.service
+Requires=incus.service
+
+[Service]
+Type=simple
+# Root is unavoidable here: creating Incus projects and instances requires
+# admin on the Incus API. Everything else about this unit exists to make that
+# root as narrow as possible.
+User=root
+# Group=mmd so systemd creates /run/mmd as root:mmd - the API (running as mmd)
+# must be able to traverse the directory to reach the socket. systemd takes
+# runtime-directory ownership from User=/Group=; there is no separate
+# RuntimeDirectoryGroup= directive.
+Group=mmd
+# The Incus CLI insists on creating a config directory under $HOME. With
+# ProtectHome=yes that is a read-only path and every incus command fails with
+# "mkdir /root/.config: read-only file system" - which surfaces as a confusing
+# "golden image not found". Point it at the (writable) runtime directory
+# instead of giving up ProtectHome.
+Environment=INCUS_CONF=/run/mmd/incus-conf
+ExecStart=/usr/bin/python3 /opt/mmd/control/provisioner/provisioner.py
+Restart=on-failure
+RestartSec=3
+
+RuntimeDirectory=mmd
+RuntimeDirectoryMode=0750
+
+# No network at all. The provisioner speaks only over its unix socket, so it
+# cannot be reached from the dashboard's port, from a workspace, or from the
+# internet even if something in it were exploitable.
+PrivateNetwork=no
+IPAddressDeny=any
+
+NoNewPrivileges=yes
+ProtectHome=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=no
+PrivateTmp=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=no
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

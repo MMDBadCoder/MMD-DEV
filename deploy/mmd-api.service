@@ -1,0 +1,39 @@
+[Unit]
+Description=MMD-DEV control plane API
+After=network-online.target postgresql.service incus.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+# Unprivileged. Holds only a RESTRICTED Incus certificate, so even a full
+# compromise of this process cannot create a privileged container, attach a
+# host-path disk, or define a custom idmap - Incus refuses those regardless of
+# what this process asks for.
+User=mmd
+Group=mmd
+WorkingDirectory=/opt/mmd/control
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=/etc/mmd/api.env
+ExecStart=/opt/mmd/venv/bin/uvicorn mmd.app:app --host 127.0.0.1 --port 8000
+Restart=on-failure
+RestartSec=3
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+# ProtectSystem=strict makes the entire filesystem read-only, and connecting
+# to a unix socket requires write access to it - so /run/mmd must be listed
+# explicitly or the provisioner is unreachable.
+ReadWritePaths=/var/lib/mmd /run/mmd
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+
+[Install]
+WantedBy=multi-user.target
