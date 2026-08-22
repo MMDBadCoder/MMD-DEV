@@ -73,7 +73,8 @@ class User(Base):
 class Workspace(Base):
     __tablename__ = "workspaces"
     id: Mapped[int] = mapped_column(primary_key=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), unique=True, index=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), unique=True, index=True)
     # Slot number: determines the Incus project name and the workspace's static
     # IP, so both stay stable for the life of the account.
     idx: Mapped[int] = mapped_column(Integer, unique=True)
@@ -111,7 +112,8 @@ class Workspace(Base):
 
 class CreditAccount(Base):
     __tablename__ = "credit_accounts"
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
     # Signed: goes negative while an archived workspace still accrues storage.
     balance_micro: Mapped[int] = mapped_column(BigInteger, default=0)
     updated_at: Mapped[datetime] = mapped_column(
@@ -126,8 +128,12 @@ class CreditAccount(Base):
 class CreditTransaction(Base):
     __tablename__ = "credit_transactions"
     id: Mapped[int] = mapped_column(primary_key=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
-    workspace_id: Mapped[int | None] = mapped_column(ForeignKey("workspaces.id"))
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    # SET NULL, not CASCADE: a charge is a financial record and must outlive
+    # the workspace it was raised against.
+    workspace_id: Mapped[int | None] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="SET NULL"))
     kind: Mapped[TxKind] = mapped_column(Enum(TxKind, native_enum=False))
     amount_micro: Mapped[int] = mapped_column(BigInteger)   # negative = charge
     period_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -150,7 +156,9 @@ class UsageSample(Base):
     record is the settled transaction, not these."""
     __tablename__ = "usage_samples"
     id: Mapped[int] = mapped_column(primary_key=True)
-    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    # Ephemeral metering data - CASCADE, it dies with what it measured.
+    workspace_id: Mapped[int] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
     ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     cpu_seconds_total: Mapped[float] = mapped_column()   # monotonic counter
     mem_bytes: Mapped[int] = mapped_column(BigInteger)   # gauge
