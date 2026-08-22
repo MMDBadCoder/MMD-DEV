@@ -87,6 +87,11 @@ class TierRequest(BaseModel):
     mem_mib: int = Field(ge=512, le=8192)
 
 
+class PasswordChange(BaseModel):
+    current_password: str
+    new_password: str = Field(min_length=10, max_length=200)
+
+
 class CreditGrant(BaseModel):
     credits: float
     note: str = ""
@@ -162,6 +167,17 @@ def login(body: Credentials, response: Response,
 def logout(response: Response) -> dict:
     response.delete_cookie(COOKIE)
     return {"ok": True}
+
+
+@app.post("/api/auth/password")
+def change_password(body: PasswordChange, user: User = Depends(current_user),
+                    db: Session = Depends(get_session)) -> dict:
+    if not verify_password(body.current_password, user.password_hash):
+        raise HTTPException(401, "Your current password is not correct")
+    user.password_hash = hash_password(body.new_password)
+    db.commit()
+    audit(db, user.id, "password_change", user.email)
+    return {"ok": True, "message": "Password changed."}
 
 
 @app.get("/api/me")

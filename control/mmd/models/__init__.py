@@ -63,7 +63,8 @@ class User(Base):
         Enum(UserStatus, native_enum=False), default=UserStatus.PENDING, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    approved_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    approved_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"))
 
     workspace: Mapped["Workspace"] = relationship(back_populates="user", uselist=False)
     account: Mapped["CreditAccount"] = relationship(back_populates="user", uselist=False)
@@ -169,7 +170,11 @@ class AuditLog(Base):
     __tablename__ = "audit_log"
     id: Mapped[int] = mapped_column(primary_key=True)
     ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
-    actor_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    # ON DELETE SET NULL: an audit record must outlive the account it refers
+    # to. A plain FK makes the audit log *block* user deletion, which is
+    # backwards - the trail should survive, not act as a lock.
+    actor_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"))
     action: Mapped[str] = mapped_column(String(64), index=True)
     target: Mapped[str | None] = mapped_column(String(128))
     detail: Mapped[dict] = mapped_column(JSON, default=dict)

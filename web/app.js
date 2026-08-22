@@ -283,11 +283,43 @@ function topbar(adminView = false) {
     <div class="row" style="flex:0">
       ${state.me?.is_admin ? `<button class="ghost" id="toggle-admin">
          ${adminView ? "My machine" : "Administration"}</button>` : ""}
+      <button class="ghost" id="passwd">Change password</button>
       <button class="ghost" id="signout">Sign out</button>
     </div></div>`;
 }
 
+function showPasswordForm() {
+  if ($("#pw-card")) return;
+  const box = document.createElement("div");
+  box.className = "card"; box.id = "pw-card";
+  box.innerHTML = `<h2>Change password</h2>
+    <div class="row">
+      <div><label for="pw-cur">Current password</label>
+        <input id="pw-cur" type="password" autocomplete="current-password"></div>
+      <div><label for="pw-new">New password</label>
+        <input id="pw-new" type="password" autocomplete="new-password"></div>
+    </div>
+    <p class="muted small" style="margin:10px 0 0">At least 10 characters.</p>
+    <div class="row" style="margin-top:14px">
+      <button class="primary" id="pw-save">Save</button>
+      <button class="ghost" id="pw-cancel">Cancel</button>
+    </div>
+    <div id="pw-msg"></div>`;
+  ($(".wrap") || document.body).prepend(box);
+  $("#pw-cancel").onclick = () => box.remove();
+  $("#pw-save").onclick = async () => {
+    try {
+      const r = await api("/api/auth/password", { method: "POST", body: JSON.stringify({
+        current_password: $("#pw-cur").value, new_password: $("#pw-new").value })});
+      $("#pw-msg").innerHTML = `<div class="note ok">${r.message}</div>`;
+      $("#pw-cur").value = $("#pw-new").value = "";
+    } catch (e) { $("#pw-msg").innerHTML = `<div class="note bad">${e.message}</div>`; }
+  };
+}
+
 function wireTop() {
+  const p = $("#passwd");
+  if (p) p.onclick = showPasswordForm;
   const t = $("#toggle-admin");
   if (t) t.onclick = () => (t.textContent.includes("Admin") ? renderAdmin() : refresh());
   $("#signout").onclick = async () => {
