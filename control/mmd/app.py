@@ -12,8 +12,11 @@ from datetime import timedelta
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, WebSocket
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+import logging
 from itsdangerous import BadSignature, URLSafeTimedSerializer
 from pathlib import Path
+
+log = logging.getLogger("mmd.api")
 from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -298,8 +301,17 @@ async def workspace_power(body: PowerRequest, user: User = Depends(current_user)
         audit(db, user.id, "power_off", ws.incus_project)
         return {"ok": True, "status": "off"}
     except IncusError as exc:
+        log.error("power change failed for %s: %s", ws.incus_project, exc)
         ws.state = WorkspaceState.ERROR
         ws.error = str(exc)
+        db.commit()
+        raise HTTPException(500, "The workspace could not be changed. Please try again.")
+    except Exception as exc:  # noqa: BLE001
+        # Without this, anything that is not an IncusError became a bare 500
+        # with no message anywhere - undiagnosable from the outside.
+        log.exception("unexpected error changing power for %s", ws.incus_project)
+        ws.state = WorkspaceState.ERROR
+        ws.error = f"{type(exc).__name__}: {exc}"
         db.commit()
         raise HTTPException(500, "The workspace could not be changed. Please try again.")
     finally:

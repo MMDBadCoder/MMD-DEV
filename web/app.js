@@ -8,6 +8,32 @@ const $ = (s, r = document) => r.querySelector(s);
 const app = $("#app");
 let state = { me: null, ws: null, poll: null, term: null, sock: null };
 
+/* FastAPI returns `detail` as a STRING for HTTPException but as an ARRAY of
+ * error objects for 422 validation failures. Passing that array straight to
+ * new Error() stringifies it to "[object Object]", so a user who simply typed
+ * a short password saw an unreadable message and no idea what to fix. */
+function describeError(detail, status) {
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    const field = (e) => {
+      const name = (e.loc || []).filter((x) => x !== "body").join(".");
+      return ({ password: "Password", email: "Email address" })[name] || name || "Value";
+    };
+    return detail.map((e) => {
+      let msg = (e.msg || "is not valid")
+        .replace(/^Value error, /, "")
+        // pydantic's own phrasing is accurate but clumsy in a UI.
+        .replace(/^value is not a valid email address:\s*/i, "")
+        .replace(/^String should have at least (\d+) characters$/i,
+                 "needs at least $1 characters")
+        .replace(/^Field required$/i, "is required");
+      return /^(needs|is |must)/i.test(msg)
+        ? `${field(e)} ${msg}` : `${field(e)}: ${msg}`;
+    }).join(". ");
+  }
+  return `Request failed (${status})`;
+}
+
 async function api(path, opts = {}) {
   const r = await fetch(path, {
     credentials: "same-origin",
@@ -15,7 +41,7 @@ async function api(path, opts = {}) {
     ...opts,
   });
   const body = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(body.detail || `Request failed (${r.status})`);
+  if (!r.ok) throw new Error(describeError(body.detail, r.status));
   return body;
 }
 
@@ -34,7 +60,10 @@ function renderAuth(msg = "", isError = false) {
         </div>
         <div style="margin-bottom:18px">
           <label for="pw">Password</label>
-          <input id="pw" type="password" autocomplete="current-password">
+          <input id="pw" type="password" autocomplete="current-password"
+                 minlength="10" placeholder="At least 10 characters">
+          <p class="muted small" style="margin:6px 0 0">
+            New accounts need a password of at least 10 characters.</p>
         </div>
         <div class="row">
           <button class="primary" id="login">Sign in</button>
@@ -51,8 +80,15 @@ function renderAuth(msg = "", isError = false) {
     catch (e) { renderAuth(e.message, true); }
   };
   $("#register").onclick = async () => {
+    const c = creds();
+    // Catch the two common mistakes locally so the user gets an instant,
+    // specific message instead of a server round trip.
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(c.email))
+      return renderAuth("Please enter a valid email address.", true);
+    if (c.password.length < 10)
+      return renderAuth(`Your password needs at least 10 characters — that one has ${c.password.length}.`, true);
     try {
-      const r = await api("/api/auth/register", { method: "POST", body: JSON.stringify(creds()) });
+      const r = await api("/api/auth/register", { method: "POST", body: JSON.stringify(c) });
       renderAuth(r.message, false);
     } catch (e) { renderAuth(e.message, true); }
   };

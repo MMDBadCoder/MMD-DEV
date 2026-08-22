@@ -19,6 +19,7 @@ run "P1  workspace behaviour"        "$HERE/p1-workspace.sh" "$IDX"
 run "P1  limit enforcement"          "$HERE/p1-limits.sh" "$IDX"
 run "P1  power-off + persistence"    "$HERE/p1-persistence.sh" "$IDX"
 run "P2  privilege escalation"       "$HERE/p2-escalation.sh"
+run "P2  certificate scope"         "$HERE/p2-cert-scope.sh"
 run "P5  reboot readiness"           "$HERE/p5-reboot-readiness.sh"
 
 echo

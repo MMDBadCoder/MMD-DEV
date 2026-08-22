@@ -48,6 +48,12 @@ MAX_DOCKER_GIB = 40
 
 VERBS = {"provision", "archive", "restore", "destroy", "ping"}
 
+# Name of the control plane's restricted client certificate in Incus's trust
+# store. The provisioner maintains its project scope; the API itself is
+# forbidden from touching the trust store, which is what keeps a compromised
+# web app from widening its own access.
+API_CERT_NAME = os.environ.get("MMD_API_CERT_NAME", "mmd-api")
+
 log = logging.getLogger("mmd.provisioner")
 
 
@@ -90,6 +96,51 @@ def _clamp(req: dict) -> dict:
     }
 
 
+def _incus_json(args: list[str]) -> object | None:
+    try:
+        p = subprocess.run(["incus", *args], capture_output=True, text=True,
+                           timeout=30, stdin=subprocess.DEVNULL)
+        if p.returncode != 0:
+            return None
+        return json.loads(p.stdout or "null")
+    except (subprocess.TimeoutExpired, json.JSONDecodeError):
+        return None
+
+
+def _api_cert_fingerprint() -> str | None:
+    certs = _incus_json(["config", "trust", "list", "--format", "json"]) or []
+    for c in certs:
+        if c.get("name") == API_CERT_NAME:
+            return c.get("fingerprint")
+    return None
+
+
+def _set_project_access(project: str, grant: bool) -> None:
+    """Add or remove a project from the control plane's certificate scope.
+
+    This is NOT optional bookkeeping. The mmd-api certificate is restricted to
+    an explicit project list, and Incus drops a project from that list when the
+    project is deleted - it is never re-added when a project of the same name is
+    recreated. Without this the control plane ends up scoped to [] and cannot
+    start, stop or exec ANY workspace, while provisioning still appears to
+    succeed. The failure surfaces much later as a generic 500 on power-on.
+    """
+    fp = _api_cert_fingerprint()
+    if not fp:
+        log.warning("certificate %r not found; cannot update project scope", API_CERT_NAME)
+        return
+    cert = _incus_json(["query", f"/1.0/certificates/{fp}"]) or {}
+    projects = set(cert.get("projects") or [])
+    projects.add(project) if grant else projects.discard(project)
+    payload = json.dumps({"projects": sorted(projects)})
+    ok, out = _run(["incus", "query", "--request", "PATCH",
+                    f"/1.0/certificates/{fp}", "--data", payload], timeout=30)
+    if ok:
+        log.info("certificate scope now: %s", sorted(projects))
+    else:
+        log.error("failed updating certificate scope: %s", out)
+
+
 def _run(cmd: list[str], timeout: int = 900) -> tuple[bool, str]:
     log.info("exec: %s", " ".join(cmd))
     try:
@@ -122,10 +173,14 @@ def handle(req: dict) -> dict:
             str(t["cores"]), str(t["mem_mib"]),
             str(t["root_gib"]), str(t["docker_gib"]),
         ])
+        if ok:
+            _set_project_access(f"ws-{idx}", grant=True)
         return {"ok": ok, "output": out, "tier": t}
 
     if verb == "destroy":
         ok, out = _run(["bash", str(WS_DESTROY), str(idx), "--yes"])
+        if ok:
+            _set_project_access(f"ws-{idx}", grant=False)
         return {"ok": ok, "output": out}
 
     # archive / restore are implemented in P3 alongside the billing lifecycle;
