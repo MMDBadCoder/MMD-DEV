@@ -143,9 +143,25 @@ async def lifecycle_once() -> None:
         with SessionLocal() as db:
             for ws in db.scalars(select(Workspace)):
                 # Idle auto-stop: protects the user's credit directly.
-                if (ws.state == WorkspaceState.ON and CONFIG.idle_stop_minutes > 0
+                #
+                # `last_activity` only tracks the browser terminal. Someone
+                # working over SSH or RDP never touches it, so acting on that
+                # timestamp alone would switch the machine off underneath a
+                # live session. Ask the machine before deciding.
+                idle = (ws.state == WorkspaceState.ON and CONFIG.idle_stop_minutes > 0
                         and ws.last_activity
-                        and now - ws.last_activity > timedelta(minutes=CONFIG.idle_stop_minutes)):
+                        and now - ws.last_activity > timedelta(minutes=CONFIG.idle_stop_minutes))
+                if idle and (ws.ssh_enabled or ws.rdp_enabled):
+                    probe = svc.call_provisioner(
+                        {"verb": "probe_sessions", "idx": ws.idx}, timeout=90)
+                    if probe.get("active"):
+                        log.info("%s is idle in the browser but has %s SSH / %s RDP "
+                                 "session(s); not stopping",
+                                 ws.incus_project, probe.get("ssh"), probe.get("rdp"))
+                        ws.last_activity = now      # count it as activity
+                        db.commit()
+                        idle = False
+                if idle:
                     log.info("idle-stopping %s", ws.incus_project)
                     try:
                         await client.stop(ws.instance, ws.incus_project)

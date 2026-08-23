@@ -89,13 +89,16 @@ const LATIN_ALLOWED = new Set([
   "billing.tx.amount",  // the currency word, checked separately
   "res.vcpu",           // vCPU is the term developers use
   "machine.subtitle",   // "Ubuntu 24.04 · 2 vCPU · 4 GB" - all technical
+  "ssh.keygen",         // a literal command the customer types
 ]);
 
 test("customer-facing labels are in Persian", () => {
   const offenders = [];
   for (const k of allKeys()) {
     if (LATIN_ALLOWED.has(k)) continue;
-    const v = render(t(k, PROBE));
+    // Strip any markup before judging: a few strings embed an LTR-isolated
+    // span so a filesystem path is not reversed by the bidi algorithm.
+    const v = render(t(k, PROBE)).replace(/<[^>]*>/g, " ");
     const persian = /[؀-ۿ]/.test(v);
     const latinWords = (v.match(/[A-Za-z]{4,}/g) || []).filter((w) =>
       // Established technical terms stay Latin on purpose.

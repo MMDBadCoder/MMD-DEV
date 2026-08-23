@@ -101,6 +101,15 @@ class Workspace(Base):
     last_activity: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     error: Mapped[str | None] = mapped_column(Text)
 
+    # --- optional services -------------------------------------------------
+    # Each is off until the customer asks for it. sshd costs ~5 MB idle and
+    # xrdp ~4 MB, so the toggle is about exposure and intent rather than
+    # resources - but a listener nobody wants should not be on the internet.
+    ssh_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    ssh_keys: Mapped[str | None] = mapped_column(Text)     # authorized_keys body
+    rdp_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    rdp_installed: Mapped[bool] = mapped_column(Boolean, default=False)
+
     user: Mapped[User] = relationship(back_populates="workspace")
 
     @property
@@ -170,6 +179,23 @@ class UsageSample(Base):
     mem_bytes: Mapped[int] = mapped_column(BigInteger)   # gauge
 
 
+class PortKind(str, enum.Enum):
+    """Why a port exists.
+
+    USER  - published by the customer, removable by them, counts toward the
+            per-workspace limit.
+    SSH   - reserved for the workspace's SSH service at provisioning time.
+    RDP   - reserved for the workspace's remote desktop.
+
+    Reserved ports are allocated once and never move, so the address a customer
+    puts in their SSH config keeps working across power cycles, resizes and
+    service restarts. They are not deletable and do not count toward the limit.
+    """
+    USER = "user"
+    SSH = "ssh"
+    RDP = "rdp"
+
+
 class ExposedPort(Base):
     """A port inside a workspace published on the host's public address.
 
@@ -185,7 +211,9 @@ class ExposedPort(Base):
     internal_port: Mapped[int] = mapped_column(Integer)
     external_port: Mapped[int] = mapped_column(Integer, unique=True, index=True)
     protocol: Mapped[str] = mapped_column(String(8), default="tcp")
-    device: Mapped[str] = mapped_column(String(64))     # Incus device name
+    kind: Mapped[PortKind] = mapped_column(
+        Enum(PortKind, native_enum=False), default=PortKind.USER, index=True)
+    device: Mapped[str] = mapped_column(String(64))     # legacy; DNAT is by rule
     note: Mapped[str | None] = mapped_column(String(120))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now())

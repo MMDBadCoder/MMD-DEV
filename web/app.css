@@ -101,22 +101,27 @@ p{margin:0 0 12px}
   background:var(--surface);border-bottom:1px solid var(--border);
   display:flex;align-items:center;gap:18px;padding:0 20px;
 }
-.brand{display:flex;align-items:center;gap:9px;font-weight:750;font-size:16px}
+.brand{display:flex;align-items:center;gap:9px;font-weight:750;font-size:16px;
+  white-space:nowrap;flex:0 0 auto}
 .brand>span:last-child{direction:ltr;unicode-bidi:isolate}
 .brand .logo{
   width:26px;height:26px;border-radius:7px;background:var(--brand);
   color:var(--brand-ink);display:grid;place-items:center;flex:none;
 }
-.nav{display:flex;gap:2px;margin-inline-start:8px;overflow-x:auto;scrollbar-width:none}
+/* The nav must be allowed to shrink and scroll rather than squeeze its
+   items - a truncated Persian label loses its meaning entirely. */
+.nav{display:flex;gap:2px;margin-inline-start:8px;overflow-x:auto;
+  scrollbar-width:none;min-width:0;flex:1 1 auto}
 .nav::-webkit-scrollbar{display:none}
 .nav a{
   display:flex;align-items:center;gap:7px;padding:7px 12px;border-radius:8px;
   color:var(--ink-2);font-size:14.5px;font-weight:500;white-space:nowrap;
+  flex:0 0 auto;
 }
 .nav a:hover{background:var(--surface-2);color:var(--ink);text-decoration:none}
 .nav a.active{background:var(--brand-soft);color:var(--brand)}
 .spacer{flex:1}
-.header-right{display:flex;align-items:center;gap:8px}
+.header-right{display:flex;align-items:center;gap:8px;flex:0 0 auto}
 .credit-chip{
   display:flex;align-items:center;gap:7px;padding:6px 11px;border-radius:999px;
   background:var(--surface-2);border:1px solid var(--border);
@@ -290,10 +295,17 @@ kbd{display:inline-block;padding:1px 7px;border:1px solid var(--border-strong);
   border-radius:3px 3px 0 0;min-height:2px;opacity:.85;transition:opacity .12s}
 .chart .col:hover{opacity:1}
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
-@media (max-width:720px){
+/* Eight nav items plus brand, balance and two buttons do not fit 1280px with
+   full Persian labels - the last one clips to a meaningless stub. Drop to
+   icons early rather than letting a label truncate. */
+@media (max-width:1180px){
   .nav a span{display:none}
+  .nav a{padding:8px 10px}
+}
+@media (max-width:720px){
   .page{padding:20px 14px 60px}
   .credit-chip .lbl{display:none}
+  .header{gap:10px;padding:0 12px}
 }
 
 /* ---- landing page ---- */

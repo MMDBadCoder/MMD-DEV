@@ -10,6 +10,7 @@ import { machinePage, teardownTerminal } from "./pages/machine.js";
 import { resourcesPage } from "./pages/resources.js";
 import { toolsPage } from "./pages/tools.js";
 import { portsPage } from "./pages/ports.js";
+import { connectionsPage } from "./pages/connections.js";
 import { billingPage } from "./pages/billing.js";
 import { activityPage } from "./pages/activity.js";
 import { securityPage } from "./pages/security.js";
@@ -30,6 +31,7 @@ const NAV = [
   { href: "/console", key: "nav.machine", ic: "machine" },
   { href: "/console/resources", key: "nav.resources", ic: "sliders" },
   { href: "/console/tools", key: "nav.tools", ic: "box" },
+  { href: "/console/connections", key: "nav.connections", ic: "link" },
   { href: "/console/ports", key: "nav.ports", ic: "plug" },
   { href: "/console/billing", key: "nav.billing", ic: "card" },
   { href: "/console/activity", key: "nav.activity", ic: "clock" },
@@ -90,6 +92,7 @@ route("/signup", { title: "ثبت‌نام", view: signUpPage, guest: true });
 route("/console", { title: "ماشین من", view: machinePage });
 route("/console/resources", { title: "منابع", view: resourcesPage });
 route("/console/tools", { title: "ابزارها", view: toolsPage });
+route("/console/connections", { title: "اتصال‌ها", view: connectionsPage });
 route("/console/ports", { title: "پورت‌ها", view: portsPage });
 route("/console/billing", { title: "صورتحساب", view: billingPage });
 route("/console/activity", { title: "فعالیت‌ها", view: activityPage });

@@ -70,7 +70,11 @@ alias fd=fdfind
 RC
 chown -R "$WORKSPACE_USER:$WORKSPACE_USER" "/home/$WORKSPACE_USER"
 
-systemctl enable docker containerd ssh
+systemctl enable docker containerd
+# sshd is installed but deliberately NOT enabled. The machine is reachable
+# through the dashboard by default; SSH is opt-in, switched on by the customer
+# from the console, and only ever with key authentication.
+systemctl disable ssh ssh.socket 2>/dev/null || true
 
 # --- cleanup so every clone starts fresh ---------------------------------
 apt-get clean

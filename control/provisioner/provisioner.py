@@ -48,7 +48,8 @@ MAX_ROOT_GIB = 40
 MAX_DOCKER_GIB = 40
 
 VERBS = {"provision", "archive", "restore", "destroy",
-         "expose_port", "unexpose_port", "install_packages", "ping"}
+         "expose_port", "unexpose_port", "install_packages",
+         "service_ssh", "probe_sessions", "ping"}
 
 # Name of the control plane's restricted client certificate in Incus's trust
 # store. The provisioner maintains its project scope; the API itself is
@@ -225,15 +226,68 @@ def _sync_port_rules(mappings: list[dict]) -> dict:
     return {"ok": ok, "output": msg, "count": len(pre)}
 
 
-def _run(cmd: list[str], timeout: int = 900) -> tuple[bool, str]:
+def _run(cmd: list[str], timeout: int = 900,
+         stdin_text: str | None = None) -> tuple[bool, str]:
     log.info("exec: %s", " ".join(cmd))
     try:
-        p = subprocess.run(cmd, capture_output=True, text=True,
-                           timeout=timeout, stdin=subprocess.DEVNULL)
+        if stdin_text is None:
+            p = subprocess.run(cmd, capture_output=True, text=True,
+                               timeout=timeout, stdin=subprocess.DEVNULL)
+        else:
+            # Content is piped, never interpolated into a shell string - the
+            # only safe way to move a customer's key material into a file.
+            p = subprocess.run(cmd, capture_output=True, text=True,
+                               timeout=timeout, input=stdin_text)
     except subprocess.TimeoutExpired:
         return False, "timed out"
     out = (p.stdout or "") + (p.stderr or "")
     return p.returncode == 0, out.strip()[-4000:]
+
+
+# Mirrors mmd/sshkeys.py. Duplicated on purpose: this side runs as root and
+# validates independently rather than trusting that the caller did.
+SSH_KEY_TYPES = {
+    "ssh-ed25519", "sk-ssh-ed25519@openssh.com", "ssh-rsa",
+    "rsa-sha2-256", "rsa-sha2-512", "ecdsa-sha2-nistp256",
+    "ecdsa-sha2-nistp384", "ecdsa-sha2-nistp521",
+    "sk-ecdsa-sha2-nistp256@openssh.com",
+}
+
+
+def _check_authorized_keys(body: str) -> str | None:
+    """Return an error string, or None if every line is a plain public key."""
+    lines = [l.strip() for l in (body or "").splitlines()]
+    real = [l for l in lines if l and not l.startswith("#")]
+    if not real:
+        return "no keys supplied"
+    if len(real) > 10:
+        return "too many keys"
+    for line in real:
+        parts = line.split(None, 2)
+        if len(parts) < 2:
+            return "malformed key line"
+        if parts[0] not in SSH_KEY_TYPES:
+            # Also what rejects an options prefix such as command="...".
+            return f"unsupported key type {parts[0][:30]!r}"
+        if not re.fullmatch(r"[A-Za-z0-9+/]+={0,3}", parts[1]):
+            return "key body is not base64"
+        if len(parts) > 2 and not re.fullmatch(r"[\w.@+/:\- ]{0,200}", parts[2]):
+            return "key comment contains unsupported characters"
+    return None
+
+
+SSHD_DROPIN = """# Managed by MMD-DEV.
+# Keys only. This listener is reachable from the internet on a reserved port,
+# and password authentication there is brute-forced continuously.
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitRootLogin no
+PermitEmptyPasswords no
+PubkeyAuthentication yes
+X11Forwarding no
+MaxAuthTries 3
+ClientAliveInterval 120
+"""
 
 
 def handle(req: dict) -> dict:
@@ -311,6 +365,84 @@ def handle(req: dict) -> dict:
             + " ".join(clean),
         ], timeout=900)
         return {"ok": ok, "output": out[-2000:], "packages": clean}
+
+    if verb == "service_ssh":
+        action = req.get("action")
+        if action not in ("enable", "disable"):
+            return {"ok": False, "error": "action must be enable or disable"}
+
+        if action == "disable":
+            ok, out = _run(["incus", "exec", "ws", "--project", project, "--",
+                            "bash", "-lc",
+                            "systemctl disable --now ssh ssh.socket 2>/dev/null; "
+                            "systemctl is-active ssh"], timeout=120)
+            # `systemctl is-active` exits non-zero when inactive, which is the
+            # outcome we want - so success is judged by the port, not the code.
+            ok2, listening = _run(["incus", "exec", "ws", "--project", project, "--",
+                                   "bash", "-lc",
+                                   "systemctl disable --now ssh.socket 2>/dev/null; "
+                                   "ss -tln | grep -c ':22 ' || true"],
+                                  timeout=60)
+            still = (listening or "").strip().splitlines()[-1:] or ["?"]
+            return {"ok": still[0] == "0", "listening": still[0], "output": out[-500:]}
+
+        keys = req.get("authorized_keys") or ""
+        problem = _check_authorized_keys(keys)
+        if problem:
+            return {"ok": False, "error": problem}
+
+        # Write the key file by piping, then apply ownership and mode. sshd
+        # refuses to use an authorized_keys file that is group- or
+        # world-writable, so the mode is not cosmetic.
+        ok, out = _run(["incus", "exec", "ws", "--project", project, "--",
+                        "bash", "-lc",
+                        "install -d -m 700 -o dev -g dev /home/dev/.ssh && "
+                        "cat > /home/dev/.ssh/authorized_keys && "
+                        "chown dev:dev /home/dev/.ssh/authorized_keys && "
+                        "chmod 600 /home/dev/.ssh/authorized_keys"],
+                       timeout=120, stdin_text=keys)
+        if not ok:
+            return {"ok": False, "error": f"could not write keys: {out[-300:]}"}
+
+        ok, out = _run(["incus", "exec", "ws", "--project", project, "--",
+                        "bash", "-lc",
+                        # /run/sshd is created by the unit's RuntimeDirectory
+                        # and REMOVED again when the unit is disabled - so
+                        # `sshd -t` fails with "Missing privilege separation
+                        # directory" on every re-enable, while working fine the
+                        # first time. Create it before validating.
+                        "install -d -m 0755 /run/sshd && "
+                        "install -d -m 755 /etc/ssh/sshd_config.d && "
+                        "cat > /etc/ssh/sshd_config.d/10-mmd.conf && "
+                        "sshd -t && "
+                        # Ubuntu ships socket activation; leaving ssh.socket
+                        # enabled alongside ssh.service makes which one owns
+                        # port 22 depend on boot order.
+                        "systemctl disable --now ssh.socket 2>/dev/null; "
+                        "systemctl enable --now ssh && "
+                        "for i in 1 2 3 4 5; do ss -tln | grep -q ':22 ' && break; sleep 1; done; "
+                        "ss -tln | grep -q ':22 ' && echo LISTENING"],
+                       timeout=180, stdin_text=SSHD_DROPIN)
+        return {"ok": ok and "LISTENING" in out, "output": out[-600:]}
+
+    if verb == "probe_sessions":
+        # Read-only. The idle-stop timer must not switch off a machine someone
+        # is working on over SSH or RDP - those sessions never touch the web
+        # terminal, so the dashboard's own activity timestamp says nothing
+        # about them.
+        ok, out = _run(["incus", "exec", "ws", "--project", project, "--",
+                        "bash", "-lc",
+                        "printf 'ssh=%s rdp=%s\\n' "
+                        "\"$(pgrep -fc 'sshd: ' 2>/dev/null || echo 0)\" "
+                        "\"$(pgrep -c 'xrdp-chansrv' 2>/dev/null || echo 0)\""],
+                       timeout=60)
+        counts = {"ssh": 0, "rdp": 0}
+        for part in (out or "").split():
+            if "=" in part:
+                k, _, v = part.partition("=")
+                if k in counts and v.isdigit():
+                    counts[k] = int(v)
+        return {"ok": ok, **counts, "active": counts["ssh"] + counts["rdp"] > 0}
 
     # archive / restore land with the billing lifecycle work.
     return {"ok": False, "error": f"{verb} not implemented yet"}

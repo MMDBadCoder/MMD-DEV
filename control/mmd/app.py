@@ -21,6 +21,7 @@ from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session
 
 from . import ports as portalloc
+from . import sshkeys
 from . import presets as presetlib
 from . import service as svc
 from .billing import pricing
@@ -30,8 +31,8 @@ from .db import get_session, init_db
 from .incus.client import IncusClient, IncusConfig, IncusError
 from .incus.execws import open_exec
 from .models import (AuditLog, CreditAccount, CreditTransaction, ExposedPort,
-                     Setting, TxKind, UsageSample, User, UserStatus, Workspace,
-                     WorkspaceState)
+                     PortKind, Setting, TxKind, UsageSample, User, UserStatus,
+                     Workspace, WorkspaceState)
 from .security import hash_password, verify_password
 
 log = logging.getLogger("mmd.api")
@@ -123,6 +124,11 @@ class PortRequest(BaseModel):
 class PresetRequest(BaseModel):
     presets: list[str] = []
     packages: list[str] = []
+
+
+class SshRequest(BaseModel):
+    enabled: bool
+    public_keys: str | None = None
 
 
 class AdminFlag(BaseModel):
@@ -541,6 +547,96 @@ def delete_port(port_id: int, user: User = Depends(current_user),
     portalloc.release(db, row)
     svc.sync_published_ports(db)
     return {"ok": True}
+
+
+# --- connections (SSH, and RDP later) ------------------------------------
+def _service_ports(db: Session, ws: Workspace) -> dict[str, int | None]:
+    rows = db.scalars(select(ExposedPort).where(
+        ExposedPort.workspace_id == ws.id,
+        ExposedPort.kind.in_([PortKind.SSH, PortKind.RDP])))
+    out: dict[str, int | None] = {"ssh": None, "rdp": None}
+    for r in rows:
+        out[r.kind.value] = r.external_port
+    return out
+
+
+@app.get("/api/workspace/services")
+def services(request: Request, user: User = Depends(current_user),
+             db: Session = Depends(get_session)) -> dict:
+    ws = my_workspace(db, user)
+    host = request.url.hostname
+    reserved = _service_ports(db, ws)
+
+    keys = []
+    if ws.ssh_keys:
+        try:
+            keys = [{"type": k["type"], "comment": k["comment"],
+                     "fingerprint": k["fingerprint"]}
+                    for k in sshkeys.normalise(ws.ssh_keys)]
+        except sshkeys.KeyError_:
+            keys = []
+
+    running = ws.state == WorkspaceState.ON
+    return {
+        "host": host,
+        "machine_running": running,
+        "ssh": {
+            "enabled": ws.ssh_enabled,
+            "port": reserved["ssh"],
+            "address": f"{host}:{reserved['ssh']}" if reserved["ssh"] else None,
+            "command": (f"ssh -p {reserved['ssh']} dev@{host}"
+                        if reserved["ssh"] else None),
+            "keys": keys,
+            "user": "dev",
+            "auth": "publickey",
+        },
+        "rdp": {
+            # Reserved now so the address never changes once RDP ships.
+            "enabled": ws.rdp_enabled,
+            "installed": ws.rdp_installed,
+            "port": reserved["rdp"],
+            "address": f"{host}:{reserved['rdp']}" if reserved["rdp"] else None,
+            "available": False,
+            "min_memory_mb": 2048,
+            "memory_ok": ws.mem_mib >= 2048,
+        },
+    }
+
+
+@app.post("/api/workspace/services/ssh")
+def set_ssh(body: SshRequest, user: User = Depends(current_user),
+            db: Session = Depends(get_session)) -> dict:
+    ws = my_workspace(db, user)
+    if ws.state != WorkspaceState.ON:
+        fail(409, "machine_off", "The machine must be running to change this.")
+
+    if body.enabled:
+        raw = body.public_keys if body.public_keys is not None else (ws.ssh_keys or "")
+        try:
+            keys = sshkeys.normalise(raw)
+        except sshkeys.KeyError_ as exc:
+            fail(400, exc.code, str(exc))
+        resp = svc.call_provisioner({
+            "verb": "service_ssh", "idx": ws.idx, "action": "enable",
+            "authorized_keys": sshkeys.authorized_keys_body(keys)}, timeout=300)
+        if not resp.get("ok"):
+            log.error("ssh enable failed for %s: %s", ws.incus_project, resp)
+            fail(500, "ssh_failed", "SSH could not be switched on.")
+        ws.ssh_enabled = True
+        ws.ssh_keys = "\n".join(k["line"] for k in keys)
+        db.commit()
+        svc.audit(db, user.id, "ssh_enabled", ws.incus_project, keys=len(keys))
+        return {"ok": True, "enabled": True, "keys": len(keys)}
+
+    resp = svc.call_provisioner({"verb": "service_ssh", "idx": ws.idx,
+                                 "action": "disable"}, timeout=180)
+    if not resp.get("ok"):
+        log.error("ssh disable failed for %s: %s", ws.incus_project, resp)
+        fail(500, "ssh_failed", "SSH could not be switched off.")
+    ws.ssh_enabled = False
+    db.commit()
+    svc.audit(db, user.id, "ssh_disabled", ws.incus_project)
+    return {"ok": True, "enabled": False}
 
 
 # --- billing -------------------------------------------------------------

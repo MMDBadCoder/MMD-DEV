@@ -23,7 +23,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from .models import ExposedPort
+from .models import ExposedPort, PortKind
 
 PORT_RANGE_START = 20000
 PORT_RANGE_END = 29999
@@ -67,8 +67,13 @@ def reserved_external(db: Session) -> set[int]:
     return set(db.scalars(select(ExposedPort.external_port)))
 
 
+# The ports the built-in services listen on inside the workspace.
+SERVICE_INTERNAL = {PortKind.SSH: 22, PortKind.RDP: 3389}
+
+
 def allocate(db: Session, workspace_id: int, internal_port: int,
-             protocol: str = "tcp", note: str | None = None) -> ExposedPort:
+             protocol: str = "tcp", note: str | None = None,
+             kind: PortKind = PortKind.USER) -> ExposedPort:
     """Reserve a free external port and record the mapping.
 
     The row is committed BEFORE the proxy device is created, so a crash leaves
@@ -87,11 +92,16 @@ def allocate(db: Session, workspace_id: int, internal_port: int,
     if existing is not None:
         raise PortError(f"Port {internal_port} is already published.", "port_duplicate")
 
-    count = len(list(db.scalars(select(ExposedPort).where(
-        ExposedPort.workspace_id == workspace_id))))
-    if count >= MAX_PORTS_PER_WORKSPACE:
-        raise PortError(
-            f"At most {MAX_PORTS_PER_WORKSPACE} ports.", "port_limit")
+    # Only customer-published ports count toward the limit. The SSH and RDP
+    # reservations are part of the machine, not something the customer chose to
+    # spend an allowance on.
+    if kind is PortKind.USER:
+        count = len(list(db.scalars(select(ExposedPort).where(
+            ExposedPort.workspace_id == workspace_id,
+            ExposedPort.kind == PortKind.USER))))
+        if count >= MAX_PORTS_PER_WORKSPACE:
+            raise PortError(
+                f"At most {MAX_PORTS_PER_WORKSPACE} ports.", "port_limit")
 
     taken = reserved_external(db)
     for _ in range(ALLOC_ATTEMPTS):
@@ -100,7 +110,7 @@ def allocate(db: Session, workspace_id: int, internal_port: int,
             continue
         row = ExposedPort(
             workspace_id=workspace_id, internal_port=internal_port,
-            external_port=candidate, protocol=protocol,
+            external_port=candidate, protocol=protocol, kind=kind,
             device=f"pub-{protocol}-{internal_port}", note=note)
         db.add(row)
         try:
@@ -115,5 +125,28 @@ def allocate(db: Session, workspace_id: int, internal_port: int,
 
 
 def release(db: Session, row: ExposedPort) -> None:
+    """Give a published port back. Reserved service ports are not releasable -
+    the whole point is that a customer's SSH address never changes."""
+    if row.kind is not PortKind.USER:
+        raise PortError("Reserved ports cannot be removed.", "port_reserved")
     db.delete(row)
     db.commit()
+
+
+def reserve_service_ports(db: Session, workspace_id: int) -> dict[str, int]:
+    """Allocate the SSH and RDP reservations for a new workspace.
+
+    Called once at provisioning. Idempotent: an existing reservation is
+    returned rather than replaced, so re-running never moves an address a
+    customer has already written down.
+    """
+    out: dict[str, int] = {}
+    for kind, internal in SERVICE_INTERNAL.items():
+        existing = db.scalar(select(ExposedPort).where(
+            ExposedPort.workspace_id == workspace_id,
+            ExposedPort.kind == kind))
+        if existing is None:
+            existing = allocate(db, workspace_id, internal, "tcp",
+                                note=None, kind=kind)
+        out[kind.value] = existing.external_port
+    return out
