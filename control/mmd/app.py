@@ -31,8 +31,8 @@ from .db import get_session, init_db
 from .incus.client import IncusClient, IncusConfig, IncusError
 from .incus.execws import open_exec
 from .models import (AuditLog, CreditAccount, CreditTransaction, ExposedPort,
-                     PortKind, Setting, TxKind, UsageSample, User, UserStatus,
-                     Workspace, WorkspaceState)
+                     PortKind, Setting, SshKey, TxKind, UsageSample, User,
+                     UserStatus, Workspace, WorkspaceState)
 from .security import hash_password, verify_password
 
 log = logging.getLogger("mmd.api")
@@ -126,9 +126,12 @@ class PresetRequest(BaseModel):
     packages: list[str] = []
 
 
-class SshRequest(BaseModel):
+class SshToggle(BaseModel):
     enabled: bool
-    public_keys: str | None = None
+
+
+class SshKeyAdd(BaseModel):
+    public_key: str = Field(min_length=10, max_length=8192)
 
 
 class AdminFlag(BaseModel):
@@ -566,17 +569,9 @@ def services(request: Request, user: User = Depends(current_user),
     ws = my_workspace(db, user)
     host = request.url.hostname
     reserved = _service_ports(db, ws)
-
-    keys = []
-    if ws.ssh_keys:
-        try:
-            keys = [{"type": k["type"], "comment": k["comment"],
-                     "fingerprint": k["fingerprint"]}
-                    for k in sshkeys.normalise(ws.ssh_keys)]
-        except sshkeys.KeyError_:
-            keys = []
-
+    keys = _keys(db, ws)
     running = ws.state == WorkspaceState.ON
+
     return {
         "host": host,
         "machine_running": running,
@@ -586,12 +581,15 @@ def services(request: Request, user: User = Depends(current_user),
             "address": f"{host}:{reserved['ssh']}" if reserved["ssh"] else None,
             "command": (f"ssh -p {reserved['ssh']} dev@{host}"
                         if reserved["ssh"] else None),
-            "keys": keys,
+            "keys": [{"id": k.id, "type": k.key_type, "comment": k.comment,
+                      "fingerprint": k.fingerprint,
+                      "created_at": k.created_at.isoformat() if k.created_at else None}
+                     for k in keys],
+            "key_count": len(keys),
+            "can_enable": bool(keys) and running,
             "user": "dev",
-            "auth": "publickey",
         },
         "rdp": {
-            # Reserved now so the address never changes once RDP ships.
             "enabled": ws.rdp_enabled,
             "installed": ws.rdp_installed,
             "port": reserved["rdp"],
@@ -603,27 +601,108 @@ def services(request: Request, user: User = Depends(current_user),
     }
 
 
+def _keys(db: Session, ws: Workspace) -> list[SshKey]:
+    return list(db.scalars(select(SshKey)
+                           .where(SshKey.workspace_id == ws.id)
+                           .order_by(SshKey.created_at)))
+
+
+def _push_keys(db: Session, ws: Workspace) -> None:
+    """Write the current key set into the machine.
+
+    Only meaningful while SSH is switched on; when it is off the keys are just
+    stored, and get written the moment it is switched on. Keeping the two
+    separate is why adding a key does not silently open a listener.
+    """
+    if not ws.ssh_enabled:
+        return
+    keys = _keys(db, ws)
+    if not keys:
+        return
+    body = ("# Managed by MMD-DEV. Edits here are replaced when keys change.\n"
+            + "\n".join(k.line for k in keys) + "\n")
+    resp = svc.call_provisioner({"verb": "service_ssh", "idx": ws.idx,
+                                 "action": "enable", "authorized_keys": body},
+                                timeout=300)
+    if not resp.get("ok"):
+        log.error("pushing keys failed for %s: %s", ws.incus_project, resp)
+        fail(500, "ssh_failed", "The keys could not be applied.")
+
+
+@app.post("/api/workspace/ssh/keys")
+def add_ssh_key(body: SshKeyAdd, user: User = Depends(current_user),
+                db: Session = Depends(get_session)) -> dict:
+    """Add one public key. Independent of whether SSH is switched on."""
+    ws = my_workspace(db, user)
+    try:
+        parsed = sshkeys.normalise(body.public_key)
+    except sshkeys.KeyError_ as exc:
+        fail(400, exc.code, str(exc))
+    if len(parsed) != 1:
+        fail(400, "one_key_at_a_time", "Add one key at a time.")
+    k = parsed[0]
+
+    existing = db.scalar(select(SshKey).where(
+        SshKey.workspace_id == ws.id, SshKey.fingerprint == k["fingerprint"]))
+    if existing is not None:
+        fail(409, "key_exists", "That key is already registered.")
+    if len(_keys(db, ws)) >= sshkeys.MAX_KEYS:
+        fail(400, "too_many_ssh_keys", "Too many keys.")
+
+    row = SshKey(workspace_id=ws.id, key_type=k["type"], body=k["body"],
+                 comment=k["comment"] or None, fingerprint=k["fingerprint"])
+    db.add(row)
+    db.commit()
+    _push_keys(db, ws)
+    svc.audit(db, user.id, "ssh_key_added", ws.incus_project,
+              fingerprint=k["fingerprint"])
+    return {"ok": True, "id": row.id, "fingerprint": row.fingerprint}
+
+
+@app.delete("/api/workspace/ssh/keys/{key_id}")
+def remove_ssh_key(key_id: int, user: User = Depends(current_user),
+                   db: Session = Depends(get_session)) -> dict:
+    ws = my_workspace(db, user)
+    row = db.get(SshKey, key_id)
+    if row is None or row.workspace_id != ws.id:
+        fail(404, "no_such_key", "No such key.")
+
+    remaining = [k for k in _keys(db, ws) if k.id != key_id]
+    if ws.ssh_enabled and not remaining:
+        # Removing the last key while the listener is up would leave a service
+        # nobody can authenticate to. Make the customer switch it off first, so
+        # the consequence is a decision rather than a surprise.
+        fail(409, "last_key", "This is the only key and SSH is switched on.")
+
+    fp = row.fingerprint
+    db.delete(row)
+    db.commit()
+    _push_keys(db, ws)
+    svc.audit(db, user.id, "ssh_key_removed", ws.incus_project, fingerprint=fp)
+    return {"ok": True}
+
+
 @app.post("/api/workspace/services/ssh")
-def set_ssh(body: SshRequest, user: User = Depends(current_user),
+def set_ssh(body: SshToggle, user: User = Depends(current_user),
             db: Session = Depends(get_session)) -> dict:
+    """Switch the listener on or off. Keys are managed separately."""
     ws = my_workspace(db, user)
     if ws.state != WorkspaceState.ON:
         fail(409, "machine_off", "The machine must be running to change this.")
 
     if body.enabled:
-        raw = body.public_keys if body.public_keys is not None else (ws.ssh_keys or "")
-        try:
-            keys = sshkeys.normalise(raw)
-        except sshkeys.KeyError_ as exc:
-            fail(400, exc.code, str(exc))
+        keys = _keys(db, ws)
+        if not keys:
+            fail(400, "no_ssh_key", "Add a public key before switching SSH on.")
+        body_text = ("# Managed by MMD-DEV. Edits here are replaced when keys change.\n"
+                     + "\n".join(k.line for k in keys) + "\n")
         resp = svc.call_provisioner({
             "verb": "service_ssh", "idx": ws.idx, "action": "enable",
-            "authorized_keys": sshkeys.authorized_keys_body(keys)}, timeout=300)
+            "authorized_keys": body_text}, timeout=300)
         if not resp.get("ok"):
             log.error("ssh enable failed for %s: %s", ws.incus_project, resp)
             fail(500, "ssh_failed", "SSH could not be switched on.")
         ws.ssh_enabled = True
-        ws.ssh_keys = "\n".join(k["line"] for k in keys)
         db.commit()
         svc.audit(db, user.id, "ssh_enabled", ws.incus_project, keys=len(keys))
         return {"ok": True, "enabled": True, "keys": len(keys)}

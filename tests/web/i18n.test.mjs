@@ -89,7 +89,8 @@ const LATIN_ALLOWED = new Set([
   "billing.tx.amount",  // the currency word, checked separately
   "res.vcpu",           // vCPU is the term developers use
   "machine.subtitle",   // "Ubuntu 24.04 · 2 vCPU · 4 GB" - all technical
-  "ssh.keygen",         // a literal command the customer types
+  "ssh.keygen",              // a literal command the customer types
+  "ssh.keys.placeholder",    // a literal example of an SSH key
 ]);
 
 test("customer-facing labels are in Persian", () => {

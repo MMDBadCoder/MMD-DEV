@@ -224,6 +224,35 @@ class ExposedPort(Base):
     )
 
 
+class SshKey(Base):
+    """One authorised public key.
+
+    A table rather than a text blob on the workspace: customers add and remove
+    keys individually (a new laptop, a colleague leaving), and each needs its
+    own identity to be removable and its own fingerprint to be recognisable.
+    """
+    __tablename__ = "ssh_keys"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
+    key_type: Mapped[str] = mapped_column(String(48))
+    body: Mapped[str] = mapped_column(Text)
+    comment: Mapped[str | None] = mapped_column(String(200))
+    fingerprint: Mapped[str] = mapped_column(String(64), index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        # The same key twice would be confusing to look at and pointless to
+        # store; the second add is treated as already-present.
+        UniqueConstraint("workspace_id", "fingerprint", name="uq_key_per_workspace"),
+    )
+
+    @property
+    def line(self) -> str:
+        return f"{self.key_type} {self.body}" + (f" {self.comment}" if self.comment else "")
+
+
 class Setting(Base):
     """Runtime configuration: the rate card, overcommit ratios and host reserve.
     Kept in the DB so the admin panel can change them without a redeploy."""

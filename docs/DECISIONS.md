@@ -252,3 +252,24 @@ One trap: `systemctl disable --now xrdp xrdp-sesman` does NOT reclaim the
 session. sesman deliberately leaves the X server and desktop running so a
 disconnected client can reattach, so disabling must also end the session
 explicitly or ~100 MB stays resident with no listener to reach it.
+
+## Keys and the SSH switch are separate controls
+
+The first version put a textarea and a single button on the card, so it was
+unclear what pasting a key would do or which control committed it. Worse, the
+two concerns were entangled: the only way to add a key was to switch SSH on.
+
+They are now independent:
+
+* **Keys** live in their own table, one row each, added one at a time through
+  an input with an explicit Add button and removed individually. Adding a key
+  never opens a listener.
+* **The switch** only starts or stops sshd. It refuses to switch on with zero
+  keys, because that would publish a service nobody can authenticate to.
+* Removing the *last* key while SSH is on is refused rather than silently
+  locking the customer out - they must switch SSH off first, so the
+  consequence is a decision instead of a surprise.
+
+The help text names where the public key lives on Linux, macOS and Windows,
+because "paste your public key" assumes knowledge most people do not have, and
+the failure mode of guessing is pasting a PRIVATE key into a web form.
