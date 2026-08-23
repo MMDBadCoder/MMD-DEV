@@ -26,7 +26,14 @@ chk "docker build works"           'X bash -c "printf \"FROM busybox\\nRUN echo 
 
 echo "--- the technology is invisible ---"
 chk "nproc reports the tier"       '[ "$(X nproc)" = "$(incus config get $P $I limits.cpu)" ]'
-chk "free reports the tier"        'X bash -c "[ \$(free -m | awk \"/Mem:/{print \\\$2}\") -lt 1200 ]"'
+# Compare against the CONFIGURED limit, not a magic number. This asserted
+# "< 1200 MB", which broke the moment the machine was resized to 3 GB -
+# reporting a failure against a workspace that was behaving perfectly.
+limit_mib=$(incus config get $P $I limits.memory | tr -dc '0-9')
+seen_mib=$(X free -m | awk '/Mem:/{print $2}')
+log "  memory seen inside: ${seen_mib} MiB (limit ${limit_mib} MiB)"
+chk "free reports the tier, not the host" \
+    '[ "$seen_mib" -le "$limit_mib" ] && [ "$seen_mib" -gt $((limit_mib - 200)) ]'
 chk "cannot read its own config"   '! X bash -c "test -S /dev/incus/sock"'
 
 echo "--- cannot reach the host ---"

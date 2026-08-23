@@ -29,7 +29,7 @@ a hypervisor would resist. Admin approval of signups is the compensating control
 | `control/mmd/` | FastAPI control plane (Incus client, billing, admission) |
 | `control/provisioner/` | The only root component; unix socket, 4 allowlisted verbs |
 | `control/worker/` | Metering, hourly settlement, lifecycle |
-| `web/` | Dashboard, admin panel, xterm.js terminal |
+| `web/` | Dashboard SPA: real URLs, light/dark, xterm.js terminal |
 | `deploy/` | Hardened systemd units |
 | `verify/` | Automated verification suites |
 
@@ -45,6 +45,24 @@ sudo bash host/50-harden.sh
 sudo bash image/build-golden-image.sh       # ~10 min
 sudo bash workspace/ws-create.sh 1          # first workspace
 ```
+
+## The dashboard
+
+Real URLs via the History API, so refreshing or sharing a link works:
+
+| Path | What |
+|---|---|
+| `/signin`, `/signup` | Separate pages; signup confirms the password |
+| `/` | The machine: power, status, terminal |
+| `/resources` | Size: 0.5/1/2/3 vCPU, 0.5-6 GB, validated server-side |
+| `/ports` | Publish a port to a permanently reserved public address |
+| `/billing` | Balance, itemised cost per hour, spend chart, full ledger |
+| `/activity` | Every action recorded on the account |
+| `/security` | Account details and password change |
+| `/admin` | People, capacity, pricing |
+
+Light and dark themes, chosen by the viewer and remembered. The terminal has a
+full-screen toggle, adjustable font size, and a scrollbar styled to match.
 
 ## Verification
 

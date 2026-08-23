@@ -141,8 +141,16 @@ nft -f "$RULES"
 cat > /etc/systemd/system/mmd-isolation.service <<UNIT
 [Unit]
 Description=MMD-DEV workspace network isolation
-After=nftables.service incus.service
-Wants=nftables.service
+After=incus.service
+Requires=incus.service
+
+# Deliberately NOT Wants=nftables.service. Ubuntu's /etc/nftables.conf begins
+# with "flush ruleset", and Wants= starts a unit even when it is disabled - so
+# pulling it in wiped EVERY table, including the one Incus owns. That removed
+# the masquerade rule for the workspace bridge and silently killed all outbound
+# connectivity from every workspace: DNS still resolved (dnsmasq is local) while
+# anything leaving the host timed out. This unit loads only its own tables and
+# never flushes.
 [Service]
 Type=oneshot
 RemainAfterExit=yes

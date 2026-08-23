@@ -1,0 +1,105 @@
+/* Small DOM helpers, icons and shared chrome. */
+
+export const $ = (sel, root = document) => root.querySelector(sel);
+export const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
+
+export const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
+  (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+export const fmt = (n, d = 2) =>
+  Number(n ?? 0).toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d });
+
+export function when(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso), diff = (Date.now() - d) / 1000;
+  if (diff < 60) return "just now";
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+  if (diff < 604800) return `${Math.floor(diff / 86400)}d ago`;
+  return d.toLocaleDateString();
+}
+
+export const stamp = (iso) => (iso ? new Date(iso).toLocaleString() : "—");
+
+/* Inline SVG so the whole app stays self-contained - no icon font, no CDN. */
+const P = (d, extra = "") =>
+  `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+    stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ${extra}>${d}</svg>`;
+
+export const icon = {
+  machine: P('<rect x="2" y="4" width="20" height="13" rx="2"/><path d="M7 21h10M12 17v4"/>'),
+  power: P('<path d="M12 3v9"/><path d="M18.4 6.6a9 9 0 1 1-12.8 0"/>'),
+  sliders: P('<path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/>'),
+  plug: P('<path d="M9 2v6M15 2v6M7 8h10v4a5 5 0 0 1-10 0z"/><path d="M12 17v5"/>'),
+  card: P('<rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/>'),
+  clock: P('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'),
+  shield: P('<path d="M12 3l8 3v6c0 5-3.4 8.4-8 9-4.6-.6-8-4-8-9V6z"/>'),
+  users: P('<path d="M16 20v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 20v-2a4 4 0 0 0-3-3.9"/>'),
+  logout: P('<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5M21 12H9"/>'),
+  sun: P('<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>'),
+  moon: P('<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>'),
+  plus: P('<path d="M12 5v14M5 12h14"/>'),
+  trash: P('<path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/>'),
+  copy: P('<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>'),
+  expand: P('<path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>'),
+  shrink: P('<path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7"/>'),
+  check: P('<path d="M20 6L9 17l-5-5"/>'),
+  alert: P('<circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16h.01"/>'),
+  info: P('<circle cx="12" cy="12" r="9"/><path d="M12 16v-5M12 8h.01"/>'),
+  minus: P('<path d="M5 12h14"/>'),
+  refresh: P('<path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/>'),
+};
+
+export function toast(message, kind = "") {
+  const el = document.createElement("div");
+  el.className = `toast ${kind}`;
+  el.textContent = message;
+  $("#toasts").append(el);
+  setTimeout(() => {
+    el.style.transition = "opacity .25s";
+    el.style.opacity = "0";
+    setTimeout(() => el.remove(), 260);
+  }, kind === "bad" ? 6000 : 3200);
+}
+
+export function note(kind, html) {
+  const ic = { ok: icon.check, warn: icon.alert, bad: icon.alert, info: icon.info }[kind] || "";
+  return `<div class="note ${kind}">${ic}<div>${html}</div></div>`;
+}
+
+export function empty(text, ico = icon.info) {
+  return `<div class="empty">${ico.replace('width="16" height="16"', 'width="34" height="34"')}
+    <div>${esc(text)}</div></div>`;
+}
+
+/* ---- theme ---- */
+export function currentTheme() {
+  return localStorage.getItem("mmd-theme")
+      || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+}
+
+export function toggleTheme() {
+  const next = currentTheme() === "dark" ? "light" : "dark";
+  localStorage.setItem("mmd-theme", next);
+  document.documentElement.setAttribute("data-theme", next);
+  window.dispatchEvent(new CustomEvent("mmd:theme", { detail: next }));
+}
+
+/* ---- confirmation ---- */
+export function confirmDialog(title, body, confirmLabel = "Confirm") {
+  return new Promise((resolve) => {
+    const wrap = document.createElement("div");
+    wrap.style.cssText = "position:fixed;inset:0;z-index:150;display:grid;place-items:center;background:rgba(0,0,0,.45);padding:20px";
+    wrap.innerHTML = `<div class="card" style="max-width:420px;width:100%;margin:0">
+      <h2>${esc(title)}</h2><p class="muted small">${body}</p>
+      <div class="btn-row" style="justify-content:flex-end;margin-top:16px">
+        <button class="btn ghost" data-no>Cancel</button>
+        <button class="btn danger" data-yes>${esc(confirmLabel)}</button>
+      </div></div>`;
+    const done = (v) => { wrap.remove(); resolve(v); };
+    wrap.querySelector("[data-no]").onclick = () => done(false);
+    wrap.querySelector("[data-yes]").onclick = () => done(true);
+    wrap.onclick = (e) => { if (e.target === wrap) done(false); };
+    document.body.append(wrap);
+  });
+}

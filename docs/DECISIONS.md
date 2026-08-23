@@ -82,3 +82,66 @@ rewrites its own file on a later boot.
 **A newly approved user was handed a *running* workspace.** With no credit yet,
 billing started immediately and put them into debt before their first sign-in.
 Provisioning now hands back an **off** workspace.
+
+## Why size changes are allowed while running (mostly)
+
+Incus can update `limits.cpu`, `limits.cpu.allowance` and `limits.memory` on a
+running container, so a resize does not have to interrupt anyone. Two things
+had to be handled before allowing it:
+
+**Billing.** Settlement reads whatever size is current when it runs, so a
+customer could run at 3 vCPU for 59 minutes, drop to 0.5, and be billed for the
+whole hour at 0.5. The elapsed part-hour is now settled at the OLD size before
+the new one is applied, and a fresh period starts.
+
+**Safety.** Memory may be raised live but not lowered live. Shrinking the limit
+under a process already using more forces immediate reclaim and can have the
+kernel kill a running coding agent - the exact failure this product exists to
+avoid. CPU moves either way; the worst case is slowness.
+
+## Why published ports use nftables, not Incus proxy devices
+
+The obvious mechanism is an Incus `proxy` device. It cannot be used: the project
+sets `restricted.devices.proxy=block`, and that restriction binds the PROJECT
+rather than merely restricted certificates, so even root is refused with "Proxy
+devices are forbidden".
+
+Relaxing it would be worse than the inconvenience. A proxy device can listen on
+*any* host port, so anything holding the control plane's certificate could bind
+443 or 22 and intercept traffic. Plain nftables DNAT does the same job entirely
+in the kernel, is faster than a userspace relay, and needs no Incus privilege.
+The API owns the mapping table and hands the provisioner the COMPLETE desired
+set on every change, so the ruleset is rebuilt wholesale and self-heals rather
+than drifting through a sequence of deltas.
+
+## More failures worth remembering
+
+**The hardening script locked the operator out of their own server.** It
+disabled SSH password authentication whenever `/root/.ssh/authorized_keys` was
+non-empty. A cloud image or hosting provider routinely injects a key, so its
+presence is not evidence the operator logs in with one. The dashboard stayed up
+while the only administrative route in was gone. Password auth is now left
+enabled unless `MMD_DISABLE_SSH_PASSWORDS=yes` is set explicitly - and the P0
+suite, which had asserted the lockout was *correct*, now asserts that a working
+login method still exists. A check that treats losing your own access as a pass
+is worse than no check.
+
+**The isolation ruleset had no `established,related` rule.** Return traffic for
+host-initiated connections was dropped, so the host could not reach its own
+workspaces at all - not even ping. It does not weaken the boundary: conntrack
+only matches flows the host started, and workspace-to-host is still refused.
+
+**Project ceilings were pinned to the size a workspace was created at**, so
+`limits.cpu=1` made "change size" a one-way door - Incus rejected every increase
+with "Reached maximum aggregate value". The ceilings are the top of the
+catalogue; they exist to stop a compromised control plane asking for 64 cores,
+not to fix a customer at whatever they first chose.
+
+**A size change made while the machine was off never reached Incus.** Only the
+database was updated, so the machine came back with its old limits while being
+billed for the new size. The tier is now applied at power-on.
+
+**Anti-enumeration made a silent no-op look like success.** Registering an email
+that already exists returns the same response as a real signup, by design. When
+a script re-registered an existing address to set a known password, it reported
+success and changed nothing - and the password handed over was never valid.

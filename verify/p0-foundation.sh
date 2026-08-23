@@ -27,6 +27,14 @@ chk "isolation table loaded"           'nft list table inet mmd_isolation'
 chk "metadata IP blocked"              'nft list table inet mmd_isolation | grep -q "169.254.0.0/16"'
 chk "uplink LAN blocked"               'nft list table inet mmd_isolation | grep -q "203.0.113.0/24"'
 chk "isolation applies at boot"        'systemctl is-enabled --quiet mmd-isolation.service'
+# Incus owns its own nftables table, including the masquerade that gives every
+# workspace outbound internet. Anything running `flush ruleset` destroys it -
+# which is exactly what Ubuntu's /etc/nftables.conf does on the first line. The
+# symptom is nasty to diagnose: DNS keeps working (dnsmasq is local) while
+# everything leaving the host times out.
+chk "incus firewall table present"     'nft list table inet incus'
+chk "workspace masquerade present"     'nft list table inet incus | grep -q masquerade'
+chk "nftables.service cannot flush us" '[ "$(systemctl is-enabled nftables 2>&1)" = masked ]'
 chk "zram swap active"                 'swapon --show --noheadings | grep -q zram'
 chk "disk swap active"                 "swapon --show --noheadings | grep -q $SWAPFILE_PATH"
 # NB: these assert the operator is NOT locked out. An earlier version asserted
