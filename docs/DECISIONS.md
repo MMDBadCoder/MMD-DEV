@@ -212,11 +212,36 @@ Tested in a real unprivileged container on this host, not estimated.
 |---|---|---|
 | sshd listening, nobody connected | 5.2 MB | already in the image |
 | xrdp listening, nobody connected | 4 MB | — |
-| lean XFCE + xrdp installed | — | ~800 MB |
+| lean XFCE + xrdp installed | — | **236 MB** |
 | active RDP session (Xorg + XFCE) | ~100 MB over idle | — |
 
 The listeners are effectively free; the expense is the SESSION, and the disk.
 That inverts the intuition that "turning the listener on costs resources".
+
+(An earlier note here said ~800 MB of disk. That was wrong: it compared against
+an assumed 1 GB base image rather than a measured one. Measured properly -
+before install, after install, after `apt-get clean` - the incremental cost is
+236 MB.)
+
+### Which desktop is actually lightest
+
+Counter-intuitive, and worth recording. Installed size including xrdp and Xorg:
+
+| | Size | Packages |
+|---|---|---|
+| xrdp + Xorg alone (irreducible) | 197 MB | 57 |
+| fluxbox + xterm | 294 MB | 115 |
+| **XFCE lean** | **299 MB** | 151 |
+| icewm + xterm | 299 MB | 126 |
+| openbox + tint2 + pcmanfm | 352 MB | 153 |
+| XFCE full (+ goodies) | 355 MB | 230 |
+| LXDE core | 364 MB | 179 |
+| LXQt core | 381 MB | 247 |
+
+The X server and xrdp account for 197 MB of whatever you choose, so swapping
+XFCE for a minimal window manager saves about 5 MB - and once a minimal setup
+grows a panel and a file manager it costs MORE than XFCE. "Pick something
+lighter than XFCE" is a false economy here.
 
 `xrdp` with the **Xorg backend** (`xorgxrdp`) works in an unprivileged
 container - `Session started successfully for user dev on display 10`, with
