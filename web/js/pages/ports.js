@@ -1,6 +1,6 @@
 /* Published ports: expose a port from inside the machine to the internet. */
 import { get, post, del } from "../api.js";
-import { $, $$, icon, esc, fmtMoney, note, toast, empty, stamp, confirmDialog } from "../ui.js";
+import { $, $$, icon, esc, fmtMoney, moneyPerHour, note, toast, empty, stamp, confirmDialog } from "../ui.js";
 import { t } from "../i18n.js";
 import { render } from "../main.js";
 
@@ -38,7 +38,7 @@ export async function portsPage() {
         <div style="flex:0 0 auto"><button class="btn primary" id="add">${icon.plus}${t("ports.publish")}</button></div>
       </div>
       <p class="tiny dim" style="margin:12px 0 0">حداکثر ${d.max_ports} پورت،
-        هر کدام ${fmtMoney(d.rate_per_hour)} تومان در ساعت — چه ماشین روشن باشد
+        هر کدام ${moneyPerHour(d.rate_per_hour)} — چه ماشین روشن باشد
         چه خاموش، چون آدرس همیشه برای شما رزرو می‌ماند.</p>
       <div id="msg"></div>
     </div>

@@ -76,7 +76,7 @@ export async function adminPage() {
         <span class="dim small">${fmtFa(users.length)}</span></div>
       <div class="table-wrap"><table>
         <thead><tr><th>${t("adm.account")}</th><th>${t("adm.status")}</th>
-          <th>${t("adm.machine")}</th><th class="num">${t("adm.credit")}</th><th></th></tr></thead>
+          <th>${t("adm.machine")}</th><th class="num">${t("adm.credit")} <span class="dim">(${CURRENCY})</span></th><th></th></tr></thead>
         <tbody>${users.map(row).join("")}</tbody></table></div>
     </div>
 

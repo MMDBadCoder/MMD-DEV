@@ -1,6 +1,6 @@
 /* Everything this account has done. */
 import { get } from "../api.js";
-import { $, icon, esc, fmtNum, fmtFa, fmtMoney, empty, stamp } from "../ui.js";
+import { $, icon, esc, fmtNum, fmtFa, fmtMoney, money, empty, stamp } from "../ui.js";
 import { t } from "../i18n.js";
 import { render } from "../main.js";
 
@@ -10,7 +10,7 @@ function describe(e) {
     return `${fmtNum((d.cpu_milli || 0) / 1000, 1)} vCPU · ${fmtNum((d.mem_mib || 0) / 1024, 1)} ${t("res.gb")}`;
   if (e.action === "port_publish" || e.action === "port_unpublish")
     return `<span class="ltr mono">${d.internal} → ${d.external}</span>`;
-  if (e.action === "grant_credit") return `${fmtMoney(d.credits)} ${t("billing.tx.amount")}`;
+  if (e.action === "grant_credit") return money(d.credits);
   if (e.action === "packages_installed") return `${fmtFa(d.count || 0)} بسته`;
   if (e.action === "set_admin") return d.is_admin ? t("sec.role.admin") : t("sec.role.user");
   if (d.error) return esc(String(d.error).slice(0, 120));

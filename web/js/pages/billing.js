@@ -1,6 +1,6 @@
 /* Billing: balance, itemised cost, spend chart, full ledger. All Toman. */
 import { get } from "../api.js";
-import { $, icon, esc, fmtMoney, fmtNum, fmtFa, empty, stamp } from "../ui.js";
+import { $, icon, esc, fmtMoney, fmtNum, fmtFa, money, empty, stamp } from "../ui.js";
 import { t, CURRENCY } from "../i18n.js";
 import { render } from "../main.js";
 
@@ -17,11 +17,11 @@ export async function billingPage(_params, page = 0) {
   const bars = usage.series.length
     ? `<div class="chart">${usage.series.map((s) => `
         <div class="col" style="height:${Math.max(2, (s.spent / maxSpend) * 100)}%"
-             title="${esc(stamp(s.hour))} — ${fmtMoney(s.spent)} ${CURRENCY}"></div>`).join("")}
+             title="${esc(stamp(s.hour))} — ${money(s.spent)}"></div>`).join("")}
        </div>
        <div class="between tiny dim" style="margin-top:6px">
          <span>${esc(stamp(usage.series[0].hour))}</span>
-         <span>${t("billing.chart.peak")} ${fmtMoney(maxSpend)}</span>
+         <span>${t("billing.chart.peak")} ${money(maxSpend)}</span>
          <span>${t("billing.chart.now")}</span></div>`
     : empty(t("billing.chart.empty"), icon.card);
 
@@ -53,9 +53,9 @@ export async function billingPage(_params, page = 0) {
       <div class="stat"><div class="k">${t("billing.balance")}</div>
         <div class="v">${fmtMoney(sum.credits)}<small>${CURRENCY}</small></div></div>
       <div class="stat"><div class="k">${t("billing.added")}</div>
-        <div class="v">${fmtMoney(sum.total_granted)}</div></div>
+        <div class="v">${fmtMoney(sum.total_granted)}<small>${CURRENCY}</small></div></div>
       <div class="stat"><div class="k">${t("billing.spent")}</div>
-        <div class="v">${fmtMoney(sum.total_spent)}</div></div>
+        <div class="v">${fmtMoney(sum.total_spent)}<small>${CURRENCY}</small></div></div>
       <div class="stat"><div class="k">${t("billing.remaining")}</div>
         <div class="v">${fmtFa(sum.hours_remaining ?? 0, 1)}<small>${t("machine.hours")}</small></div></div>
     </div>
@@ -64,8 +64,8 @@ export async function billingPage(_params, page = 0) {
       <h3>${t("billing.costs.title")}</h3>
       <div class="table-wrap"><table>
         <thead><tr><th>${t("billing.component")}</th>
-          <th class="num">${t("billing.whenon")}</th>
-          <th class="num">${t("billing.whenoff")}</th></tr></thead>
+          <th class="num">${t("billing.whenon")} <span class="dim">(${CURRENCY})</span></th>
+          <th class="num">${t("billing.whenoff")} <span class="dim">(${CURRENCY})</span></th></tr></thead>
         <tbody>
           <tr><td>${t("billing.storage", fmtNum(q.tier.disk_gib))}</td>
             <td class="num">${fmtMoney(q.per_hour.disk)}</td><td class="num">${fmtMoney(q.per_hour.disk)}</td></tr>
@@ -96,7 +96,7 @@ export async function billingPage(_params, page = 0) {
         <span class="dim small">${t("billing.tx.total", fmtFa(tx.total))}</span></div>
       ${tx.transactions.length ? `<div class="table-wrap"><table>
         <thead><tr><th>${t("billing.tx.when")}</th><th>${t("billing.tx.type")}</th>
-          <th>${t("billing.tx.detail")}</th><th class="num">${t("billing.tx.amount")}</th></tr></thead>
+          <th>${t("billing.tx.detail")}</th><th class="num">${t("billing.tx.change")} <span class="dim">(${CURRENCY})</span></th></tr></thead>
         <tbody>${rows}</tbody></table></div>` : empty(t("billing.tx.empty"), icon.card)}
       ${pages > 1 ? `<div class="card-head" style="border-top:1px solid var(--border);border-bottom:none">
         <span class="dim small">${t("common.page", [page + 1, pages])}</span>

@@ -5,7 +5,7 @@
  * holds a websocket nobody asked for, and surprises anyone who came here just
  * to read the numbers. The session starts when the customer asks for it. */
 import { get, post } from "../api.js";
-import { $, icon, esc, fmtMoney, fmtNum, fmtFa, note, toast, currentTheme } from "../ui.js";
+import { $, icon, esc, fmtMoney, fmtNum, fmtFa, money, note, toast, currentTheme } from "../ui.js";
 import { t } from "../i18n.js";
 import { render } from "../main.js";
 
@@ -50,11 +50,11 @@ export async function machinePage() {
     <div class="card">
       <div class="row" style="margin-bottom:18px">
         <div class="stat"><div class="k">${t("machine.stat.balance")}</div>
-          <div class="v">${fmtMoney(w.credits)}<small>${t("billing.tx.amount")}</small></div></div>
+          <div class="v">${fmtMoney(w.credits)}<small>${t("unit.toman")}</small></div></div>
         <div class="stat"><div class="k">${t("machine.stat.running")}</div>
-          <div class="v">${fmtMoney(w.rate_on_per_hour)}<small>${t("machine.maxsuffix")}</small></div></div>
+          <div class="v">${fmtMoney(w.rate_on_per_hour)}<small>${t("unit.tomanPerHourMax")}</small></div></div>
         <div class="stat"><div class="k">${t("machine.stat.off")}</div>
-          <div class="v">${fmtMoney(w.rate_off_per_hour)}<small>${t("machine.perhour")}</small></div></div>
+          <div class="v">${fmtMoney(w.rate_off_per_hour)}<small>${t("unit.tomanPerHour")}</small></div></div>
         <div class="stat"><div class="k">${t("machine.stat.remaining")}</div>
           <div class="v">${fmtFa(w.hours_remaining, 1)}<small>${t("machine.hours")}</small></div></div>
       </div>

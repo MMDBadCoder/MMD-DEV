@@ -81,6 +81,10 @@ const FA = {
   "machine.stat.off": "هزینه در حالت خاموش",
   "machine.stat.remaining": "زمان باقی‌مانده",
   "machine.perhour": "در ساعت",
+  "unit.toman": "تومان",
+  "unit.tomanPerHour": "تومان در ساعت",
+  "unit.tomanPerHourMax": "تومان در ساعت، حداکثر",
+  "billing.tx.change": "تغییر موجودی",
   "machine.hours": "ساعت",
   "machine.maxsuffix": "حداکثر",
   "machine.offnote": (rate) =>
@@ -369,6 +373,19 @@ export const allKeys = () => Object.keys(FA);
    a Toman is not a thing anyone can pay. */
 export function fmtMoney(n) {
   return Math.round(Number(n ?? 0)).toLocaleString("fa-IR");
+}
+
+/* Money WITH its unit. Use this anywhere a figure could be mistaken for a
+   count: a bare "۶۴۵" next to "hours" or "ports" tells the reader nothing
+   about what it is. Tables may instead put the unit in the column header and
+   use fmtMoney in the cells. */
+export function money(n) {
+  return `${fmtMoney(n)} ${CURRENCY}`;
+}
+
+/* "۶۴۵ تومان در ساعت" - for anything quoted as a rate. */
+export function moneyPerHour(n) {
+  return `${fmtMoney(n)} ${CURRENCY} در ساعت`;
 }
 
 /* Persian digits for prose-like values - durations, counts, anything read as

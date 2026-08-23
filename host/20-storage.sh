@@ -79,6 +79,17 @@ networks:
     ipv4.nat: "true"
     ipv4.dhcp: "true"
     ipv6.address: none
+    # No DNS registration. Every workspace instance is named "ws" inside its
+    # own project, and Incus registers DNS names PER NETWORK, not per project -
+    # so the second workspace to start is refused with "Instance DNS name
+    # already used on network" and simply will not boot. That is a hard
+    # multi-tenancy failure that only appears once two customers exist.
+    #
+    # Turning registration off is also the right call on its own terms:
+    # workspaces are firewalled from each other, so publishing their hostnames
+    # into a shared zone serves nothing and leaks the existence of other
+    # tenants. Outbound resolution is unaffected - dnsmasq still forwards.
+    dns.mode: none
 profiles:
 - name: default
   devices:

@@ -21,6 +21,10 @@ chk "pool defaults: refquota"          'incus storage get '"$INCUS_POOL_NAME"' v
 chk "pool defaults: reserve_space"     'incus storage get '"$INCUS_POOL_NAME"' volume.zfs.reserve_space | grep -q true'
 chk "ZFS ARC capped"                   '[ "$(cat /sys/module/zfs/parameters/zfs_arc_max)" = "'"$ZFS_ARC_MAX_BYTES"'" ]'
 chk "bridge $INCUS_BRIDGE exists"      "ip link show $INCUS_BRIDGE"
+# Without this, the SECOND workspace to start fails with "Instance DNS name
+# already used on network" - every instance is named "ws" in its own project
+# and DNS registration is per-network. A one-tenant test never sees it.
+chk "bridge DNS registration disabled" '[ "$(incus network get '"$INCUS_BRIDGE"' dns.mode)" = none ]' 
 chk "incus API loopback-only"          'ss -tlnH sport = :8443 | grep -q "127.0.0.1:8443"'
 chk "metrics loopback-only"            'ss -tlnH sport = :9101 | grep -q "127.0.0.1:9101"'
 chk "isolation table loaded"           'nft list table inet mmd_isolation'

@@ -183,3 +183,47 @@ a stable `code` field; the interface translates by code. That way server logs
 stay readable to whoever is on call, no page has to parse English prose, and a
 test asserts every code the API can emit has Persian text - so a new error can
 never reach a customer untranslated.
+
+## Two workspaces could not run at the same time
+
+Found while testing RDP, not by any earlier test - because every earlier test
+ran exactly one workspace. Each instance is named `ws` inside its own project,
+and Incus registers DNS names PER NETWORK rather than per project, so the
+second workspace to start was refused outright:
+
+    Failed start validation for device "eth0":
+    Instance DNS name "ws" already used on network
+
+That is a total multi-tenancy failure that only appears once a second customer
+exists. Fixed with `dns.mode=none` on the bridge, which is also correct on its
+own terms: workspaces are firewalled from each other, so publishing their
+hostnames into a shared zone serves nothing and leaks the existence of other
+tenants. Outbound resolution is unaffected - dnsmasq still forwards. The P0
+suite now asserts it.
+
+Worth recording as a testing lesson: "it works" measured on one tenant says
+nothing about a multi-tenant system.
+
+## Measured cost of SSH and RDP inside a workspace
+
+Tested in a real unprivileged container on this host, not estimated.
+
+| State | Memory | Disk |
+|---|---|---|
+| sshd listening, nobody connected | 5.2 MB | already in the image |
+| xrdp listening, nobody connected | 4 MB | — |
+| lean XFCE + xrdp installed | — | ~800 MB |
+| active RDP session (Xorg + XFCE) | ~100 MB over idle | — |
+
+The listeners are effectively free; the expense is the SESSION, and the disk.
+That inverts the intuition that "turning the listener on costs resources".
+
+`xrdp` with the **Xorg backend** (`xorgxrdp`) works in an unprivileged
+container - `Session started successfully for user dev on display 10`, with
+Xorg, xfwm4, xfce4-panel and xfdesktop all running. No Xvnc fallback needed,
+and no privileged container.
+
+One trap: `systemctl disable --now xrdp xrdp-sesman` does NOT reclaim the
+session. sesman deliberately leaves the X server and desktop running so a
+disconnected client can reattach, so disabling must also end the session
+explicitly or ~100 MB stays resident with no listener to reach it.

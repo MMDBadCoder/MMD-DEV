@@ -8,17 +8,15 @@
    Light and dark are both first-class: every colour is a token, defined once
    for light on :root and overridden wholesale for dark. */
 
+/* Vazirmatn as a VARIABLE font: one 109 KB file covering 100-900, instead of
+   three static cuts that only gave 400/500/700. Intermediate weights are what
+   make a Persian interface look considered rather than blocky - 550 for
+   buttons, 650 for headings, 300 for quiet text. */
 @font-face{
-  font-family:"Vazirmatn";font-style:normal;font-weight:400;font-display:swap;
-  src:url("/static/vendor/vazirmatn-400.woff2") format("woff2");
-}
-@font-face{
-  font-family:"Vazirmatn";font-style:normal;font-weight:500;font-display:swap;
-  src:url("/static/vendor/vazirmatn-500.woff2") format("woff2");
-}
-@font-face{
-  font-family:"Vazirmatn";font-style:normal;font-weight:700;font-display:swap;
-  src:url("/static/vendor/vazirmatn-700.woff2") format("woff2");
+  font-family:"Vazirmatn";font-style:normal;font-weight:100 900;
+  font-display:swap;
+  src:url("/static/vendor/vazirmatn-var.woff2") format("woff2-variations");
+  src:url("/static/vendor/vazirmatn-var.woff2") format("woff2") tech(variations);
 }
 /* MMD-DEV design system.
    Light and dark are both first-class: every colour is a token, defined once
@@ -65,8 +63,18 @@
 html,body{height:100%}
 body{
   margin:0;background:var(--bg);color:var(--ink);
-  font:15px/1.8 "Vazirmatn",ui-sans-serif,system-ui,-apple-system,"Segoe UI",Tahoma,sans-serif;
+  /* Persian glyphs carry more vertical detail than Latin, so they want a
+     slightly larger size and noticeably more leading to stay legible. */
+  font-family:"Vazirmatn",ui-sans-serif,system-ui,-apple-system,"Segoe UI",Tahoma,sans-serif;
+  font-size:15.5px;
+  line-height:1.85;
+  font-weight:400;
+  font-variation-settings:"wght" 400;
   -webkit-font-smoothing:antialiased;
+  -moz-osx-font-smoothing:grayscale;
+  text-rendering:optimizeLegibility;
+  /* Persian numerals and proportional figures render better with these off. */
+  font-feature-settings:"ss01","ss02";
 }
 /* Islands that must stay left-to-right inside an RTL page: terminal output,
    host:port addresses, package names, anything copied into a shell. */
@@ -76,12 +84,14 @@ body{
 [dir="rtl"] .mono,[dir="rtl"] .ltr{unicode-bidi:isolate}
 a{color:var(--brand);text-decoration:none}
 a:hover{text-decoration:underline}
-h1{font-size:24px;line-height:1.25;margin:0 0 6px;letter-spacing:-.01em}
-h2{font-size:16px;margin:0 0 4px;font-weight:650}
-h3{font-size:14px;margin:0 0 10px;font-weight:650;color:var(--ink-2)}
+h1{font-size:26px;line-height:1.5;margin:0 0 6px;font-weight:700;letter-spacing:0}
+h2{font-size:17px;line-height:1.6;margin:0 0 4px;font-weight:650}
+h3{font-size:15px;line-height:1.6;margin:0 0 10px;font-weight:650;color:var(--ink-2)}
+/* Persian has no capitals, so letter-spacing tricks that work for Latin
+   headings only smear it. Weight and size carry the hierarchy instead. */
 p{margin:0 0 12px}
 .muted{color:var(--ink-2)} .dim{color:var(--ink-3)}
-.small{font-size:13px} .tiny{font-size:12px}
+.small{font-size:13.5px;line-height:1.75} .tiny{font-size:12.5px;line-height:1.7}
 .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.94em}
 .nowrap{white-space:nowrap}
 
@@ -91,7 +101,8 @@ p{margin:0 0 12px}
   background:var(--surface);border-bottom:1px solid var(--border);
   display:flex;align-items:center;gap:18px;padding:0 20px;
 }
-.brand{display:flex;align-items:center;gap:9px;font-weight:700;letter-spacing:-.01em}
+.brand{display:flex;align-items:center;gap:9px;font-weight:750;font-size:16px}
+.brand>span:last-child{direction:ltr;unicode-bidi:isolate}
 .brand .logo{
   width:26px;height:26px;border-radius:7px;background:var(--brand);
   color:var(--brand-ink);display:grid;place-items:center;flex:none;
@@ -99,8 +110,8 @@ p{margin:0 0 12px}
 .nav{display:flex;gap:2px;margin-inline-start:8px;overflow-x:auto;scrollbar-width:none}
 .nav::-webkit-scrollbar{display:none}
 .nav a{
-  display:flex;align-items:center;gap:7px;padding:7px 11px;border-radius:8px;
-  color:var(--ink-2);font-size:14px;font-weight:550;white-space:nowrap;
+  display:flex;align-items:center;gap:7px;padding:7px 12px;border-radius:8px;
+  color:var(--ink-2);font-size:14.5px;font-weight:500;white-space:nowrap;
 }
 .nav a:hover{background:var(--surface-2);color:var(--ink);text-decoration:none}
 .nav a.active{background:var(--brand-soft);color:var(--brand)}
@@ -143,7 +154,7 @@ input:focus,select:focus,textarea:focus{
 .btn{
   display:inline-flex;align-items:center;justify-content:center;gap:8px;
   padding:10px 15px;border-radius:9px;border:1px solid var(--border-strong);
-  background:var(--surface);color:var(--ink);font:inherit;font-weight:600;
+  background:var(--surface);color:var(--ink);font:inherit;font-weight:550;
   cursor:pointer;transition:background .12s,border-color .12s,opacity .12s;
   white-space:nowrap;
 }
@@ -181,8 +192,9 @@ input:focus,select:focus,textarea:focus{
 
 .stat{background:var(--surface-2);border:1px solid var(--border);
   border-radius:var(--radius);padding:14px 16px}
-.stat .k{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
-.stat .v{font-size:23px;font-weight:680;margin-top:5px;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.stat .k{font-size:12.5px;font-weight:600;color:var(--ink-3);letter-spacing:0}
+.stat .v{font-size:24px;font-weight:700;margin-top:4px;line-height:1.4;
+  font-variant-numeric:tabular-nums;letter-spacing:0}
 .stat .v small{font-size:13px;font-weight:600;color:var(--ink-3);margin-inline-start:5px}
 .bar{height:6px;background:var(--border);border-radius:4px;overflow:hidden;margin-top:9px}
 .bar>i{display:block;height:100%;background:var(--brand);border-radius:4px;transition:width .3s}
@@ -191,8 +203,8 @@ input:focus,select:focus,textarea:focus{
 /* ---- table ---- */
 table{width:100%;border-collapse:collapse;font-size:14px}
 th,td{text-align:start;padding:11px 14px;border-bottom:1px solid var(--border)}
-th{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
-  color:var(--ink-3);background:var(--surface-2)}
+th{font-size:12.5px;font-weight:650;color:var(--ink-3);background:var(--surface-2);
+  letter-spacing:0}
 tbody tr:last-child td{border-bottom:none}
 tbody tr:hover{background:var(--surface-2)}
 td.num,th.num{text-align:end;font-variant-numeric:tabular-nums;direction:ltr}
@@ -288,8 +300,8 @@ kbd{display:inline-block;padding:1px 7px;border:1px solid var(--border-strong);
 .lp{max-width:1080px;margin:0 auto;padding:0 20px}
 .lp-nav{display:flex;align-items:center;gap:14px;padding:18px 0}
 .lp-hero{padding:56px 0 40px;text-align:center}
-.lp-hero h1{font-size:40px;line-height:1.35;letter-spacing:-.02em;margin:0 0 14px}
-.lp-hero .lead{font-size:18px;color:var(--ink-2);max-width:640px;margin:0 auto 26px}
+.lp-hero h1{font-size:42px;line-height:1.5;font-weight:800;letter-spacing:0;margin:0 0 16px}
+.lp-hero .lead{font-size:18px;line-height:2;color:var(--ink-2);max-width:660px;margin:0 auto 28px}
 .lp-badge{display:inline-flex;align-items:center;gap:8px;padding:6px 14px;
   border-radius:999px;background:var(--brand-soft);color:var(--brand);
   font-size:13px;font-weight:650;margin-bottom:18px}
@@ -304,7 +316,7 @@ kbd{display:inline-block;padding:1px 7px;border:1px solid var(--border-strong);
 .lp-feat p{font-size:14px;color:var(--ink-2);margin:0}
 .lp-price{background:var(--surface);border:1px solid var(--border);
   border-radius:var(--radius-lg);padding:26px;text-align:center}
-.lp-price .amt{font-size:34px;font-weight:750;letter-spacing:-.02em}
+.lp-price .amt{font-size:34px;font-weight:750;letter-spacing:0;line-height:1.4}
 .lp-price .per{color:var(--ink-3);font-size:14px}
 .lp-foot{padding:36px 0;color:var(--ink-3);font-size:13px;text-align:center;
   border-top:1px solid var(--border);margin-top:36px}

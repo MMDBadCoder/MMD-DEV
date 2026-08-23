@@ -68,8 +68,8 @@ export async function resourcesPage() {
     $("#sel-label").innerHTML =
       `<span class="ltr">${fmtNum(cores, cores % 1 ? 1 : 0)} × ${fmtNum(gb, gb % 1 ? 1 : 0)}</span>
        <small>${t("res.gb")}</small>`;
-    $("#sel-max").innerHTML = `${fmtMoney(p.max_per_hour)}<small>${t("machine.perhour")}</small>`;
-    $("#sel-idle").innerHTML = `${fmtMoney(p.idle_per_hour)}<small>${t("machine.perhour")}</small>`;
+    $("#sel-max").innerHTML = `${fmtMoney(p.max_per_hour)}<small>${t("unit.tomanPerHour")}</small>`;
+    $("#sel-idle").innerHTML = `${fmtMoney(p.idle_per_hour)}<small>${t("unit.tomanPerHour")}</small>`;
 
     const changed = sel.cpu !== cur.cpu || sel.mem !== cur.mem;
     const shrinkMem = running && sel.mem < cur.mem;

@@ -6,7 +6,7 @@ export const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 export const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
   (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
-export { fmtMoney, fmtNum, fmtFa } from "./i18n.js";
+export { fmtMoney, fmtNum, fmtFa, money, moneyPerHour } from "./i18n.js";
 
 export function when(iso) {
   if (!iso) return "—";
