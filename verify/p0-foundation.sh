@@ -29,8 +29,13 @@ chk "uplink LAN blocked"               'nft list table inet mmd_isolation | grep
 chk "isolation applies at boot"        'systemctl is-enabled --quiet mmd-isolation.service'
 chk "zram swap active"                 'swapon --show --noheadings | grep -q zram'
 chk "disk swap active"                 "swapon --show --noheadings | grep -q $SWAPFILE_PATH"
-chk "sshd password auth off"           'sshd -T | grep -qi "^passwordauthentication no"'
-chk "sshd root password login off"     'sshd -T | grep -qi "^permitrootlogin prohibit-password"'
+# NB: these assert the operator is NOT locked out. An earlier version asserted
+# the opposite - that password auth was disabled - so a lockout registered as a
+# passing check while the operator could not reach their own machine.
+chk "sshd is running"                  'systemctl is-active --quiet ssh'
+chk "sshd config is valid"             'sshd -t'
+chk "a login method is available"      'sshd -T | grep -qiE "^(passwordauthentication|pubkeyauthentication) yes"'
+chk "empty passwords refused"          'sshd -T | grep -qi "^permitemptypasswords no"'
 chk "journald capped"                  'grep -q SystemMaxUse /etc/systemd/journald.conf.d/60-mmd.conf'
 chk "unattended-upgrades enabled"      'systemctl is-enabled --quiet unattended-upgrades'
 echo

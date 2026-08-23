@@ -18,7 +18,7 @@ from pathlib import Path
 
 log = logging.getLogger("mmd.api")
 from pydantic import BaseModel, EmailStr, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from . import service as svc
@@ -93,6 +93,10 @@ class TierRequest(BaseModel):
 class PasswordChange(BaseModel):
     current_password: str
     new_password: str = Field(min_length=10, max_length=200)
+
+
+class AdminFlag(BaseModel):
+    is_admin: bool
 
 
 class CreditGrant(BaseModel):
@@ -535,6 +539,50 @@ def admin_credit(user_id: int, body: CreditGrant,
                          detail={"note": body.note, "by": admin.email})
     audit(db, admin.id, "grant_credit", user.email, credits=body.credits)
     return {"ok": True, "balance": svc.balance_micro(db, user.id) / MICRO}
+
+
+@app.post("/api/admin/users/{user_id}/admin")
+def admin_set_admin(user_id: int, body: AdminFlag,
+                    admin: User = Depends(require_admin),
+                    db: Session = Depends(get_session)) -> dict:
+    """Promote or demote an administrator."""
+    user = db.get(User, user_id)
+    if user is None:
+        raise HTTPException(404, "No such user")
+    if not body.is_admin:
+        # Refuse to remove the last administrator - that would lock everyone
+        # out of approvals, credit and settings with no way back in.
+        remaining = db.scalar(select(func.count(User.id)).where(
+            User.is_admin.is_(True), User.id != user_id))
+        if not remaining:
+            raise HTTPException(409, "This is the only administrator; promote someone else first.")
+    user.is_admin = body.is_admin
+    if body.is_admin and user.status != UserStatus.APPROVED:
+        user.status = UserStatus.APPROVED
+    db.commit()
+    audit(db, admin.id, "set_admin", user.email, is_admin=body.is_admin)
+    return {"ok": True, "email": user.email, "is_admin": user.is_admin}
+
+
+@app.delete("/api/admin/users/{user_id}")
+def admin_delete_user(user_id: int, admin: User = Depends(require_admin),
+                      db: Session = Depends(get_session)) -> dict:
+    """Permanently remove an account and its workspace."""
+    if user_id == admin.id:
+        raise HTTPException(409, "You cannot delete your own account")
+    user = db.get(User, user_id)
+    if user is None:
+        raise HTTPException(404, "No such user")
+    ws = db.scalar(select(Workspace).where(Workspace.user_id == user_id))
+    if ws is not None:
+        resp = svc.call_provisioner({"verb": "destroy", "idx": ws.idx})
+        if not resp.get("ok"):
+            raise HTTPException(500, "Could not remove the workspace; account left in place.")
+    email = user.email
+    db.delete(user)          # cascades to workspace, account and ledger
+    db.commit()
+    audit(db, admin.id, "delete_user", email)
+    return {"ok": True}
 
 
 @app.get("/api/admin/settings")

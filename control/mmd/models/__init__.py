@@ -85,7 +85,9 @@ class Workspace(Base):
         Enum(WorkspaceState, native_enum=False), default=WorkspaceState.PROVISIONING, index=True)
     desired_on: Mapped[bool] = mapped_column(Boolean, default=False)
 
-    cores: Mapped[int] = mapped_column(Integer, default=1)
+    # MILLICORES, not cores: 0.5 vCPU is 500, so fractional sizes stay exact
+    # integers and no float ever reaches a price calculation.
+    cpu_milli: Mapped[int] = mapped_column(Integer, default=1000)
     mem_mib: Mapped[int] = mapped_column(Integer, default=1024)
     root_gib: Mapped[int] = mapped_column(Integer, default=6)
     docker_gib: Mapped[int] = mapped_column(Integer, default=4)
@@ -104,6 +106,10 @@ class Workspace(Base):
     @property
     def mem_gib(self) -> float:
         return self.mem_mib / 1024.0
+
+    @property
+    def cpu_cores(self) -> float:
+        return self.cpu_milli / 1000.0
 
     @property
     def disk_gib(self) -> int:
@@ -162,6 +168,32 @@ class UsageSample(Base):
     ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     cpu_seconds_total: Mapped[float] = mapped_column()   # monotonic counter
     mem_bytes: Mapped[int] = mapped_column(BigInteger)   # gauge
+
+
+class ExposedPort(Base):
+    """A port inside a workspace published on the host's public address.
+
+    The external port is allocated by the host from a fixed range and RESERVED
+    for this workspace, so a developer's endpoint keeps working across power
+    cycles instead of moving every time they switch on. It is released only
+    when the developer removes it or the workspace is destroyed.
+    """
+    __tablename__ = "exposed_ports"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
+    internal_port: Mapped[int] = mapped_column(Integer)
+    external_port: Mapped[int] = mapped_column(Integer, unique=True, index=True)
+    protocol: Mapped[str] = mapped_column(String(8), default="tcp")
+    device: Mapped[str] = mapped_column(String(64))     # Incus device name
+    note: Mapped[str | None] = mapped_column(String(120))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "internal_port", "protocol",
+                         name="uq_one_mapping_per_internal_port"),
+    )
 
 
 class Setting(Base):

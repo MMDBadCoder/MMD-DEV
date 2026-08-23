@@ -6,42 +6,53 @@ cd "$(dirname "$0")" && . ./config.sh
 need_root
 
 # --- sshd ---------------------------------------------------------------
-# Guard first. Turning off password auth with no key installed would lock the
-# operator out of the box permanently, and this script may be run unattended.
-keycount=0
-for f in /root/.ssh/authorized_keys /home/*/.ssh/authorized_keys; do
-  [ -f "$f" ] && keycount=$((keycount + $(grep -cvE '^\s*(#|$)' "$f" || true)))
-done
-if [ "$keycount" -eq 0 ]; then
-  warn "NO SSH public keys found anywhere on this host."
-  warn "Refusing to disable password authentication - that would lock you out."
-  warn "Install a key, then re-run this script."
-else
-  log "found $keycount SSH key(s); disabling password auth"
-  # Must sort FIRST. sshd takes the first value it sees for a keyword, and
-  # cloud-init ships /etc/ssh/sshd_config.d/50-cloud-init.conf containing
-  # "PasswordAuthentication yes" - which it may rewrite on any boot. A 60-*
-  # file silently loses to it; 01-* always wins.
-  rm -f /etc/ssh/sshd_config.d/60-mmd-harden.conf
-  cat > /etc/ssh/sshd_config.d/01-mmd-harden.conf <<'CONF'
-# MMD-DEV host hardening.
-# The host's sshd is for operators only. Developers never touch it - their
-# only route in is the dashboard, and the nftables isolation table already
-# blocks workspaces from reaching port 22 on this machine at all.
-PasswordAuthentication no
-KbdInteractiveAuthentication no
-PermitRootLogin prohibit-password
-PermitEmptyPasswords no
-MaxAuthTries 3
-X11Forwarding no
-CONF
-  if sshd -t; then
-    systemctl reload ssh 2>/dev/null || systemctl reload sshd
-    log "sshd reloaded (existing sessions are unaffected)"
+# Password authentication is NOT disabled by default, and that is deliberate.
+#
+# A previous version of this script disabled it whenever /root/.ssh/
+# authorized_keys was non-empty. That is not evidence the operator logs in with
+# a key: cloud images and hosting providers routinely inject one. Acting on it
+# locked the operator out of their own server, with the dashboard still up and
+# no way back in except a provider console.
+#
+# The rule now: this script never removes a working login method. Disabling
+# passwords is opt-in via MMD_DISABLE_SSH_PASSWORDS=yes, and even then only
+# after a key is confirmed present.
+CONF=/etc/ssh/sshd_config.d/01-mmd-harden.conf
+{
+  echo "# MMD-DEV host hardening. Managed by host/50-harden.sh."
+  echo "PermitEmptyPasswords no"
+  echo "MaxAuthTries 6"
+  echo "X11Forwarding no"
+} > "$CONF"
+
+if [ "${MMD_DISABLE_SSH_PASSWORDS:-no}" = "yes" ]; then
+  keycount=0
+  for f in /root/.ssh/authorized_keys /home/*/.ssh/authorized_keys; do
+    [ -f "$f" ] && keycount=$((keycount + $(grep -cvE '^\s*(#|$)' "$f" || true)))
+  done
+  if [ "$keycount" -eq 0 ]; then
+    warn "MMD_DISABLE_SSH_PASSWORDS=yes but no SSH keys are installed."
+    warn "Refusing - that would lock you out. Install a key first."
   else
-    rm -f /etc/ssh/sshd_config.d/01-mmd-harden.conf
-    die "sshd config test failed - reverted, nothing changed"
+    warn "Disabling SSH password authentication ($keycount key(s) present)."
+    warn "CONFIRM YOU CAN LOG IN WITH A KEY BEFORE CLOSING THIS SESSION."
+    {
+      echo "PasswordAuthentication no"
+      echo "KbdInteractiveAuthentication no"
+      echo "PermitRootLogin prohibit-password"
+    } >> "$CONF"
   fi
+else
+  log "leaving SSH password authentication enabled (set"
+  log "MMD_DISABLE_SSH_PASSWORDS=yes to turn it off, once you have a key)"
+fi
+
+if sshd -t; then
+  systemctl reload ssh 2>/dev/null || systemctl reload sshd
+  log "sshd reloaded; effective: $(sshd -T | grep -i '^passwordauthentication')"
+else
+  rm -f "$CONF"
+  die "sshd config test failed - reverted, nothing changed"
 fi
 
 # --- sysctls ------------------------------------------------------------
