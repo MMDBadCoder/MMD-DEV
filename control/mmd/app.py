@@ -21,6 +21,7 @@ from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session
 
 from . import ports as portalloc
+from . import presets as presetlib
 from . import service as svc
 from .billing import pricing
 from .billing.pricing import MICRO, InvalidTier, Tier
@@ -42,6 +43,16 @@ COOKIE = "mmd_session"
 WEB = Path(__file__).resolve().parents[2] / "web"
 
 
+def fail(status: int, code: str, message: str, **extra) -> None:
+    """Raise an error the interface can translate.
+
+    The UI is Persian; the API is not. Shipping a stable `code` alongside the
+    English `message` lets the interface show its own wording without parsing
+    English prose, while logs and developers still get something readable.
+    """
+    raise HTTPException(status, {"code": code, "message": message, **extra})
+
+
 def _incus() -> IncusClient:
     return IncusClient(IncusConfig(
         base_url=CONFIG.incus_url, client_cert=CONFIG.incus_client_cert,
@@ -52,29 +63,29 @@ def _incus() -> IncusClient:
 def current_user(request: Request, db: Session = Depends(get_session)) -> User:
     raw = request.cookies.get(COOKIE)
     if not raw:
-        raise HTTPException(401, "Not signed in")
+        fail(401, "not_signed_in", "Not signed in")
     try:
         uid = _serializer.loads(raw, max_age=CONFIG.session_hours * 3600)
     except BadSignature:
-        raise HTTPException(401, "Your session has expired. Please sign in again.")
+        fail(401, "session_expired", "Your session has expired.")
     user = db.get(User, int(uid))
     if user is None or user.status == UserStatus.REJECTED:
-        raise HTTPException(401, "Not signed in")
+        fail(401, "not_signed_in", "Not signed in")
     if user.status == UserStatus.SUSPENDED:
-        raise HTTPException(403, "Your account is suspended.")
+        fail(403, "suspended", "Your account is suspended.")
     return user
 
 
 def require_admin(user: User = Depends(current_user)) -> User:
     if not user.is_admin:
-        raise HTTPException(403, "Administrator access required")
+        fail(403, "admin_required", "Administrator access required")
     return user
 
 
 def my_workspace(db: Session, user: User) -> Workspace:
     ws = db.scalar(select(Workspace).where(Workspace.user_id == user.id))
     if ws is None:
-        raise HTTPException(404, "You do not have a machine yet.")
+        fail(404, "no_workspace", "You do not have a machine yet.")
     return ws
 
 
@@ -107,6 +118,11 @@ class PortRequest(BaseModel):
     internal_port: int = Field(ge=1, le=65535)
     protocol: str = "tcp"
     note: str | None = Field(default=None, max_length=120)
+
+
+class PresetRequest(BaseModel):
+    presets: list[str] = []
+    packages: list[str] = []
 
 
 class AdminFlag(BaseModel):
@@ -156,7 +172,7 @@ def login(body: LoginBody, response: Response,
           db: Session = Depends(get_session)) -> dict:
     user = db.scalar(select(User).where(User.email == body.email.lower()))
     if user is None or not verify_password(body.password, user.password_hash):
-        raise HTTPException(401, "Incorrect email or password")
+        fail(401, "bad_credentials", "Incorrect email or password")
     response.set_cookie(COOKIE, _serializer.dumps(str(user.id)), httponly=True,
                         samesite="lax", secure=True,
                         max_age=CONFIG.session_hours * 3600)
@@ -174,7 +190,7 @@ def logout(response: Response) -> dict:
 def change_password(body: PasswordChange, user: User = Depends(current_user),
                     db: Session = Depends(get_session)) -> dict:
     if not verify_password(body.current_password, user.password_hash):
-        raise HTTPException(401, "Your current password is not correct")
+        fail(401, "wrong_password", "Your current password is not correct")
     user.password_hash = hash_password(body.new_password)
     db.commit()
     svc.audit(db, user.id, "password_change", user.email)
@@ -215,6 +231,65 @@ def tiers(user: User = Depends(current_user),
             "current": ({"cpu_milli": ws.cpu_milli, "mem_mib": ws.mem_mib}
                         if ws else None),
             "rates": r.as_dict()}
+
+
+# --- public ---------------------------------------------------------------
+@app.get("/api/public/pricing")
+def public_pricing(db: Session = Depends(get_session)) -> dict:
+    """Prices for the marketing page. No authentication.
+
+    Deliberately served from the same pricing module the billing engine uses,
+    so the advertised price cannot drift from the charged one.
+    """
+    r = svc.rates(db)
+    disk = pricing.DEFAULT_ROOT_GIB + pricing.DEFAULT_DOCKER_GIB
+    plans = []
+    for cm, mm in ((500, 512), (1000, 1024), (2000, 2048), (3000, 6144)):
+        tier = Tier(cm, mm, disk)
+        q = pricing.quote(tier, r)
+        plans.append({
+            "cpu_cores": tier.cpu_cores, "mem_gib": tier.mem_gib,
+            "disk_gib": disk, "label": tier.label,
+            "max_per_hour": q["max_per_hour"],
+            "idle_per_hour": q["idle_per_hour"],
+            "off_per_hour": q["off_per_hour"],
+            "max_per_month": q["max_per_hour"] * 720,
+            "comfortable": tier.is_comfortable,
+        })
+    return {"currency": pricing.CURRENCY, "plans": plans,
+            "catalogue": pricing.catalogue()}
+
+
+# --- toolsets ------------------------------------------------------------
+@app.get("/api/presets")
+def list_presets(_: User = Depends(current_user)) -> dict:
+    return {"presets": presetlib.catalogue(),
+            "max_packages": presetlib.MAX_PACKAGES}
+
+
+@app.post("/api/workspace/presets")
+def install_presets(body: PresetRequest, user: User = Depends(current_user),
+                    db: Session = Depends(get_session)) -> dict:
+    """Install a toolset into the running machine."""
+    ws = my_workspace(db, user)
+    if ws.state != WorkspaceState.ON:
+        fail(409, "machine_off", "The machine must be running to install software.")
+    try:
+        packages = presetlib.resolve(body.presets, body.packages)
+    except presetlib.PresetError as exc:
+        fail(400, "bad_package", str(exc))
+    if not packages:
+        fail(400, "no_packages", "Nothing selected to install.")
+
+    resp = svc.call_provisioner({"verb": "install_packages", "idx": ws.idx,
+                                 "packages": packages}, timeout=900)
+    if not resp.get("ok"):
+        log.error("package install failed for %s: %s", ws.incus_project, resp)
+        fail(500, "install_failed", "The software could not be installed.",
+             output=(resp.get("output") or resp.get("error", ""))[-400:])
+    svc.audit(db, user.id, "packages_installed", ws.incus_project,
+              presets=body.presets, count=len(packages))
+    return {"ok": True, "packages": packages}
 
 
 # --- the machine ---------------------------------------------------------
@@ -273,18 +348,18 @@ async def workspace_power(body: PowerRequest, user: User = Depends(current_user)
             if ws.state == WorkspaceState.ON:
                 return {"ok": True, "status": "on"}
             if ws.state == WorkspaceState.ARCHIVED:
-                raise HTTPException(409, "This machine is archived. Add credit to restore it.")
+                fail(409, "archived", "This machine is archived.")
             if ws.state != WorkspaceState.OFF:
-                raise HTTPException(409, f"The machine is {ws.state.value}; try again shortly.")
+                fail(409, "busy", f"The machine is {ws.state.value}.", state=ws.state.value)
 
             affordable, have, need = svc.can_afford_next_hour(db, ws)
             if not affordable:
-                raise HTTPException(402, (
-                    f"Not enough credit. Starting requires {need / MICRO:.2f} credits "
-                    f"to cover one hour at full capacity; your balance is {have / MICRO:.2f}."))
+                fail(402, "insufficient_credit",
+                     "Not enough credit to cover one hour at full capacity.",
+                     needed=need / MICRO, balance=have / MICRO)
             adm = svc.check_admission(db, ws)
             if not adm.allowed:
-                raise HTTPException(503, adm.reason)
+                fail(503, "no_capacity", adm.reason, resource=adm.resource)
 
             ws.state = WorkspaceState.STARTING
             db.commit()
@@ -323,13 +398,13 @@ async def workspace_power(body: PowerRequest, user: User = Depends(current_user)
         ws.state = WorkspaceState.ERROR
         ws.error = str(exc)
         db.commit()
-        raise HTTPException(500, "The machine could not be changed. Please try again.")
+        fail(500, "power_failed", "The machine could not be changed.")
     except Exception as exc:  # noqa: BLE001
         log.exception("unexpected error changing power for %s", ws.incus_project)
         ws.state = WorkspaceState.ERROR
         ws.error = f"{type(exc).__name__}: {exc}"
         db.commit()
-        raise HTTPException(500, "The machine could not be changed. Please try again.")
+        fail(500, "power_failed", "The machine could not be changed.")
     finally:
         await client.aclose()
 
@@ -357,7 +432,7 @@ async def workspace_tier(body: TierRequest, user: User = Depends(current_user),
     try:
         new_tier = pricing.parse_tier(body.cpu_milli, body.mem_mib, ws.disk_gib)
     except InvalidTier as exc:
-        raise HTTPException(400, str(exc))
+        fail(400, "invalid_size", str(exc))
 
     old_tier = svc.tier_of(ws)
     if (new_tier.cpu_milli, new_tier.mem_mib) == (old_tier.cpu_milli, old_tier.mem_mib):
@@ -365,16 +440,14 @@ async def workspace_tier(body: TierRequest, user: User = Depends(current_user),
 
     running = ws.state == WorkspaceState.ON
     if running and new_tier.mem_mib < old_tier.mem_mib:
-        raise HTTPException(409, (
-            "Memory cannot be reduced while the machine is running - anything "
-            "using the memory now could be stopped abruptly. Switch it off "
-            "first, then change the size."))
+        fail(409, "mem_shrink_running",
+             "Memory cannot be reduced while the machine is running.")
 
     if running and (new_tier.cpu_milli > old_tier.cpu_milli
                     or new_tier.mem_mib > old_tier.mem_mib):
         adm = svc.check_admission(db, ws, tier=new_tier)
         if not adm.allowed:
-            raise HTTPException(503, adm.reason)
+            fail(503, "no_capacity", adm.reason, resource=adm.resource)
 
     client = _incus()
     try:
@@ -397,7 +470,7 @@ async def workspace_tier(body: TierRequest, user: User = Depends(current_user),
         raise
     except IncusError as exc:
         log.error("size change failed for %s: %s", ws.incus_project, exc)
-        raise HTTPException(500, "The size could not be changed. Please try again.")
+        fail(500, "resize_failed", "The size could not be changed.")
     finally:
         await client.aclose()
 
@@ -433,7 +506,7 @@ def create_port(body: PortRequest, request: Request,
         row = portalloc.allocate(db, ws.id, body.internal_port,
                                  body.protocol, body.note)
     except portalloc.PortError as exc:
-        raise HTTPException(400, str(exc))
+        fail(400, exc.code, str(exc))
 
     # The forwarding rule is installed whether or not the machine is running:
     # the RESERVATION is what the customer is paying for, and an address that
@@ -444,7 +517,7 @@ def create_port(body: PortRequest, request: Request,
         portalloc.release(db, row)
         svc.sync_published_ports(db)      # put the firewall back as it was
         log.error("publishing port failed: %s", resp)
-        raise HTTPException(500, "The port could not be published. Please try again.")
+        fail(500, "port_failed", "The port could not be published.")
 
     svc.audit(db, user.id, "port_publish", ws.incus_project,
               internal=row.internal_port, external=row.external_port)
@@ -462,7 +535,7 @@ def delete_port(port_id: int, user: User = Depends(current_user),
     ws = my_workspace(db, user)
     row = db.get(ExposedPort, port_id)
     if row is None or row.workspace_id != ws.id:
-        raise HTTPException(404, "No such published port")
+        fail(404, "no_such_port", "No such published port")
     svc.audit(db, user.id, "port_unpublish", ws.incus_project,
               internal=row.internal_port, external=row.external_port)
     portalloc.release(db, row)
@@ -641,13 +714,14 @@ def admin_users(_: User = Depends(require_admin),
 
 
 @app.post("/api/admin/users/{user_id}/approve")
-def admin_approve(user_id: int, admin: User = Depends(require_admin),
+def admin_approve(user_id: int, body: PresetRequest | None = None,
+                  admin: User = Depends(require_admin),
                   db: Session = Depends(get_session)) -> dict:
     user = db.get(User, user_id)
     if user is None:
-        raise HTTPException(404, "No such user")
+        fail(404, "no_such_user", "No such user")
     if db.scalar(select(Workspace).where(Workspace.user_id == user.id)):
-        raise HTTPException(409, "That user already has a machine")
+        fail(409, "already_has_machine", "That user already has a machine")
 
     idx = svc.next_free_idx(db)
     ws = Workspace(user_id=user.id, idx=idx, incus_project=f"ws-{idx}",
@@ -667,11 +741,31 @@ def admin_approve(user_id: int, admin: User = Depends(require_admin),
         ws.error = resp.get("error") or resp.get("output", "")[-500:]
         db.commit()
         svc.audit(db, admin.id, "provision_failed", user.email, error=ws.error)
-        raise HTTPException(500, "The machine could not be created. See the activity log.")
+        fail(500, "provision_failed", "The machine could not be created.")
 
     # ws-create leaves it running so it can be checked; hand it back OFF. A new
     # customer has no credit, and a running machine would bill them into debt
     # before they ever signed in.
+    #
+    # Toolsets are installed while the machine is still running from
+    # provisioning, before it is handed back switched off - so the customer's
+    # first start already has everything, and they are not billed for the
+    # install time.
+    installed = []
+    if body and (body.presets or body.packages):
+        try:
+            installed = presetlib.resolve(body.presets, body.packages)
+        except presetlib.PresetError as exc:
+            svc.audit(db, admin.id, "preset_rejected", user.email, error=str(exc))
+            installed = []
+        if installed:
+            r = svc.call_provisioner({"verb": "install_packages", "idx": idx,
+                                      "packages": installed}, timeout=900)
+            if not r.get("ok"):
+                svc.audit(db, admin.id, "preset_install_failed", user.email,
+                          error=(r.get("output") or r.get("error", ""))[-300:])
+                installed = []
+
     client = _incus()
     try:
         asyncio.run(client.stop(ws.instance, ws.incus_project))
@@ -687,8 +781,9 @@ def admin_approve(user_id: int, admin: User = Depends(require_admin),
     ws.desired_on = False
     ws.period_start = None
     db.commit()
-    svc.audit(db, admin.id, "approve", user.email, idx=idx)
-    return {"ok": True, "workspace": ws.incus_project, "state": ws.state.value}
+    svc.audit(db, admin.id, "approve", user.email, idx=idx, packages=len(installed))
+    return {"ok": True, "workspace": ws.incus_project, "state": ws.state.value,
+            "installed": installed}
 
 
 @app.post("/api/admin/users/{user_id}/reject")
@@ -696,7 +791,7 @@ def admin_reject(user_id: int, admin: User = Depends(require_admin),
                  db: Session = Depends(get_session)) -> dict:
     user = db.get(User, user_id)
     if user is None:
-        raise HTTPException(404, "No such user")
+        fail(404, "no_such_user", "No such user")
     user.status = UserStatus.REJECTED
     db.commit()
     svc.audit(db, admin.id, "reject", user.email)
@@ -709,12 +804,12 @@ def admin_set_admin(user_id: int, body: AdminFlag,
                     db: Session = Depends(get_session)) -> dict:
     user = db.get(User, user_id)
     if user is None:
-        raise HTTPException(404, "No such user")
+        fail(404, "no_such_user", "No such user")
     if not body.is_admin:
         remaining = db.scalar(select(func.count(User.id)).where(
             User.is_admin.is_(True), User.id != user_id))
         if not remaining:
-            raise HTTPException(409, "This is the only administrator; promote someone else first.")
+            fail(409, "last_admin", "This is the only administrator.")
     user.is_admin = body.is_admin
     if body.is_admin and user.status != UserStatus.APPROVED:
         user.status = UserStatus.APPROVED
@@ -727,15 +822,15 @@ def admin_set_admin(user_id: int, body: AdminFlag,
 def admin_delete_user(user_id: int, admin: User = Depends(require_admin),
                       db: Session = Depends(get_session)) -> dict:
     if user_id == admin.id:
-        raise HTTPException(409, "You cannot delete your own account")
+        fail(409, "cannot_delete_self", "You cannot delete your own account")
     user = db.get(User, user_id)
     if user is None:
-        raise HTTPException(404, "No such user")
+        fail(404, "no_such_user", "No such user")
     ws = db.scalar(select(Workspace).where(Workspace.user_id == user_id))
     if ws is not None:
         resp = svc.call_provisioner({"verb": "destroy", "idx": ws.idx})
         if not resp.get("ok"):
-            raise HTTPException(500, "Could not remove the machine; account left in place.")
+            fail(500, "destroy_failed", "Could not remove the machine.")
     email = user.email
     db.delete(user)
     db.commit()
@@ -749,7 +844,7 @@ def admin_credit(user_id: int, body: CreditGrant,
                  db: Session = Depends(get_session)) -> dict:
     user = db.get(User, user_id)
     if user is None:
-        raise HTTPException(404, "No such user")
+        fail(404, "no_such_user", "No such user")
     svc.post_transaction(db, user_id=user.id, workspace_id=None,
                          kind=TxKind.GRANT, amount_micro=round(body.credits * MICRO),
                          detail={"note": body.note, "by": admin.email})

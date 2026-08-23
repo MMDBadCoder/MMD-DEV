@@ -1,32 +1,9 @@
-/* Server access and error handling. */
-
-/* FastAPI returns `detail` as a STRING for HTTPException but as an ARRAY of
- * objects for 422 validation failures. Passing that array to new Error()
- * stringifies it to "[object Object]" - which once made a rejected password
- * look like a broken signup form. */
-export function describeError(detail, status) {
-  if (typeof detail === "string") return detail;
-  if (Array.isArray(detail)) {
-    const field = (e) => {
-      const name = (e.loc || []).filter((x) => x !== "body").join(".");
-      return ({ password: "Password", email: "Email address",
-                new_password: "New password", internal_port: "Port",
-                cpu_milli: "CPU size", mem_mib: "Memory size" })[name]
-             || name || "Value";
-    };
-    return detail.map((e) => {
-      let msg = (e.msg || "is not valid")
-        .replace(/^Value error, /, "")
-        .replace(/^value is not a valid email address:\s*/i, "")
-        .replace(/^String should have at least (\d+) characters$/i,
-                 "needs at least $1 characters")
-        .replace(/^Field required$/i, "is required");
-      return /^(needs|is |must)/i.test(msg) ? `${field(e)} ${msg}`
-                                            : `${field(e)}: ${msg}`;
-    }).join(". ");
-  }
-  return `Request failed (${status})`;
-}
+/* Server access and error handling.
+ *
+ * The API answers in English with a stable `code`; the interface is Persian.
+ * Translation happens here, once, so no page ever has to interpret a server
+ * message itself. */
+import { translateError } from "./i18n.js";
 
 export async function api(path, opts = {}) {
   const r = await fetch(path, {
@@ -37,8 +14,10 @@ export async function api(path, opts = {}) {
   if (r.status === 204) return {};
   const body = await r.json().catch(() => ({}));
   if (!r.ok) {
-    const err = new Error(describeError(body.detail, r.status));
+    const err = new Error(translateError(body.detail, r.status));
     err.status = r.status;
+    err.code = (body.detail && body.detail.code) || null;
+    err.detail = body.detail;
     throw err;
   }
   return body;

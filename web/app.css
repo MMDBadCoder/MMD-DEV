@@ -1,4 +1,26 @@
 /* MMD-DEV design system.
+
+   The interface is Persian and right-to-left. Layout uses LOGICAL properties
+   (inline-start/end) rather than left/right so nothing needs mirroring by hand
+   - and so the few deliberately left-to-right islands (terminal output,
+   addresses, package names) can sit inside an RTL page without fighting it.
+
+   Light and dark are both first-class: every colour is a token, defined once
+   for light on :root and overridden wholesale for dark. */
+
+@font-face{
+  font-family:"Vazirmatn";font-style:normal;font-weight:400;font-display:swap;
+  src:url("/static/vendor/vazirmatn-400.woff2") format("woff2");
+}
+@font-face{
+  font-family:"Vazirmatn";font-style:normal;font-weight:500;font-display:swap;
+  src:url("/static/vendor/vazirmatn-500.woff2") format("woff2");
+}
+@font-face{
+  font-family:"Vazirmatn";font-style:normal;font-weight:700;font-display:swap;
+  src:url("/static/vendor/vazirmatn-700.woff2") format("woff2");
+}
+/* MMD-DEV design system.
    Light and dark are both first-class: every colour is a token, defined once
    for light on :root and overridden wholesale for dark. Nothing hard-codes a
    colour outside this block. */
@@ -43,9 +65,15 @@
 html,body{height:100%}
 body{
   margin:0;background:var(--bg);color:var(--ink);
-  font:15px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",sans-serif;
+  font:15px/1.8 "Vazirmatn",ui-sans-serif,system-ui,-apple-system,"Segoe UI",Tahoma,sans-serif;
   -webkit-font-smoothing:antialiased;
 }
+/* Islands that must stay left-to-right inside an RTL page: terminal output,
+   host:port addresses, package names, anything copied into a shell. */
+.ltr,.mono,code,pre,input[type="number"],input[type="email"],input[type="password"]{
+  direction:ltr;text-align:left;
+}
+[dir="rtl"] .mono,[dir="rtl"] .ltr{unicode-bidi:isolate}
 a{color:var(--brand);text-decoration:none}
 a:hover{text-decoration:underline}
 h1{font-size:24px;line-height:1.25;margin:0 0 6px;letter-spacing:-.01em}
@@ -54,7 +82,7 @@ h3{font-size:14px;margin:0 0 10px;font-weight:650;color:var(--ink-2)}
 p{margin:0 0 12px}
 .muted{color:var(--ink-2)} .dim{color:var(--ink-3)}
 .small{font-size:13px} .tiny{font-size:12px}
-.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.94em}
 .nowrap{white-space:nowrap}
 
 /* ---- header ---- */
@@ -68,7 +96,7 @@ p{margin:0 0 12px}
   width:26px;height:26px;border-radius:7px;background:var(--brand);
   color:var(--brand-ink);display:grid;place-items:center;flex:none;
 }
-.nav{display:flex;gap:2px;margin-left:8px;overflow-x:auto;scrollbar-width:none}
+.nav{display:flex;gap:2px;margin-inline-start:8px;overflow-x:auto;scrollbar-width:none}
 .nav::-webkit-scrollbar{display:none}
 .nav a{
   display:flex;align-items:center;gap:7px;padding:7px 11px;border-radius:8px;
@@ -155,19 +183,19 @@ input:focus,select:focus,textarea:focus{
   border-radius:var(--radius);padding:14px 16px}
 .stat .k{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
 .stat .v{font-size:23px;font-weight:680;margin-top:5px;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
-.stat .v small{font-size:13px;font-weight:600;color:var(--ink-3);margin-left:3px}
+.stat .v small{font-size:13px;font-weight:600;color:var(--ink-3);margin-inline-start:5px}
 .bar{height:6px;background:var(--border);border-radius:4px;overflow:hidden;margin-top:9px}
 .bar>i{display:block;height:100%;background:var(--brand);border-radius:4px;transition:width .3s}
 .bar>i.warn{background:var(--warn)} .bar>i.bad{background:var(--bad)}
 
 /* ---- table ---- */
 table{width:100%;border-collapse:collapse;font-size:14px}
-th,td{text-align:left;padding:11px 14px;border-bottom:1px solid var(--border)}
+th,td{text-align:start;padding:11px 14px;border-bottom:1px solid var(--border)}
 th{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
   color:var(--ink-3);background:var(--surface-2)}
 tbody tr:last-child td{border-bottom:none}
 tbody tr:hover{background:var(--surface-2)}
-td.num{text-align:right;font-variant-numeric:tabular-nums}
+td.num,th.num{text-align:end;font-variant-numeric:tabular-nums;direction:ltr}
 .table-wrap{overflow-x:auto}
 
 /* ---- auth pages ---- */
@@ -199,9 +227,24 @@ td.num{text-align:right;font-variant-numeric:tabular-nums}
   background:var(--surface-2);border-bottom:1px solid var(--border)}
 .term-bar .grow{flex:1}
 #term{height:440px;padding:10px 12px;background:var(--term-bg)}
-.term-shell.full{position:fixed;inset:0;z-index:100;border-radius:0;border:none;
-  display:flex;flex-direction:column}
-.term-shell.full #term{height:auto;flex:1}
+.term-shell{display:flex;flex-direction:column}
+.term-shell.full{position:fixed;inset:0;z-index:100;border-radius:0;border:none}
+.term-shell.full #term{height:auto;flex:1;min-height:0}
+/* The controls live INSIDE the shell. When the shell goes full-bleed, anything
+   outside it disappears - which is how the exit button once became
+   unreachable, leaving no way out but the keyboard. */
+.term-controls{display:flex;align-items:center;gap:6px;padding:7px 10px;
+  background:var(--surface-2);border-bottom:1px solid var(--border);flex:none}
+.term-controls .grow{flex:1}
+.term-shell:not(.full) .term-controls{display:none}
+.term-hint{position:fixed;inset-block-start:14px;inset-inline-start:50%;
+  transform:translateX(50%);z-index:101;padding:10px 18px;border-radius:999px;
+  background:var(--surface);border:1px solid var(--brand);color:var(--ink);
+  box-shadow:var(--shadow);font-size:14px;font-weight:600;
+  animation:slide .2s ease-out}
+kbd{display:inline-block;padding:1px 7px;border:1px solid var(--border-strong);
+  border-bottom-width:2px;border-radius:5px;background:var(--surface-2);
+  font-family:ui-monospace,monospace;font-size:.85em;margin:0 3px}
 /* xterm's own scrollbar is a bare native one; match it to the theme. */
 .xterm .xterm-viewport{scrollbar-width:thin;scrollbar-color:var(--border-strong) transparent}
 .xterm .xterm-viewport::-webkit-scrollbar{width:11px}
@@ -214,8 +257,8 @@ td.num{text-align:right;font-variant-numeric:tabular-nums}
   border:3px solid var(--term-bg);background-clip:padding-box}
 
 /* ---- misc ---- */
-.toast-wrap{position:fixed;right:18px;bottom:18px;z-index:200;display:flex;
-  flex-direction:column;gap:9px}
+.toast-wrap{position:fixed;inset-inline-start:18px;bottom:18px;z-index:200;
+  display:flex;flex-direction:column;gap:9px}
 .toast{padding:12px 16px;border-radius:10px;background:var(--surface);
   border:1px solid var(--border);box-shadow:var(--shadow);font-size:14px;
   max-width:380px;animation:slide .18s ease-out}
@@ -240,3 +283,34 @@ td.num{text-align:right;font-variant-numeric:tabular-nums}
   .page{padding:20px 14px 60px}
   .credit-chip .lbl{display:none}
 }
+
+/* ---- landing page ---- */
+.lp{max-width:1080px;margin:0 auto;padding:0 20px}
+.lp-nav{display:flex;align-items:center;gap:14px;padding:18px 0}
+.lp-hero{padding:56px 0 40px;text-align:center}
+.lp-hero h1{font-size:40px;line-height:1.35;letter-spacing:-.02em;margin:0 0 14px}
+.lp-hero .lead{font-size:18px;color:var(--ink-2);max-width:640px;margin:0 auto 26px}
+.lp-badge{display:inline-flex;align-items:center;gap:8px;padding:6px 14px;
+  border-radius:999px;background:var(--brand-soft);color:var(--brand);
+  font-size:13px;font-weight:650;margin-bottom:18px}
+.lp-cta{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
+.lp-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));
+  gap:16px;padding:26px 0}
+.lp-feat{background:var(--surface);border:1px solid var(--border);
+  border-radius:var(--radius-lg);padding:22px}
+.lp-feat .ic{width:38px;height:38px;border-radius:10px;background:var(--brand-soft);
+  color:var(--brand);display:grid;place-items:center;margin-bottom:12px}
+.lp-feat h3{font-size:16px;color:var(--ink);margin:0 0 6px}
+.lp-feat p{font-size:14px;color:var(--ink-2);margin:0}
+.lp-price{background:var(--surface);border:1px solid var(--border);
+  border-radius:var(--radius-lg);padding:26px;text-align:center}
+.lp-price .amt{font-size:34px;font-weight:750;letter-spacing:-.02em}
+.lp-price .per{color:var(--ink-3);font-size:14px}
+.lp-foot{padding:36px 0;color:var(--ink-3);font-size:13px;text-align:center;
+  border-top:1px solid var(--border);margin-top:36px}
+.lp-steps{counter-reset:s;display:grid;gap:14px;padding:8px 0}
+.lp-step{display:flex;gap:14px;align-items:flex-start}
+.lp-step .n{flex:none;width:30px;height:30px;border-radius:50%;
+  background:var(--brand);color:var(--brand-ink);display:grid;place-items:center;
+  font-weight:700;font-size:14px}
+@media (max-width:720px){.lp-hero h1{font-size:29px}}

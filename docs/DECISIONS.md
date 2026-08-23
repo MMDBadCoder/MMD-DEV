@@ -145,3 +145,41 @@ billed for the new size. The tier is now applied at power-on.
 that already exists returns the same response as a real signup, by design. When
 a script re-registered an existing address to set a known password, it reported
 success and changed nothing - and the password handed over was never valid.
+
+## Why Escape does not exit the terminal's fullscreen
+
+The obvious shortcut is Escape, and it was the first implementation. It is
+wrong: Escape belongs to whatever is running inside the terminal. Binding it at
+the page level breaks vim, less, and every interactive prompt - the programs
+developers spend the most time in.
+
+The primary way out is a button that lives INSIDE the fullscreen container, so
+it stays visible when everything outside goes away (the earlier version put it
+in the card header, which vanished on fullscreen - that is how there came to be
+no visible way out at all). `Ctrl+Alt+F` is offered as a keyboard alternative
+because no shell program claims it, and a hint naming both appears on entry.
+
+## Why the terminal does not connect automatically
+
+Opening the console used to open a live session immediately. That holds a
+websocket and a pty nobody asked for, and surprises anyone who came to read
+their balance. The session now starts on an explicit action and can be
+disconnected without leaving the page.
+
+## Currency
+
+Prices are Toman, held as integer micro-Toman so partial-hour arithmetic stays
+exact, and rounded to whole Toman for display - a fraction of a Toman is not
+something anyone can pay. Persian digits and grouping are used for money and
+for prose-like numbers; Latin digits are kept for anything a developer copies
+into a shell (ports, package names, sizes), where Persian digits would be
+wrong.
+
+## Language split
+
+Persian is the customer's language, English is the developer's. The interface
+holds its own catalogue (`web/js/i18n.js`) and the API answers in English with
+a stable `code` field; the interface translates by code. That way server logs
+stay readable to whoever is on call, no page has to parse English prose, and a
+test asserts every code the API can emit has Persian text - so a new error can
+never reach a customer untranslated.

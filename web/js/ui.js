@@ -6,20 +6,24 @@ export const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 export const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
   (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
-export const fmt = (n, d = 2) =>
-  Number(n ?? 0).toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d });
+export { fmtMoney, fmtNum, fmtFa } from "./i18n.js";
 
 export function when(iso) {
   if (!iso) return "—";
   const d = new Date(iso), diff = (Date.now() - d) / 1000;
-  if (diff < 60) return "just now";
-  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-  if (diff < 604800) return `${Math.floor(diff / 86400)}d ago`;
-  return d.toLocaleDateString();
+  if (diff < 60) return "همین حالا";
+  if (diff < 3600) return `${Math.floor(diff / 60)} دقیقه پیش`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)} ساعت پیش`;
+  if (diff < 604800) return `${Math.floor(diff / 86400)} روز پیش`;
+  return d.toLocaleDateString("fa-IR");
 }
 
-export const stamp = (iso) => (iso ? new Date(iso).toLocaleString() : "—");
+/* Gregorian dates rendered with the Persian calendar, which is what a Persian
+   reader expects to see next to Persian text. */
+export const stamp = (iso) => (iso
+  ? new Date(iso).toLocaleString("fa-IR",
+      { dateStyle: "short", timeStyle: "short" })
+  : "—");
 
 /* Inline SVG so the whole app stays self-contained - no icon font, no CDN. */
 const P = (d, extra = "") =>
@@ -48,6 +52,13 @@ export const icon = {
   info: P('<circle cx="12" cy="12" r="9"/><path d="M12 16v-5M12 8h.01"/>'),
   minus: P('<path d="M5 12h14"/>'),
   refresh: P('<path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/>'),
+  box: P('<path d="M21 8v8a2 2 0 0 1-1 1.7l-7 4a2 2 0 0 1-2 0l-7-4A2 2 0 0 1 3 16V8a2 2 0 0 1 1-1.7l7-4a2 2 0 0 1 2 0l7 4A2 2 0 0 1 21 8z"/><path d="M3.3 7L12 12l8.7-5M12 22V12"/>'),
+  bolt: P('<path d="M13 2L4 14h7l-1 8 9-12h-7l1-8z"/>'),
+  cpu: P('<rect x="5" y="5" width="14" height="14" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/>'),
+  sparkle: P('<path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/>'),
+  lock: P('<rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/>'),
+  save: P('<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/>'),
+  arrow: P('<path d="M5 12h14M13 6l6 6-6 6"/>'),
 };
 
 export function toast(message, kind = "") {
@@ -86,14 +97,14 @@ export function toggleTheme() {
 }
 
 /* ---- confirmation ---- */
-export function confirmDialog(title, body, confirmLabel = "Confirm") {
+export function confirmDialog(title, body, confirmLabel = "تأیید") {
   return new Promise((resolve) => {
     const wrap = document.createElement("div");
     wrap.style.cssText = "position:fixed;inset:0;z-index:150;display:grid;place-items:center;background:rgba(0,0,0,.45);padding:20px";
     wrap.innerHTML = `<div class="card" style="max-width:420px;width:100%;margin:0">
       <h2>${esc(title)}</h2><p class="muted small">${body}</p>
       <div class="btn-row" style="justify-content:flex-end;margin-top:16px">
-        <button class="btn ghost" data-no>Cancel</button>
+        <button class="btn ghost" data-no>انصراف</button>
         <button class="btn danger" data-yes>${esc(confirmLabel)}</button>
       </div></div>`;
     const done = (v) => { wrap.remove(); resolve(v); };

@@ -1,7 +1,18 @@
 # MMD-DEV
 
-Multi-tenant developer workspaces on a single Ubuntu host, with credit billing
-and a web dashboard. Each user gets what feels like their own isolated Ubuntu
+AI-assisted development environments, sold to Persian-speaking developers and
+run on a single Ubuntu host.
+
+Each customer gets an isolated Ubuntu machine with Claude Code and Codex
+preinstalled: root access, apt, Docker, and the ability to publish a port so
+the application they build keeps running and stays reachable. Billed in Toman
+by the hour, switchable off to near-zero cost.
+
+**Language policy.** The customer-facing interface is Persian and right-to-left;
+established technical terms (CPU, Docker, SSH, Claude Code, vCPU) stay Latin
+because translating them would make the product harder for its own users.
+Everything on the developer side - this README, `docs/`, code comments, API
+messages, logs, test names - stays English. Each user gets what feels like their own isolated Ubuntu
 machine — free to `apt install`, run Docker, and modify anything — bounded in
 CPU, memory and disk, able to power fully off (zero CPU, zero RAM) without
 losing a single byte, and reachable only through the dashboard.
@@ -29,7 +40,8 @@ a hypervisor would resist. Admin approval of signups is the compensating control
 | `control/mmd/` | FastAPI control plane (Incus client, billing, admission) |
 | `control/provisioner/` | The only root component; unix socket, 4 allowlisted verbs |
 | `control/worker/` | Metering, hourly settlement, lifecycle |
-| `web/` | Dashboard SPA: real URLs, light/dark, xterm.js terminal |
+| `web/` | Persian RTL SPA: landing page, console, xterm.js terminal |
+| `tests/` | Unit tests - pytest for the backend, node:test for the interface |
 | `deploy/` | Hardened systemd units |
 | `verify/` | Automated verification suites |
 
@@ -46,23 +58,38 @@ sudo bash image/build-golden-image.sh       # ~10 min
 sudo bash workspace/ws-create.sh 1          # first workspace
 ```
 
-## The dashboard
+## The interface
 
 Real URLs via the History API, so refreshing or sharing a link works:
 
 | Path | What |
 |---|---|
+| `/` | Public marketing page - what the product is, live prices |
 | `/signin`, `/signup` | Separate pages; signup confirms the password |
-| `/` | The machine: power, status, terminal |
-| `/resources` | Size: 0.5/1/2/3 vCPU, 0.5-6 GB, validated server-side |
-| `/ports` | Publish a port to a permanently reserved public address |
-| `/billing` | Balance, itemised cost per hour, spend chart, full ledger |
-| `/activity` | Every action recorded on the account |
-| `/security` | Account details and password change |
-| `/admin` | People, capacity, pricing |
+| `/console` | The machine: power, status, terminal |
+| `/console/resources` | Size: 0.5/1/2/3 vCPU, 0.5-6 GB, validated server-side |
+| `/console/tools` | Install toolsets (editors, monitors, DB clients, …) |
+| `/console/ports` | Publish a port to a permanently reserved public address |
+| `/console/billing` | Balance, itemised Toman cost per hour, spend chart, ledger |
+| `/console/activity` | Every action recorded on the account |
+| `/console/security` | Account details and password change |
+| `/console/admin` | People, capacity, pricing, default toolsets |
 
-Light and dark themes, chosen by the viewer and remembered. The terminal has a
-full-screen toggle, adjustable font size, and a scrollbar styled to match.
+Light and dark themes, remembered per browser. The terminal connects only when
+asked - opening the console does not start a session - and has a full-screen
+mode with an in-frame exit control, adjustable font size, and a themed
+scrollbar.
+
+## Unit tests
+
+```bash
+bash tests/run.sh          # 142 tests, no infrastructure needed
+```
+
+Backend (pytest): pricing arithmetic, tier validation, package-name safety,
+port allocation, capacity admission. Interface (node:test): catalogue
+completeness, every server error code having Persian text, currency and digit
+formatting.
 
 ## Verification
 

@@ -26,6 +26,10 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
+# Money is IRANIAN TOMAN, held as integer micro-Toman so that partial-hour
+# arithmetic stays exact. Display rounds to whole Toman; nothing user-facing
+# ever shows a fraction of a Toman.
+CURRENCY = "IRT"
 MICRO = 1_000_000
 
 # --- what a customer may choose -----------------------------------------
@@ -126,14 +130,18 @@ def catalogue() -> dict:
 
 
 # --- the rate card -------------------------------------------------------
+# All values are TOMAN per hour. Chosen so the default 1 vCPU / 1 GB / 10 GB
+# machine costs about 480 Toman/hour at full tilt (~345,000/month if left
+# running continuously) and about 30 Toman/hour switched off - storage only.
+# Every value is editable in the admin panel.
 DEFAULT_RATES: dict[str, float] = {
-    "rate_cpu_reserve_per_core_hour": 10.0,
-    "rate_cpu_usage_per_core_hour": 5.0,
-    "rate_mem_reserve_per_gib_hour": 5.0,
-    "rate_mem_usage_per_gib_hour": 2.0,
-    "rate_disk_per_gib_hour": 0.10,
-    "rate_disk_archived_per_gib_hour": 0.05,
-    "rate_port_per_hour": 0.05,      # each exposed port holds a scarce resource
+    "rate_cpu_reserve_per_core_hour": 200.0,
+    "rate_cpu_usage_per_core_hour": 100.0,
+    "rate_mem_reserve_per_gib_hour": 100.0,
+    "rate_mem_usage_per_gib_hour": 50.0,
+    "rate_disk_per_gib_hour": 3.0,
+    "rate_disk_archived_per_gib_hour": 1.5,
+    "rate_port_per_hour": 15.0,     # a published port holds a scarce resource
 }
 
 
@@ -247,6 +255,7 @@ def settle_micro(tier: Tier, r: Rates, *, powered_on: bool, archived: bool = Fal
 def quote(tier: Tier, r: Rates, *, port_count: int = 0) -> dict:
     """Everything the UI needs to explain a price, itemised."""
     return {
+        "currency": CURRENCY,
         "tier": {"cpu_milli": tier.cpu_milli, "cpu_cores": tier.cpu_cores,
                  "mem_mib": tier.mem_mib, "mem_gib": tier.mem_gib,
                  "disk_gib": tier.disk_gib, "label": tier.label,

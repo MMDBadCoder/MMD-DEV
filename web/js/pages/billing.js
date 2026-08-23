@@ -1,12 +1,8 @@
-/* Billing: balance, what it costs, a spend chart, and the full ledger. */
+/* Billing: balance, itemised cost, spend chart, full ledger. All Toman. */
 import { get } from "../api.js";
-import { $, $$, icon, esc, fmt, note, empty, stamp } from "../ui.js";
+import { $, icon, esc, fmtMoney, fmtNum, fmtFa, empty, stamp } from "../ui.js";
+import { t, CURRENCY } from "../i18n.js";
 import { render } from "../main.js";
-
-const KIND = {
-  grant: "Credit added", charge_hour: "Hourly charge",
-  charge_partial: "Part-hour charge", adjustment: "Adjustment",
-};
 
 export async function billingPage(_params, page = 0) {
   const per = 50;
@@ -21,79 +17,92 @@ export async function billingPage(_params, page = 0) {
   const bars = usage.series.length
     ? `<div class="chart">${usage.series.map((s) => `
         <div class="col" style="height:${Math.max(2, (s.spent / maxSpend) * 100)}%"
-             title="${esc(new Date(s.hour).toLocaleString())} — ${fmt(s.spent)} credits"></div>`).join("")}
+             title="${esc(stamp(s.hour))} — ${fmtMoney(s.spent)} ${CURRENCY}"></div>`).join("")}
        </div>
        <div class="between tiny dim" style="margin-top:6px">
-         <span>${esc(new Date(usage.series[0].hour).toLocaleString())}</span>
-         <span>peak ${fmt(maxSpend)}/hr</span>
-         <span>now</span></div>`
-    : empty("No spending recorded yet.", icon.card);
+         <span>${esc(stamp(usage.series[0].hour))}</span>
+         <span>${t("billing.chart.peak")} ${fmtMoney(maxSpend)}</span>
+         <span>${t("billing.chart.now")}</span></div>`
+    : empty(t("billing.chart.empty"), icon.card);
 
-  const rows = tx.transactions.map((t) => {
-    const d = t.detail || {};
+  const rows = tx.transactions.map((tr) => {
+    const d = tr.detail || {};
     const parts = [];
-    if (d.disk) parts.push(`disk ${fmt(d.disk)}`);
-    if (d.ports) parts.push(`ports ${fmt(d.ports)}`);
-    if (d.reservation) parts.push(`reservation ${fmt(d.reservation)}`);
-    if (d.usage) parts.push(`usage ${fmt(d.usage)}`);
+    if (d.disk) parts.push(`${t("billing.d.disk")} ${fmtMoney(d.disk)}`);
+    if (d.ports) parts.push(`${t("billing.d.ports")} ${fmtMoney(d.ports)}`);
+    if (d.reservation) parts.push(`${t("billing.d.reservation")} ${fmtMoney(d.reservation)}`);
+    if (d.usage) parts.push(`${t("billing.d.usage")} ${fmtMoney(d.usage)}`);
     if (d.note) parts.push(esc(d.note));
-    if (d.fraction && d.fraction < 0.999) parts.push(`${Math.round(d.fraction * 60)} min`);
+    if (d.fraction && d.fraction < 0.999) parts.push(t("billing.d.minutes", Math.round(d.fraction * 60)));
     return `<tr>
-      <td class="nowrap">${stamp(t.created_at)}</td>
-      <td>${esc(KIND[t.kind] || t.kind)}</td>
+      <td class="nowrap">${stamp(tr.created_at)}</td>
+      <td>${t("billing.kind." + tr.kind) || esc(tr.kind)}</td>
       <td class="muted small">${parts.join(" · ") || "—"}</td>
-      <td class="num ${t.amount >= 0 ? "" : ""}" style="color:${t.amount >= 0 ? "var(--ok)" : "var(--ink)"}">
-        ${t.amount >= 0 ? "+" : ""}${fmt(t.amount)}</td>
+      <td class="num" style="color:${tr.amount >= 0 ? "var(--ok)" : "var(--ink)"}">
+        ${tr.amount >= 0 ? "+" : "−"}${fmtMoney(Math.abs(tr.amount))}</td>
     </tr>`;
   }).join("");
 
   const pages = Math.ceil(tx.total / per);
 
   render(`
-    <div class="page-head"><h1>Billing</h1>
-      <p class="muted small" style="margin:0">What you have, what it costs, and every charge.</p></div>
+    <div class="page-head"><h1>${t("billing.title")}</h1>
+      <p class="muted small" style="margin:0">${t("billing.sub")}</p></div>
 
     <div class="row" style="margin-bottom:16px">
-      <div class="stat"><div class="k">Balance</div><div class="v">${fmt(sum.credits)}</div></div>
-      <div class="stat"><div class="k">Total added</div><div class="v">${fmt(sum.total_granted)}</div></div>
-      <div class="stat"><div class="k">Total spent</div><div class="v">${fmt(sum.total_spent)}</div></div>
-      <div class="stat"><div class="k">Runtime left</div>
-        <div class="v">${fmt(sum.hours_remaining ?? 0, 1)}<small>hr</small></div></div>
+      <div class="stat"><div class="k">${t("billing.balance")}</div>
+        <div class="v">${fmtMoney(sum.credits)}<small>${CURRENCY}</small></div></div>
+      <div class="stat"><div class="k">${t("billing.added")}</div>
+        <div class="v">${fmtMoney(sum.total_granted)}</div></div>
+      <div class="stat"><div class="k">${t("billing.spent")}</div>
+        <div class="v">${fmtMoney(sum.total_spent)}</div></div>
+      <div class="stat"><div class="k">${t("billing.remaining")}</div>
+        <div class="v">${fmtFa(sum.hours_remaining ?? 0, 1)}<small>${t("machine.hours")}</small></div></div>
     </div>
 
     ${q ? `<div class="card">
-      <h3>What your current size costs</h3>
+      <h3>${t("billing.costs.title")}</h3>
       <div class="table-wrap"><table>
-        <thead><tr><th>Component</th><th>When running</th><th>When switched off</th></tr></thead>
+        <thead><tr><th>${t("billing.component")}</th>
+          <th class="num">${t("billing.whenon")}</th>
+          <th class="num">${t("billing.whenoff")}</th></tr></thead>
         <tbody>
-          <tr><td>Storage (${q.tier.disk_gib} GB)</td><td class="num">${fmt(q.per_hour.disk)}</td><td class="num">${fmt(q.per_hour.disk)}</td></tr>
-          <tr><td>Published ports</td><td class="num">${fmt(q.per_hour.ports)}</td><td class="num">${fmt(q.per_hour.ports)}</td></tr>
-          <tr><td>CPU reservation (${q.tier.cpu_cores} vCPU)</td><td class="num">${fmt(q.per_hour.cpu_reservation)}</td><td class="num">0.00</td></tr>
-          <tr><td>Memory reservation (${q.tier.mem_gib} GB)</td><td class="num">${fmt(q.per_hour.mem_reservation)}</td><td class="num">0.00</td></tr>
-          <tr><td>CPU usage <span class="dim tiny">(at most)</span></td><td class="num">${fmt(q.per_hour.cpu_usage_max)}</td><td class="num">0.00</td></tr>
-          <tr><td>Memory usage <span class="dim tiny">(at most)</span></td><td class="num">${fmt(q.per_hour.mem_usage_max)}</td><td class="num">0.00</td></tr>
-          <tr style="font-weight:700"><td>Maximum per hour</td><td class="num">${fmt(q.max_per_hour)}</td><td class="num">${fmt(q.off_per_hour)}</td></tr>
+          <tr><td>${t("billing.storage", fmtNum(q.tier.disk_gib))}</td>
+            <td class="num">${fmtMoney(q.per_hour.disk)}</td><td class="num">${fmtMoney(q.per_hour.disk)}</td></tr>
+          <tr><td>${t("billing.ports")}</td>
+            <td class="num">${fmtMoney(q.per_hour.ports)}</td><td class="num">${fmtMoney(q.per_hour.ports)}</td></tr>
+          <tr><td>${t("billing.cpures", fmtNum(q.tier.cpu_cores, q.tier.cpu_cores % 1 ? 1 : 0))}</td>
+            <td class="num">${fmtMoney(q.per_hour.cpu_reservation)}</td><td class="num">۰</td></tr>
+          <tr><td>${t("billing.memres", fmtNum(q.tier.mem_gib, q.tier.mem_gib % 1 ? 1 : 0))}</td>
+            <td class="num">${fmtMoney(q.per_hour.mem_reservation)}</td><td class="num">۰</td></tr>
+          <tr><td>${t("billing.cpuuse")} <span class="dim tiny">(${t("billing.atmost")})</span></td>
+            <td class="num">${fmtMoney(q.per_hour.cpu_usage_max)}</td><td class="num">۰</td></tr>
+          <tr><td>${t("billing.memuse")} <span class="dim tiny">(${t("billing.atmost")})</span></td>
+            <td class="num">${fmtMoney(q.per_hour.mem_usage_max)}</td><td class="num">۰</td></tr>
+          <tr style="font-weight:700"><td>${t("billing.maxhour")}</td>
+            <td class="num">${fmtMoney(q.max_per_hour)}</td><td class="num">${fmtMoney(q.off_per_hour)}</td></tr>
         </tbody></table></div>
       <p class="tiny dim" style="margin:12px 0 0">
-        Reservation is charged for holding the capacity; usage is charged for what you
-        actually consume, so an idle running hour costs ${fmt(q.idle_per_hour)}.
-        Before each hour starts, your balance must cover the maximum — that is why
-        switching on needs ${fmt(q.max_per_hour)} available.</p>
+        ${`«رزرو» بابت در اختیار داشتن منابع و «مصرف» بابت استفادهٔ واقعی محاسبه می‌شود؛
+           بنابراین یک ساعتِ روشن اما بی‌کار ${fmtMoney(q.idle_per_hour)} ${CURRENCY} هزینه دارد.
+           پیش از شروع هر ساعت، موجودی شما باید حداکثر هزینه را پوشش دهد — به همین دلیل برای
+           روشن کردن ماشین ${fmtMoney(q.max_per_hour)} ${CURRENCY} موجودی لازم است.`}</p>
     </div>` : ""}
 
-    <div class="card"><h3>Spend, last 48 hours</h3>${bars}</div>
+    <div class="card"><h3>${t("billing.chart")}</h3>${bars}</div>
 
     <div class="card pad0">
-      <div class="card-head"><h2>Transactions</h2>
-        <span class="dim small">${tx.total} total</span></div>
+      <div class="card-head"><h2>${t("billing.tx")}</h2>
+        <span class="dim small">${t("billing.tx.total", fmtFa(tx.total))}</span></div>
       ${tx.transactions.length ? `<div class="table-wrap"><table>
-        <thead><tr><th>When</th><th>Type</th><th>Breakdown</th><th class="num">Credits</th></tr></thead>
-        <tbody>${rows}</tbody></table></div>` : empty("No transactions yet.", icon.card)}
+        <thead><tr><th>${t("billing.tx.when")}</th><th>${t("billing.tx.type")}</th>
+          <th>${t("billing.tx.detail")}</th><th class="num">${t("billing.tx.amount")}</th></tr></thead>
+        <tbody>${rows}</tbody></table></div>` : empty(t("billing.tx.empty"), icon.card)}
       ${pages > 1 ? `<div class="card-head" style="border-top:1px solid var(--border);border-bottom:none">
-        <span class="dim small">Page ${page + 1} of ${pages}</span>
+        <span class="dim small">${t("common.page", [page + 1, pages])}</span>
         <div class="btn-row">
-          <button class="btn sm" id="prev" ${page === 0 ? "disabled" : ""}>Previous</button>
-          <button class="btn sm" id="next" ${page + 1 >= pages ? "disabled" : ""}>Next</button>
+          <button class="btn sm" id="prev" ${page === 0 ? "disabled" : ""}>${t("common.prev")}</button>
+          <button class="btn sm" id="next" ${page + 1 >= pages ? "disabled" : ""}>${t("common.next")}</button>
         </div></div>` : ""}
     </div>`);
 

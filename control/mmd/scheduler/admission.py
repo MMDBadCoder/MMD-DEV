@@ -67,6 +67,9 @@ class AdmissionResult:
     reason: str = ""
     free_cores: float = 0.0
     free_mem_gib: float = 0.0
+    # Which resource ran out, so the interface can say so in its own language
+    # rather than parsing the English reason.
+    resource: str = ""
 
 
 def can_start(cap: Capacity, running: list[tuple[float, float]],
@@ -82,13 +85,11 @@ def can_start(cap: Capacity, running: list[tuple[float, float]],
             False,
             # Deliberately free of implementation nouns - the user is not
             # supposed to know what is underneath.
-            "Not enough memory available right now. Try again shortly, or "
-            "choose a smaller size.",
-            free_cores, free_mem)
+            "Not enough memory available right now.",
+            free_cores, free_mem, resource="memory")
     if want_cores > free_cores:
         return AdmissionResult(
             False,
-            "Not enough CPU available right now. Try again shortly, or "
-            "choose a smaller size.",
-            free_cores, free_mem)
+            "Not enough CPU available right now.",
+            free_cores, free_mem, resource="cpu")
     return AdmissionResult(True, "", free_cores - want_cores, free_mem - want_mem_gib)

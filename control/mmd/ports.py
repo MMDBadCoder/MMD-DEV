@@ -37,7 +37,11 @@ DISCOURAGED_INTERNAL = {22, 2375, 2376}
 
 
 class PortError(RuntimeError):
-    pass
+    """Carries a stable code so the interface can translate the reason."""
+
+    def __init__(self, message: str, code: str = "port_error"):
+        super().__init__(message)
+        self.code = code
 
 
 def _host_port_free(port: int) -> bool:
@@ -72,23 +76,22 @@ def allocate(db: Session, workspace_id: int, internal_port: int,
     forwarder with no reservation (which would leak the port).
     """
     if not (1 <= internal_port <= 65535):
-        raise PortError("Port must be between 1 and 65535.")
+        raise PortError("Port must be between 1 and 65535.", "port_out_of_range")
     if protocol not in ("tcp", "udp"):
-        raise PortError("Protocol must be tcp or udp.")
+        raise PortError("Protocol must be tcp or udp.", "bad_protocol")
 
     existing = db.scalar(select(ExposedPort).where(
         ExposedPort.workspace_id == workspace_id,
         ExposedPort.internal_port == internal_port,
         ExposedPort.protocol == protocol))
     if existing is not None:
-        raise PortError(f"Port {internal_port} is already published.")
+        raise PortError(f"Port {internal_port} is already published.", "port_duplicate")
 
     count = len(list(db.scalars(select(ExposedPort).where(
         ExposedPort.workspace_id == workspace_id))))
     if count >= MAX_PORTS_PER_WORKSPACE:
         raise PortError(
-            f"You can publish at most {MAX_PORTS_PER_WORKSPACE} ports. "
-            "Remove one first.")
+            f"At most {MAX_PORTS_PER_WORKSPACE} ports.", "port_limit")
 
     taken = reserved_external(db)
     for _ in range(ALLOC_ATTEMPTS):
@@ -108,7 +111,7 @@ def allocate(db: Session, workspace_id: int, internal_port: int,
             db.rollback()
             taken.add(candidate)
             continue
-    raise PortError("No free external port is available right now. Try again.")
+    raise PortError("No free external port available.", "port_exhausted")
 
 
 def release(db: Session, row: ExposedPort) -> None:

