@@ -1,0 +1,116 @@
+"""Allocation of externally reachable ports for workspaces.
+
+A developer picks a port inside their workspace; the host picks a free port on
+its public address, RESERVES it for that workspace, and forwards it. The
+reservation persists across power cycles - an endpoint that moved every time
+the machine restarted would be useless for a webhook or a demo link.
+
+Allocation has to survive three separate races:
+  * two users allocating at the same moment  -> the unique constraint on
+    external_port is the real arbiter; we retry on conflict
+  * a port already reserved but idle         -> excluded via the database
+  * a port some host process is listening on -> excluded by probing the kernel
+
+The range deliberately sits below the ephemeral range (32768-60999 on Linux)
+so an allocation can never collide with an outbound connection's source port.
+"""
+from __future__ import annotations
+
+import secrets
+import socket
+
+from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+from .models import ExposedPort
+
+PORT_RANGE_START = 20000
+PORT_RANGE_END = 29999
+MAX_PORTS_PER_WORKSPACE = 5
+ALLOC_ATTEMPTS = 40
+
+# Ports inside the workspace that must not be published. Not a security
+# boundary (the workspace is the developer's own machine) but a guard against
+# accidentally putting a container's ssh or docker API on the public internet.
+DISCOURAGED_INTERNAL = {22, 2375, 2376}
+
+
+class PortError(RuntimeError):
+    pass
+
+
+def _host_port_free(port: int) -> bool:
+    """Is anything on the host already bound to this port?
+
+    Checked by attempting the bind ourselves. Reading /proc/net/tcp would race
+    and would miss IPv6-only or SO_REUSEPORT listeners.
+    """
+    for family, addr in ((socket.AF_INET, ("0.0.0.0", port)),
+                         (socket.AF_INET6, ("::", port))):
+        s = socket.socket(family, socket.SOCK_STREAM)
+        try:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s.bind(addr)
+        except OSError:
+            return False
+        finally:
+            s.close()
+    return True
+
+
+def reserved_external(db: Session) -> set[int]:
+    return set(db.scalars(select(ExposedPort.external_port)))
+
+
+def allocate(db: Session, workspace_id: int, internal_port: int,
+             protocol: str = "tcp", note: str | None = None) -> ExposedPort:
+    """Reserve a free external port and record the mapping.
+
+    The row is committed BEFORE the proxy device is created, so a crash leaves
+    a reservation with no forwarder (harmless, and reconciled) rather than a
+    forwarder with no reservation (which would leak the port).
+    """
+    if not (1 <= internal_port <= 65535):
+        raise PortError("Port must be between 1 and 65535.")
+    if protocol not in ("tcp", "udp"):
+        raise PortError("Protocol must be tcp or udp.")
+
+    existing = db.scalar(select(ExposedPort).where(
+        ExposedPort.workspace_id == workspace_id,
+        ExposedPort.internal_port == internal_port,
+        ExposedPort.protocol == protocol))
+    if existing is not None:
+        raise PortError(f"Port {internal_port} is already published.")
+
+    count = len(list(db.scalars(select(ExposedPort).where(
+        ExposedPort.workspace_id == workspace_id))))
+    if count >= MAX_PORTS_PER_WORKSPACE:
+        raise PortError(
+            f"You can publish at most {MAX_PORTS_PER_WORKSPACE} ports. "
+            "Remove one first.")
+
+    taken = reserved_external(db)
+    for _ in range(ALLOC_ATTEMPTS):
+        candidate = secrets.randbelow(PORT_RANGE_END - PORT_RANGE_START + 1) + PORT_RANGE_START
+        if candidate in taken or not _host_port_free(candidate):
+            continue
+        row = ExposedPort(
+            workspace_id=workspace_id, internal_port=internal_port,
+            external_port=candidate, protocol=protocol,
+            device=f"pub-{protocol}-{internal_port}", note=note)
+        db.add(row)
+        try:
+            db.commit()
+            return row
+        except IntegrityError:
+            # Someone else won the same number between our check and commit.
+            db.rollback()
+            taken.add(candidate)
+            continue
+    raise PortError("No free external port is available right now. Try again.")
+
+
+def release(db: Session, row: ExposedPort) -> None:
+    db.delete(row)
+    db.commit()

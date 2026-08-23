@@ -28,7 +28,8 @@ from .config import CONFIG
 from .db import SessionLocal, init_db
 from .incus.client import IncusClient, IncusConfig, IncusError
 from .incus.metrics import MetricsClient
-from .models import MICRO, UsageSample, Workspace, WorkspaceState
+from .billing.pricing import MICRO
+from .models import UsageSample, Workspace, WorkspaceState
 
 UTC = timezone.utc
 log = logging.getLogger("mmd.worker")
@@ -44,8 +45,7 @@ def _metrics() -> MetricsClient:
                          CONFIG.metrics_key, CONFIG.incus_server_cert)
 
 
-def hour_floor(dt: datetime) -> datetime:
-    return dt.replace(minute=0, second=0, microsecond=0)
+hour_floor = svc.hour_floor
 
 
 # --- metering ------------------------------------------------------------

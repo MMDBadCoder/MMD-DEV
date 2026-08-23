@@ -83,6 +83,14 @@ table inet mmd_isolation {
 
         iifname != "${INCUS_BRIDGE}" accept
 
+        # Replies to connections the HOST opened. Without this the chain drops
+        # the return traffic of anything the host initiates toward a workspace
+        # - the host could not even ping its own containers, and the control
+        # plane could not reach a published service. It does not weaken the
+        # boundary: conntrack only matches flows the host started, so a
+        # workspace still cannot open anything to the host itself.
+        ct state established,related accept
+
         # The only host services a workspace legitimately needs are the
         # bridge's own DNS and DHCP (Incus's dnsmasq).
         udp dport 67 accept                                  # DHCP is broadcast
@@ -101,6 +109,10 @@ table inet mmd_isolation {
         type filter hook forward priority -10; policy accept;
 
         iifname != "${INCUS_BRIDGE}" accept
+
+        # Replies belonging to already-permitted flows, including traffic
+        # DNAT'd in from the internet to a published port.
+        ct state established,related accept
 
         # Tenant-to-tenant. Workspaces share a bridge but must not see
         # each other.
@@ -135,6 +147,10 @@ Wants=nftables.service
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/sbin/nft -f ${RULES}
+# Published customer ports live in their own file, rewritten by the
+# provisioner. Loading it here means a reboot restores every reserved
+# endpoint - customers are paying to keep those addresses stable.
+ExecStart=-/usr/sbin/nft -f /etc/nftables/mmd-ports.nft
 [Install]
 WantedBy=multi-user.target
 UNIT

@@ -20,6 +20,14 @@ ws_ip() { printf '10.42.0.%d' "$(( $1 + 10 ))"; }
 # interceptions (mknod, setxattr, sysinfo) that apt packages and lxcfs need.
 # `block` makes Incus refuse instance creation outright; `full` would also
 # permit mount interception, a wider surface than this design wants.
+# Project ceilings are the TOP OF THE CATALOGUE, not the customer's current
+# size. Pinning them to the creation size made "change size" a one-way door -
+# Incus refused any increase with "Reached maximum aggregate value". These caps
+# exist to stop a compromised control plane asking for 64 cores, not to fix a
+# customer at whatever they first chose.
+: "${TIER_MAX_CORES:=3}"
+: "${TIER_MAX_MEM_MIB:=6144}"
+
 ws_create_project() {
   local proj="$1" cores="$2" mem_mib="$3" disk_gib="$4"
   incus project create "$proj" \
@@ -48,8 +56,8 @@ ws_create_project() {
     -c restricted.idmap.gid= \
     -c limits.containers=1 \
     -c limits.virtual-machines=0 \
-    -c limits.cpu="$cores" \
-    -c limits.memory="${mem_mib}MiB" \
+    -c limits.cpu="$TIER_MAX_CORES" \
+    -c limits.memory="${TIER_MAX_MEM_MIB}MiB" \
     -c limits.disk="${disk_gib}GiB" </dev/null
 }
 

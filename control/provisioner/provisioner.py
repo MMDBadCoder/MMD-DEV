@@ -25,6 +25,7 @@ import json
 import logging
 import os
 import pwd
+import re
 import socket
 import struct
 import subprocess
@@ -46,13 +47,34 @@ MAX_MEM_MIB = 8192
 MAX_ROOT_GIB = 40
 MAX_DOCKER_GIB = 40
 
-VERBS = {"provision", "archive", "restore", "destroy", "ping"}
+VERBS = {"provision", "archive", "restore", "destroy",
+         "expose_port", "unexpose_port", "ping"}
 
 # Name of the control plane's restricted client certificate in Incus's trust
 # store. The provisioner maintains its project scope; the API itself is
 # forbidden from touching the trust store, which is what keeps a compromised
 # web app from widening its own access.
 API_CERT_NAME = os.environ.get("MMD_API_CERT_NAME", "mmd-api")
+
+# Must match mmd/ports.py. Duplicated deliberately: the provisioner is the
+# privileged half and validates independently rather than trusting the caller.
+PORT_RANGE_START = 20000
+PORT_RANGE_END = 29999
+
+# The uplink interface DNAT rules attach to.
+UPLINK_IF = os.environ.get("MMD_UPLINK_IF", "eth0")
+
+
+def _uplink_addr() -> str:
+    try:
+        p = subprocess.run(["ip", "-o", "-4", "addr", "show", UPLINK_IF],
+                           capture_output=True, text=True, timeout=10)
+        return p.stdout.split()[3].split("/")[0]
+    except Exception:  # noqa: BLE001
+        return "0.0.0.0"
+
+
+UPLINK_ADDR = _uplink_addr()
 
 log = logging.getLogger("mmd.provisioner")
 
@@ -141,6 +163,68 @@ def _set_project_access(project: str, grant: bool) -> None:
         log.error("failed updating certificate scope: %s", out)
 
 
+PORT_RULES_FILE = "/etc/nftables/mmd-ports.nft"
+
+
+def _sync_port_rules(mappings: list[dict]) -> dict:
+    """Rewrite the published-port ruleset to exactly `mappings`.
+
+    Each entry: {external_port, internal_port, protocol, ip}. Everything is
+    re-validated here; the privileged half never trusts the caller's numbers.
+    """
+    pre, out = [], []
+    for m in mappings:
+        try:
+            ext = int(m["external_port"]); intern = int(m["internal_port"])
+            ip = str(m["ip"]); proto = str(m.get("protocol", "tcp"))
+        except (KeyError, TypeError, ValueError):
+            return {"ok": False, "error": "malformed mapping"}
+        if not (PORT_RANGE_START <= ext <= PORT_RANGE_END):
+            return {"ok": False, "error": f"external port {ext} outside the allowed range"}
+        if not (1 <= intern <= 65535):
+            return {"ok": False, "error": f"internal port {intern} out of range"}
+        if proto not in ("tcp", "udp"):
+            return {"ok": False, "error": "protocol must be tcp or udp"}
+        if not re.fullmatch(r"10\.42\.0\.\d{1,3}", ip):
+            # Only ever forward into the workspace bridge. Without this an
+            # attacker who reached this socket could DNAT host traffic anywhere.
+            return {"ok": False, "error": f"refusing to forward to {ip}"}
+        pre.append(f"        iifname \"{UPLINK_IF}\" {proto} dport {ext} dnat to {ip}:{intern}")
+        # Also translate traffic the HOST itself originates toward its own
+        # public address. prerouting never sees locally-generated packets, so
+        # without this the host (and anything running on it) cannot reach a
+        # published port by the address customers are given.
+        out.append(f"        {proto} dport {ext} ip daddr {{ {UPLINK_ADDR} }} dnat to {ip}:{intern}")
+
+    ruleset = (
+        "#!/usr/sbin/nft -f\n"
+        "# Published workspace ports. Regenerated in full by mmd-provisioner.\n"
+        "table ip mmd_ports\n"
+        "delete table ip mmd_ports\n"
+        "table ip mmd_ports {\n"
+        "    chain prerouting {\n"
+        "        type nat hook prerouting priority dstnat; policy accept;\n"
+        + ("\n".join(pre) + "\n" if pre else "")
+        + "    }\n"
+        "    chain output {\n"
+        "        type nat hook output priority dstnat; policy accept;\n"
+        + ("\n".join(out) + "\n" if out else "")
+        + "    }\n"
+        "}\n"
+    )
+    try:
+        os.makedirs(os.path.dirname(PORT_RULES_FILE), exist_ok=True)
+        with open(PORT_RULES_FILE, "w") as fh:
+            fh.write(ruleset)
+    except OSError as exc:
+        return {"ok": False, "error": f"cannot write ruleset: {exc}"}
+
+    ok, msg = _run(["nft", "-f", PORT_RULES_FILE], timeout=30)
+    if ok:
+        log.info("published ports synced: %d mapping(s)", len(pre))
+    return {"ok": ok, "output": msg, "count": len(pre)}
+
+
 def _run(cmd: list[str], timeout: int = 900) -> tuple[bool, str]:
     log.info("exec: %s", " ".join(cmd))
     try:
@@ -183,8 +267,26 @@ def handle(req: dict) -> dict:
             _set_project_access(f"ws-{idx}", grant=False)
         return {"ok": ok, "output": out}
 
-    # archive / restore are implemented in P3 alongside the billing lifecycle;
-    # the verbs exist here so the API surface is stable.
+    project = f"ws-{idx}"
+
+    if verb in ("expose_port", "unexpose_port"):
+        # Deliberately NOT an Incus proxy device.
+        #
+        # The project sets restricted.devices.proxy=block, and that restriction
+        # binds the PROJECT - not merely restricted certificates - so even root
+        # is refused ("Proxy devices are forbidden"). Relaxing it would let
+        # anything holding the control plane's certificate bind arbitrary host
+        # ports, including 443 and 22, which is exactly the capability worth
+        # denying.
+        #
+        # Plain nftables DNAT does the same job entirely in the kernel, is
+        # faster than a userspace relay, and needs no Incus privilege at all.
+        # The API owns the mapping table and sends the complete desired set on
+        # every change, so this is idempotent and self-healing rather than a
+        # sequence of deltas that can drift.
+        return _sync_port_rules(req.get("mappings") or [])
+
+    # archive / restore land with the billing lifecycle work.
     return {"ok": False, "error": f"{verb} not implemented yet"}
 
 
