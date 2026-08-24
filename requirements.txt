@@ -1,0 +1,18 @@
+# Control-plane runtime dependencies.
+#
+# Pinned to major/minor with a compatible-release specifier: this runs one
+# production host, so a surprise breaking change on a rebuild is a real outage
+# rather than a CI annoyance.
+
+fastapi~=0.141
+uvicorn[standard]~=0.52
+sqlalchemy~=2.0
+psycopg2-binary~=2.9        # PostgreSQL in production; the tests use SQLite
+pydantic~=2.13
+email-validator~=2.3        # pydantic EmailStr
+itsdangerous~=2.2           # signed session cookies
+passlib~=1.7                # password hashing
+bcrypt~=5.0
+python-multipart~=0.0.32    # file uploads in the file manager
+httpx~=0.28                 # the hand-written Incus REST client
+websockets~=17.0            # the terminal bridge

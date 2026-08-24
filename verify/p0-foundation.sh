@@ -29,7 +29,7 @@ chk "incus API loopback-only"          'ss -tlnH sport = :8443 | grep -q "127.0.
 chk "metrics loopback-only"            'ss -tlnH sport = :9101 | grep -q "127.0.0.1:9101"'
 chk "isolation table loaded"           'nft list table inet mmd_isolation'
 chk "metadata IP blocked"              'nft list table inet mmd_isolation | grep -q "169.254.0.0/16"'
-chk "uplink LAN blocked"               'nft list table inet mmd_isolation | grep -q "203.0.113.0/24"'
+chk "uplink LAN blocked"               'nft list table inet mmd_isolation | grep -q "$(uplink_net)"'
 chk "isolation applies at boot"        'systemctl is-enabled --quiet mmd-isolation.service'
 # Incus owns its own nftables table, including the masquerade that gives every
 # workspace outbound internet. Anything running `flush ruleset` destroys it -

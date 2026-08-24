@@ -1,2 +1,20 @@
+# Python
 __pycache__/
 *.pyc
+.pytest_cache/
+*.egg-info/
+.venv/
+venv/
+
+# Secrets and generated state - these belong on the host, never in the repo
+*.env
+!.env.example
+*.key
+*.crt
+*.pem
+/certs/
+
+# Local scratch
+*.log
+*.tmp
+.DS_Store

@@ -37,10 +37,10 @@ chk "free reports the tier, not the host" \
 chk "cannot read its own config"   '! X bash -c "test -S /dev/incus/sock"'
 
 echo "--- cannot reach the host ---"
-chk "host sshd unreachable"        '! X bash -c "timeout 4 bash -c \"</dev/tcp/203.0.113.141/22\""'
+chk "host sshd unreachable"        '! X bash -c "timeout 4 bash -c \"</dev/tcp/$(uplink_addr)/22\""'
 chk "incus API unreachable"        '! X bash -c "timeout 4 bash -c \"</dev/tcp/10.42.0.1/8443\""'
 chk "cloud metadata unreachable"   '! X timeout 6 curl -sf -m 5 http://169.254.169.254/'
-chk "provider LAN unreachable"     '! X ping -c1 -W3 203.0.113.254'
+chk "provider LAN unreachable"     '! X ping -c1 -W3 "$(uplink_gw)"'
 chk "RFC1918 unreachable"          '! X ping -c1 -W3 192.168.1.1'
 chk "internet REACHABLE"           'X ping -c1 -W4 8.8.8.8'
 chk "DNS works"                    'X getent hosts archive.ubuntu.com'

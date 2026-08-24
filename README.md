@@ -1,160 +1,229 @@
 # MMD-DEV
 
-AI-assisted development environments, sold to Persian-speaking developers and
-run on a single Ubuntu host.
+**Cloud development machines, billed by the hour in Toman.**
 
-Each customer gets an isolated Ubuntu machine with Claude Code and Codex
-preinstalled: root access, apt, Docker, and the ability to publish a port so
-the application they build keeps running and stays reachable. Billed in Toman
-by the hour, switchable off to near-zero cost.
+Every customer gets what feels like their own Ubuntu server — root access,
+`apt`, Docker, AI coding tools preinstalled — reachable from a Persian web
+dashboard, and able to power fully off to near-zero cost without losing a byte.
+The whole product runs on **one** host.
 
-**Language policy.** The customer-facing interface is Persian and right-to-left;
-established technical terms (CPU, Docker, SSH, Claude Code, vCPU) stay Latin
-because translating them would make the product harder for its own users.
-Everything on the developer side - this README, `docs/`, code comments, API
-messages, logs, test names - stays English. Each user gets what feels like their own isolated Ubuntu
-machine — free to `apt install`, run Docker, and modify anything — bounded in
-CPU, memory and disk, able to power fully off (zero CPU, zero RAM) without
-losing a single byte, and reachable only through the dashboard.
+<p align="center">
+  <a href="#quick-start">Quick start</a> ·
+  <a href="docs/ARCHITECTURE.md">Architecture</a> ·
+  <a href="docs/BILLING.md">Billing</a> ·
+  <a href="docs/API.md">API</a> ·
+  <a href="docs/OPERATIONS.md">Operations</a> ·
+  <a href="docs/DECISIONS.md">Decisions</a> ·
+  <a href="AGENTS.md">For AI agents</a>
+</p>
 
-## Why this shape
+---
 
-This host has **no hardware virtualization** (`systemd-detect-virt` = kvm, no
-`/dev/kvm`, no `vmx`/`svm`, CPU reports as "QEMU Virtual CPU"). That rules out
-every VM-based design on performance grounds — QEMU falls back to software
-emulation, and Firecracker, Kata, Cloud Hypervisor and `incus launch --vm` all
-require `/dev/kvm`. Unprivileged **Incus system containers on ZFS** is the only
-approach that delivers near-bare-metal speed *and* apt, Docker, and power-off-to-zero.
+## What a customer gets
 
-The trade-off is stated plainly in `docs/` and in the plan: containers share the
-host kernel, so a kernel privilege-escalation bug crosses the boundary in a way
-a hypervisor would resist. Admin approval of signups is the compensating control.
+- **A real machine.** Root, `apt install` anything, `docker run` anything. It is
+  a full Ubuntu 24.04 system, not a sandbox with holes cut in it.
+- **Power off to zero.** No CPU, no RAM, no charge for either — while every
+  file, package, config edit and Docker volume survives untouched.
+- **Ways in:** a browser terminal, SSH with managed public keys, a full XFCE
+  desktop over RDP, and a rich file manager with editing, upload, download and
+  recursive zip.
+- **Two permanent addresses.** SSH and RDP ports are reserved for the life of
+  the account and never change, so a saved config keeps working.
+- **AI tools, already signed in.** One click installs Claude Code and carries
+  the platform's sign-in across, so the developer never logs in.
+- **Publish a port** so what they build stays reachable.
+- **Honest billing.** Itemised Toman cost per hour, a spend chart, a full
+  ledger, and a hard gate that refuses to start an hour the balance cannot cover.
+- **Support built in.** Threaded tickets with a staff queue.
+
+Everything is Persian and right-to-left. Established technical terms stay Latin,
+because translating "Docker" helps nobody.
+
+## What an operator gets
+
+Signup → admin approval → automatic provisioning. A capacity view, an editable
+rate card, per-account credit grants, a full audit trail of every action, and a
+verification suite that checks the running host rather than the source.
+
+---
+
+## Why it is built this way
+
+The host has **no hardware virtualization** — no `/dev/kvm`, no `vmx`/`svm`,
+and the CPU reports itself as "QEMU Virtual CPU". That rules out every VM-based
+design on performance grounds: QEMU falls back to software emulation, and
+Firecracker, Kata, Cloud Hypervisor and `incus launch --vm` all require KVM.
+
+**Unprivileged Incus system containers on ZFS** is the only approach that
+delivers near-bare-metal speed *and* `apt`, Docker-in-workspace, and
+power-off-to-zero. Measured on this host, CPU and memory throughput inside a
+workspace are within noise of the host itself.
+
+The trade-off is stated rather than hidden: containers share the host kernel, so
+a kernel privilege-escalation bug crosses a boundary a hypervisor would resist.
+Admin approval of signups is the compensating control, and it is load-bearing.
+
+---
+
+## Architecture at a glance
+
+```
+Browser ── nginx ──► mmd-api ──► restricted Incus cert ──► Incus ──► ws-1 ws-2 …
+                        │
+                        └─────► unix socket ──► mmd-provisioner (root, no network)
+                        │
+                     PostgreSQL
+   mmd-worker ── metering · hourly settlement · reconciliation
+```
+
+The internet-facing service holds a **restricted** Incus certificate. Incus
+itself — not application logic — refuses it privileged containers, host-path
+disks and custom idmaps, so a compromise of the web app cannot reach the host.
+Genuinely privileged work goes through a root daemon with **no network
+listener**, a `SO_PEERCRED` check and a fixed verb allowlist.
+
+Full detail in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+---
 
 ## Layout
 
 | Path | What |
 |---|---|
 | `host/` | One-time host setup, numbered in run order |
-| `image/` | Golden workspace image build |
-| `workspace/` | `ws-create` / `ws-destroy` — the definition of a workspace |
-| `control/mmd/` | FastAPI control plane (Incus client, billing, admission) |
-| `control/provisioner/` | The only root component; unix socket, 4 allowlisted verbs |
-| `control/worker/` | Metering, hourly settlement, lifecycle |
-| `web/` | Persian RTL SPA: landing page, console, xterm.js terminal |
-| `tests/` | Unit tests - pytest for the backend, node:test for the interface |
+| `image/` | Golden workspace image, and the apt fixups every workspace needs |
+| `workspace/` | `ws-create` / `ws-reset` / `ws-destroy` — the definition of a workspace |
+| `control/mmd/` | FastAPI control plane: Incus client, billing, admission, API |
+| `control/provisioner/` | The only root component; unix socket, allowlisted verbs |
+| `web/` | Persian RTL single-page app — no build step, no framework |
+| `tests/` | Unit tests: pytest for the backend, `node:test` for the interface |
+| `verify/` | Suites that check the **running host**, not the source |
 | `deploy/` | Hardened systemd units |
-| `verify/` | Automated verification suites |
+| `docs/` | Architecture, billing, API, operations, and every decision made |
 
-## Bring-up
+Roughly 13,000 lines, excluding vendored assets: ~7,400 Python, ~3,800
+JavaScript, ~2,100 shell.
+
+---
+
+## Quick start
+
+Requires a fresh Ubuntu host with root. Every script is idempotent and refuses
+to proceed if the host cannot support what it is about to do.
 
 ```bash
-sudo bash host/00-preflight.sh              # read-only; refuses to proceed if the host can't support this
+sudo bash host/00-preflight.sh                # read-only; reports what it finds
 sudo bash host/10-remove-lxd-install-incus.sh
-sudo bash host/20-storage.sh                # ZFS pool on a preallocated file vdev
-sudo bash host/30-network-nftables.sh       # workspace isolation
+sudo bash host/20-storage.sh                  # ZFS pool on a preallocated file vdev
+sudo bash host/30-network-nftables.sh         # workspace isolation
 sudo bash host/40-swap-zram.sh
 sudo bash host/50-harden.sh
-sudo bash image/build-golden-image.sh       # ~10 min
-sudo bash workspace/ws-create.sh 1          # first workspace
+sudo bash host/60-control-plane.sh            # Postgres, services, systemd units
+sudo bash host/70-reverse-proxy.sh            # nginx + TLS
+
+sudo bash image/build-golden-image.sh         # ~10 min
 ```
+
+The first account to sign up becomes the administrator. After that, signups wait
+for approval, and approving one provisions a machine automatically.
+
+```bash
+bash tests/run.sh              # every unit test, ~5 seconds, no infrastructure
+bash verify/run-all.sh 1       # every host check, against workspace 1
+```
+
+See [docs/OPERATIONS.md](docs/OPERATIONS.md) for deploying changes, backups and
+recovery.
+
+---
 
 ## The interface
 
-Real URLs via the History API, so refreshing or sharing a link works:
+Real URLs via the History API, so refreshing or sharing a link works.
 
 | Path | What |
 |---|---|
-| `/` | Public marketing page - what the product is, live prices |
-| `/signin`, `/signup` | Separate pages; signup confirms the password |
-| `/console` | The machine: power, status, terminal |
-| `/console/resources` | Size: 0.5/1/2/3 vCPU, 0.5-6 GB, validated server-side |
-| `/console/tools` | Install toolsets (editors, monitors, DB clients, …) |
-| `/console/ports` | Publish a port to a permanently reserved public address |
-| `/console/billing` | Balance, itemised Toman cost per hour, spend chart, ledger |
+| `/` | Public page — what the product is, live prices |
+| `/console` | Overview: power, status, usage charts |
+| `/console/connections` | Browser terminal · SSH · RDP desktop |
+| `/console/files` | File manager: edit, upload, download, zip, preview |
+| `/console/resources` | Size, and the factory reset |
+| `/console/tools` | Install toolsets |
+| `/console/ai` | Claude Code, installed and signed in |
+| `/console/ports` | Publish a port to a reserved public address |
+| `/console/billing` | Balance, itemised Toman rates, spend chart, ledger |
 | `/console/activity` | Every action recorded on the account |
-| `/console/security` | Account details and password change |
-| `/console/admin` | People, capacity, pricing, default toolsets |
+| `/console/security` | Account details and password |
+| `/console/support` | Tickets |
+| `/console/admin` | People, capacity, pricing, toolsets, support queue |
 
-Light and dark themes, remembered per browser. The terminal connects only when
-asked - opening the console does not start a session - and has a full-screen
-mode with an in-frame exit control, adjustable font size, and a themed
-scrollbar.
+No build step and no framework: ES modules, a History-API router, CodeMirror for
+editing and xterm.js for the terminal. Light and dark themes, remembered per
+browser.
 
-## Unit tests
+---
 
-```bash
-bash tests/run.sh          # 142 tests, no infrastructure needed
-```
+## Billing in one paragraph
 
-Backend (pytest): pricing arithmetic, tier validation, package-name safety,
-port allocation, capacity admission. Interface (node:test): catalogue
-completeness, every server error code having Persian text, currency and digit
-formatting.
+Disk bills **every** hour regardless of power state, because a stopped workspace
+still holds its reservation. CPU and memory bill **only while on**, as a
+reservation component plus a measured usage component. Settlement is in arrears;
+before each hour the balance must cover that hour **at full capacity** or the
+machine is not allowed to start. At zero credit the machine is archived,
+restorable for 30 days, then deleted.
 
-## Verification
+The precise rules — and why each one is the way it is — are in
+[docs/BILLING.md](docs/BILLING.md).
 
-```bash
-bash verify/run-all.sh 1          # every suite, 90 checks
-bash verify/bench.sh 1            # overhead vs the host
-```
+---
 
-| Suite | Checks | What it proves |
-|---|---|---|
-| `p0-foundation.sh` | 23 | The host is built correctly |
-| `p1-workspace.sh` | 18 | PRD behaviour, and the host is unreachable |
-| `p1-limits.sh` | 7 | CPU, memory and disk bounds are really enforced |
-| `p1-persistence.sh` | 14 | Power off to zero, lose nothing |
-| `p2-escalation.sh` | 10 | A compromised control plane cannot escape |
-| `p5-reboot-readiness.sh` | 18 | Everything returns after a restart |
+## Measured, not claimed
 
-**Current status: all suites passing.** Measured on this host:
-
-### Overhead vs the host (`verify/bench.sh`)
-
-| | host | workspace | ratio |
+| | host | workspace | |
 |---|---|---|---|
 | CPU (sysbench, 1 thread) | 4791 ev/s | 5154 ev/s | **107.6%** |
 | Memory (sysbench) | 8211 MiB/s | 8264 MiB/s | **100.6%** |
-| Disk (fio 4k randread) | 8272 IOPS | 22634 IOPS | 273.6% * |
 
-CPU and memory are the honest isolation-overhead numbers: within noise of the
-host, i.e. the container layer costs nothing measurable. **Do not quote the
-disk figure as a 2.7x speed-up** — ZFS does not honour `O_DIRECT` the way ext4
-does, so those reads are served from the ARC while the host figure goes to the
-device. It shows ZFS caching, not faster hardware.
-
-### Behaviour
+CPU and memory are within noise of the host — the container layer costs nothing
+measurable. Behavioural results from `verify/`:
 
 - 4 busy threads on a 1-core tier deliver exactly **1.00 cores**
-- A 2 GiB allocation against a 1 GiB tier stays **resident-capped at 809 MiB**
-- Over-quota writes hit **ENOSPC**; `refquota` *and* `refreservation` both set
-- Powered off: cgroup removed, no processes, **API reports 0 bytes memory**
-- Across a power cycle: apt packages, home files, `/etc` edits, Docker images,
-  volumes and containers **all survive**, overlay2 intact
-- Inside the workspace `nproc`=1 and `free`=1024 MiB while the host is 4 cores
-  / 7936 MiB — the technology is invisible
-- Host, Incus API, cloud metadata (169.254.169.254), the provider LAN and
-  RFC1918 are all **unreachable**; internet and DNS work
+- A 2 GiB allocation against a 1 GiB tier stays **capped at 809 MiB resident**
+- Powered off: cgroup gone, no processes, **Incus reports 0 bytes memory**
+- Across a power cycle: packages, files, `/etc` edits, Docker images, volumes
+  and containers **all survive**
+- Inside, `nproc` = 1 and `free` = 1024 MiB while the host is 4 cores / 7936 MiB
+- Host, Incus API, cloud metadata, provider LAN and RFC1918 **all unreachable**;
+  internet and DNS work
+
+---
 
 ## Capacity on this host
 
 ```
 4 cores / 7.75 GiB   less host reserve (1 core / 2 GiB)
-                     times overcommit (cpu x2, mem x1)
-  => 6.0 cores / 5.75 GiB schedulable
-  => 5 concurrent workspaces at the 1 core / 1 GiB default tier
-  => ~6 total accounts, capped by the 68 GiB pool at 10 GiB each
+                     times overcommit (cpu ×2, memory ×1 — never oversubscribed)
+  ⇒ 6.0 cores / 5.75 GiB schedulable
+  ⇒ 5 concurrent workspaces at the 1 core / 1 GiB default
+  ⇒ ~6 total accounts, capped by the 68 GiB pool at 10 GiB each
 ```
 
-Disk is the cap on total accounts because a reservation is held even when a
-workspace is off. Attaching a second block device is the scale path.
+Disk caps total accounts because the reservation is held even when off. A second
+block device is the scale path.
 
-## Billing
+---
 
-Disk bills every hour regardless of power state. CPU and memory bill only while
-on, as a reservation component plus a measured usage component. Settlement is
-in arrears; before each hour the balance must cover that hour **at full
-capacity** or the workspace is not allowed to start.
+## Contributing
 
-At the default tier: **23.00 credits/hr** power-on gate, 16.00 for a fully idle
-on-hour, 1.00 off, 0.50 archived.
+See [CONTRIBUTING.md](CONTRIBUTING.md). If you are an AI agent, start with
+[AGENTS.md](AGENTS.md) — it front-loads the traps that are not visible in the
+code.
+
+## Security
+
+Please report vulnerabilities privately. See [SECURITY.md](SECURITY.md).
+
+## Licence
+
+[MIT](LICENSE).

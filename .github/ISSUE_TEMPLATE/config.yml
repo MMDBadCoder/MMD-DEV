@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/MMDBadCoder/MMD-DEV/security/advisories/new
+    about: Please report privately, never as a public issue. See SECURITY.md.

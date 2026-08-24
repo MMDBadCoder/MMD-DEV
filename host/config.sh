@@ -49,6 +49,22 @@
 : "${GOLDEN_IMAGE_ALIAS:=mmd-workspace}"
 : "${WORKSPACE_USER:=dev}"
 
+# --- Uplink ----------------------------------------------------------------
+# Derived, never written down. The host's public address and the provider LAN it
+# sits on are facts about one particular server; hard-coding them into scripts
+# put a live IP into the repository and made every check silently wrong on any
+# other machine.
+uplink_if()   { ip -o route get 1.1.1.1 2>/dev/null \
+                  | awk '{for(i=1;i<=NF;i++) if($i=="dev") print $(i+1)}'; }
+uplink_addr() { ip -o -4 addr show "$(uplink_if)" 2>/dev/null \
+                  | awk '{print $4}' | head -1 | cut -d/ -f1; }
+# The provider's gateway - a neighbour on the LAN a tenant must not reach.
+uplink_gw()   { ip -o -4 route show default 2>/dev/null \
+                  | awk '{for(i=1;i<=NF;i++) if($i=="via") print $(i+1); exit}'; }
+uplink_net()  { local c; c="$(ip -o -4 addr show "$(uplink_if)" 2>/dev/null \
+                  | awk '{print $4}' | head -1)"
+                python3 -c "import ipaddress,sys; print(ipaddress.ip_network(sys.argv[1], strict=False))" "$c"; }
+
 # --- Helpers ---------------------------------------------------------------
 log()  { printf '\033[1;34m[mmd]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[mmd]\033[0m %s\n' "$*" >&2; }
