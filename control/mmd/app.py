@@ -9,10 +9,15 @@ from __future__ import annotations
 import asyncio
 import json as _json
 import logging
+import os
+import posixpath
+import secrets
+import shutil
 from datetime import timedelta
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, HTTPException, Request, Response, WebSocket
+from fastapi import (Depends, FastAPI, File, HTTPException, Request, Response,
+                     UploadFile, WebSocket)
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from itsdangerous import BadSignature, URLSafeTimedSerializer
@@ -128,6 +133,11 @@ class PresetRequest(BaseModel):
 
 class SshToggle(BaseModel):
     enabled: bool
+
+
+class RdpRequest(BaseModel):
+    enabled: bool
+    password: str | None = Field(default=None, min_length=8, max_length=128)
 
 
 class SshKeyAdd(BaseModel):
@@ -490,9 +500,9 @@ def list_ports(request: Request, user: User = Depends(current_user),
                db: Session = Depends(get_session)) -> dict:
     ws = my_workspace(db, user)
     host = request.url.hostname
-    rows = db.scalars(select(ExposedPort)
-                      .where(ExposedPort.workspace_id == ws.id)
-                      .order_by(ExposedPort.internal_port))
+    rows = list(db.scalars(select(ExposedPort)
+                           .where(ExposedPort.workspace_id == ws.id)
+                           .order_by(ExposedPort.kind, ExposedPort.internal_port)))
     return {
         "host": host,
         "max_ports": portalloc.MAX_PORTS_PER_WORKSPACE,
@@ -500,9 +510,14 @@ def list_ports(request: Request, user: User = Depends(current_user),
         "ports": [{
             "id": p.id, "internal_port": p.internal_port,
             "external_port": p.external_port, "protocol": p.protocol,
+            "kind": p.kind.value,
+            # Reserved ports are part of the machine, not something the
+            # customer published, so they cannot be handed back.
+            "removable": p.kind is PortKind.USER,
             "note": p.note, "address": f"{host}:{p.external_port}",
             "created_at": p.created_at.isoformat() if p.created_at else None,
         } for p in rows],
+        "user_port_count": sum(1 for p in rows if p.kind is PortKind.USER),
     }
 
 
@@ -545,6 +560,8 @@ def delete_port(port_id: int, user: User = Depends(current_user),
     row = db.get(ExposedPort, port_id)
     if row is None or row.workspace_id != ws.id:
         fail(404, "no_such_port", "No such published port")
+    if row.kind is not PortKind.USER:
+        fail(409, "port_reserved", "Reserved ports cannot be removed.")
     svc.audit(db, user.id, "port_unpublish", ws.incus_project,
               internal=row.internal_port, external=row.external_port)
     portalloc.release(db, row)
@@ -594,9 +611,12 @@ def services(request: Request, user: User = Depends(current_user),
             "installed": ws.rdp_installed,
             "port": reserved["rdp"],
             "address": f"{host}:{reserved['rdp']}" if reserved["rdp"] else None,
-            "available": False,
+            "available": True,
             "min_memory_mb": 2048,
             "memory_ok": ws.mem_mib >= 2048,
+            "can_enable": ws.mem_mib >= 2048 and running,
+            "install_mb": 236,
+            "user": "dev",
         },
     }
 
@@ -682,6 +702,58 @@ def remove_ssh_key(key_id: int, user: User = Depends(current_user),
     return {"ok": True}
 
 
+@app.post("/api/workspace/services/rdp")
+def set_rdp(body: RdpRequest, user: User = Depends(current_user),
+            db: Session = Depends(get_session)) -> dict:
+    """Switch the remote desktop on or off.
+
+    The first enable also installs it (~236 MB, a few minutes). Afterwards the
+    packages stay and enabling is just systemd, so the toggle is cheap.
+    """
+    ws = my_workspace(db, user)
+    if ws.state != WorkspaceState.ON:
+        fail(409, "machine_off", "The machine must be running to change this.")
+
+    if body.enabled:
+        # A desktop session plus the customer's own work does not fit in less
+        # than 2 GB; below that it swaps and feels broken.
+        if ws.mem_mib < 2048:
+            fail(409, "rdp_needs_memory",
+                 "The remote desktop needs at least 2 GB of memory.",
+                 min_memory_mb=2048, current_memory_mb=ws.mem_mib)
+        # xrdp authenticates through PAM, and the image creates `dev` with no
+        # password at all - so without one set, nobody can ever log in.
+        if not body.password and not ws.rdp_installed:
+            fail(400, "rdp_needs_password",
+                 "Set a desktop password before switching the desktop on.")
+
+        payload = {"verb": "service_rdp", "idx": ws.idx, "action": "enable",
+                   "install": not ws.rdp_installed}
+        if body.password:
+            payload["password"] = body.password
+        resp = svc.call_provisioner(payload, timeout=1800)
+        if not resp.get("ok"):
+            log.error("rdp enable failed for %s: %s", ws.incus_project, resp)
+            fail(500, "rdp_failed", "The desktop could not be switched on.",
+                 output=(resp.get("output") or resp.get("error", ""))[-300:])
+        ws.rdp_installed = True
+        ws.rdp_enabled = True
+        db.commit()
+        svc.audit(db, user.id, "rdp_enabled", ws.incus_project,
+                  installed=bool(resp.get("installed")))
+        return {"ok": True, "enabled": True, "installed": True}
+
+    resp = svc.call_provisioner({"verb": "service_rdp", "idx": ws.idx,
+                                 "action": "disable"}, timeout=300)
+    if not resp.get("ok"):
+        log.error("rdp disable failed for %s: %s", ws.incus_project, resp)
+        fail(500, "rdp_failed", "The desktop could not be switched off.")
+    ws.rdp_enabled = False
+    db.commit()
+    svc.audit(db, user.id, "rdp_disabled", ws.incus_project)
+    return {"ok": True, "enabled": False}
+
+
 @app.post("/api/workspace/services/ssh")
 def set_ssh(body: SshToggle, user: User = Depends(current_user),
             db: Session = Depends(get_session)) -> dict:
@@ -716,6 +788,311 @@ def set_ssh(body: SshToggle, user: User = Depends(current_user),
     db.commit()
     svc.audit(db, user.id, "ssh_disabled", ws.incus_project)
     return {"ok": True, "enabled": False}
+
+
+@app.get("/api/workspace/metrics")
+def workspace_metrics(hours: int = 6, user: User = Depends(current_user),
+                      db: Session = Depends(get_session)) -> dict:
+    """Recent CPU and memory samples, for the overview sparklines."""
+    ws = my_workspace(db, user)
+    hours = max(1, min(hours, 48))
+    since = svc.now() - timedelta(hours=hours)
+    rows = list(db.scalars(
+        select(UsageSample)
+        .where(UsageSample.workspace_id == ws.id, UsageSample.ts >= since)
+        .order_by(UsageSample.ts)))
+
+    cpu, mem = [], []
+    for prev, cur in zip(rows, rows[1:]):
+        span = (cur.ts - prev.ts).total_seconds()
+        if span <= 0:
+            continue
+        delta = cur.cpu_seconds_total - prev.cpu_seconds_total
+        # A restart resets the counter; a negative delta is not a refund.
+        used = max(0.0, delta) / span
+        cpu.append({"ts": cur.ts.isoformat(),
+                    "value": round(min(used, ws.cpu_cores) / ws.cpu_cores * 100, 1)})
+        mem.append({"ts": cur.ts.isoformat(),
+                    "value": round(cur.mem_bytes / (ws.mem_mib * 1048576) * 100, 1)})
+    return {"hours": hours, "cpu": cpu, "memory": mem,
+            "cpu_cores": ws.cpu_cores, "memory_mb": ws.mem_mib,
+            "samples": len(rows)}
+
+
+# --- files ---------------------------------------------------------------
+# Routed through the root provisioner because a RESTRICTED Incus certificate is
+# denied the file API outright (403). Content moves via a spool directory
+# rather than through the socket, so a large file is streamed rather than held
+# in memory twice.
+SPOOL = "/run/mmd/spool"
+MAX_EDIT_BYTES = 2 * 1024 * 1024
+
+TEXT_SUFFIXES = {
+    ".txt", ".md", ".markdown", ".rst", ".log", ".csv", ".tsv", ".ini", ".cfg",
+    ".conf", ".toml", ".json", ".jsonc", ".yaml", ".yml", ".xml", ".html",
+    ".htm", ".css", ".scss", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
+    ".py", ".pyi", ".rb", ".go", ".rs", ".java", ".kt", ".c", ".h", ".cpp",
+    ".hpp", ".cs", ".php", ".sh", ".bash", ".zsh", ".fish", ".sql", ".env",
+    ".gitignore", ".dockerignore", ".editorconfig", ".lock", ".properties",
+}
+IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".ico"}
+
+
+class PathBody(BaseModel):
+    path: str = Field(min_length=1, max_length=4096)
+
+
+class SaveBody(BaseModel):
+    path: str = Field(min_length=1, max_length=4096)
+    content: str = Field(max_length=MAX_EDIT_BYTES)
+
+
+def _clean_path(path: str) -> str:
+    """Absolute and normalised, or refuse.
+
+    The machine is the customer's own, so this is about the SHAPE of the
+    argument - a relative path or an embedded newline could confuse the argv
+    boundary further down - not about limiting where they may look.
+    """
+    if not path or "\0" in path or "\n" in path or "\r" in path:
+        fail(400, "bad_path", "Invalid path.")
+    if not path.startswith("/"):
+        fail(400, "bad_path", "Path must be absolute.")
+    norm = posixpath.normpath(path)
+    if not norm.startswith("/"):
+        fail(400, "bad_path", "Invalid path.")
+    return norm
+
+
+def _token() -> str:
+    return secrets.token_urlsafe(24).replace("-", "_")
+
+
+def _spool(token: str) -> str:
+    return os.path.join(SPOOL, token)
+
+
+def _drop(token: str) -> None:
+    try:
+        os.unlink(_spool(token))
+    except OSError:
+        pass
+
+
+def _running_ws(db: Session, user: User) -> Workspace:
+    ws = my_workspace(db, user)
+    if ws.state != WorkspaceState.ON:
+        fail(409, "machine_off", "The machine must be running to browse files.")
+    return ws
+
+
+@app.get("/api/workspace/files")
+def list_files(path: str = "/home/dev", user: User = Depends(current_user),
+               db: Session = Depends(get_session)) -> dict:
+    ws = _running_ws(db, user)
+    p = _clean_path(path)
+    resp = svc.call_provisioner({"verb": "fs_list", "idx": ws.idx, "path": p},
+                                timeout=120)
+    if not resp.get("ok"):
+        if resp.get("error") == "not found":
+            fail(404, "no_such_path", "That folder does not exist.")
+        fail(500, "fs_failed", "The folder could not be read.")
+
+    entries = []
+    for e in resp.get("entries", []):
+        suffix = posixpath.splitext(e["name"])[1].lower()
+        entries.append({**e,
+                        "editable": e["type"] == "file" and (
+                            suffix in TEXT_SUFFIXES or "." not in e["name"]),
+                        "image": e["type"] == "file" and suffix in IMAGE_SUFFIXES,
+                        "path": posixpath.join(p, e["name"])})
+    entries.sort(key=lambda e: (e["type"] != "dir", e["name"].lower()))
+    parent = posixpath.dirname(p) if p != "/" else None
+    return {"path": p, "parent": parent, "entries": entries,
+            "partial": bool(resp.get("partial")), "home": "/home/dev"}
+
+
+@app.get("/api/workspace/files/content")
+def read_file(path: str, user: User = Depends(current_user),
+              db: Session = Depends(get_session)) -> dict:
+    ws = _running_ws(db, user)
+    p = _clean_path(path)
+    token = _token()
+    resp = svc.call_provisioner({"verb": "fs_pull", "idx": ws.idx,
+                                 "path": p, "token": token}, timeout=600)
+    if not resp.get("ok"):
+        fail(404, "no_such_path", "That file could not be read.")
+    try:
+        if resp.get("size", 0) > MAX_EDIT_BYTES:
+            fail(413, "file_too_large",
+                 "This file is too large to edit here. Download it instead.")
+        raw = open(_spool(token), "rb").read()
+    finally:
+        _drop(token)
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        fail(415, "not_text", "This file is not text and cannot be edited here.")
+    return {"path": p, "content": text, "size": len(raw)}
+
+
+@app.put("/api/workspace/files/content")
+def save_file(body: SaveBody, user: User = Depends(current_user),
+              db: Session = Depends(get_session)) -> dict:
+    ws = _running_ws(db, user)
+    p = _clean_path(body.path)
+    token = _token()
+    data = body.content.encode("utf-8")
+    if len(data) > MAX_EDIT_BYTES:
+        fail(413, "file_too_large", "This file is too large to save here.")
+    os.makedirs(SPOOL, exist_ok=True)
+    with open(_spool(token), "wb") as fh:
+        fh.write(data)
+    os.chmod(_spool(token), 0o660)
+    try:
+        resp = svc.call_provisioner({"verb": "fs_push", "idx": ws.idx,
+                                     "path": p, "token": token}, timeout=600)
+    finally:
+        _drop(token)
+    if not resp.get("ok"):
+        fail(500, "fs_failed", "The file could not be saved.")
+    svc.audit(db, user.id, "file_saved", ws.incus_project, path=p, bytes=len(data))
+    return {"ok": True, "size": len(data)}
+
+
+def _stream_and_delete(token: str, filename: str, media: str) -> FileResponse:
+    spool = _spool(token)
+
+    class _Cleanup(FileResponse):
+        async def __call__(self, scope, receive, send):
+            try:
+                await super().__call__(scope, receive, send)
+            finally:
+                # The spool copy exists only for the length of this response.
+                try:
+                    os.unlink(spool)
+                except OSError:
+                    pass
+
+    return _Cleanup(spool, media_type=media, filename=filename)
+
+
+@app.get("/api/workspace/files/download")
+def download_file(path: str, user: User = Depends(current_user),
+                  db: Session = Depends(get_session)):
+    ws = _running_ws(db, user)
+    p = _clean_path(path)
+    token = _token()
+    resp = svc.call_provisioner({"verb": "fs_pull", "idx": ws.idx,
+                                 "path": p, "token": token}, timeout=1800)
+    if not resp.get("ok"):
+        _drop(token)
+        fail(404, "no_such_path", "That file could not be downloaded.")
+    return _stream_and_delete(token, posixpath.basename(p) or "download",
+                              "application/octet-stream")
+
+
+@app.get("/api/workspace/files/archive")
+def download_archive(path: str, user: User = Depends(current_user),
+                     db: Session = Depends(get_session)):
+    """Zip a folder, recursively.
+
+    Built on the host from a recursive pull, so the workspace needs no archiver
+    installed and the customer's own disk quota is not spent making their
+    download.
+    """
+    ws = _running_ws(db, user)
+    p = _clean_path(path)
+    token = _token()
+    resp = svc.call_provisioner({"verb": "fs_archive", "idx": ws.idx,
+                                 "path": p, "token": token}, timeout=1800)
+    if not resp.get("ok"):
+        _drop(token)
+        if "too large" in str(resp.get("error", "")):
+            fail(413, "archive_too_large", "This folder is too large to download as a zip.")
+        fail(500, "fs_failed", "The folder could not be packaged.")
+    name = (posixpath.basename(p) or "workspace") + ".zip"
+    svc.audit(db, user.id, "folder_downloaded", ws.incus_project, path=p)
+    return _stream_and_delete(token, name, "application/zip")
+
+
+@app.post("/api/workspace/files/upload")
+async def upload_file(path: str, file: UploadFile = File(...),
+                      user: User = Depends(current_user),
+                      db: Session = Depends(get_session)) -> dict:
+    ws = _running_ws(db, user)
+    folder = _clean_path(path)
+    name = posixpath.basename(file.filename or "")
+    if not name or name in (".", "..") or "/" in name:
+        fail(400, "bad_name", "Invalid file name.")
+    dest = posixpath.join(folder, name)
+
+    token = _token()
+    os.makedirs(SPOOL, exist_ok=True)
+    written = 0
+    with open(_spool(token), "wb") as fh:
+        while chunk := await file.read(1024 * 1024):
+            written += len(chunk)
+            if written > 512 * 1024 * 1024:
+                fh.close(); _drop(token)
+                fail(413, "file_too_large", "That file is too large to upload.")
+            fh.write(chunk)
+    os.chmod(_spool(token), 0o660)
+    try:
+        resp = svc.call_provisioner({"verb": "fs_push", "idx": ws.idx,
+                                     "path": dest, "token": token}, timeout=1800)
+    finally:
+        _drop(token)
+    if not resp.get("ok"):
+        fail(500, "fs_failed", "The file could not be uploaded.")
+    svc.audit(db, user.id, "file_uploaded", ws.incus_project, path=dest, bytes=written)
+    return {"ok": True, "path": dest, "size": written}
+
+
+@app.post("/api/workspace/files/mkdir")
+def make_dir(body: PathBody, user: User = Depends(current_user),
+             db: Session = Depends(get_session)) -> dict:
+    ws = _running_ws(db, user)
+    p = _clean_path(body.path)
+    resp = svc.call_provisioner({"verb": "fs_mkdir", "idx": ws.idx, "path": p},
+                                timeout=120)
+    if not resp.get("ok"):
+        fail(500, "fs_failed", "The folder could not be created.")
+    return {"ok": True, "path": p}
+
+
+@app.post("/api/workspace/files/new")
+def new_file(body: PathBody, user: User = Depends(current_user),
+             db: Session = Depends(get_session)) -> dict:
+    ws = _running_ws(db, user)
+    p = _clean_path(body.path)
+    token = _token()
+    os.makedirs(SPOOL, exist_ok=True)
+    open(_spool(token), "wb").close()
+    os.chmod(_spool(token), 0o660)
+    try:
+        resp = svc.call_provisioner({"verb": "fs_push", "idx": ws.idx,
+                                     "path": p, "token": token}, timeout=300)
+    finally:
+        _drop(token)
+    if not resp.get("ok"):
+        fail(500, "fs_failed", "The file could not be created.")
+    return {"ok": True, "path": p}
+
+
+@app.delete("/api/workspace/files")
+def delete_path(path: str, user: User = Depends(current_user),
+                db: Session = Depends(get_session)) -> dict:
+    ws = _running_ws(db, user)
+    p = _clean_path(path)
+    resp = svc.call_provisioner({"verb": "fs_delete", "idx": ws.idx, "path": p},
+                                timeout=300)
+    if not resp.get("ok"):
+        if "system path" in str(resp.get("error", "")):
+            fail(409, "protected_path", "That folder cannot be deleted.")
+        fail(500, "fs_failed", "It could not be deleted.")
+    svc.audit(db, user.id, "file_deleted", ws.incus_project, path=p)
+    return {"ok": True}
 
 
 # --- billing -------------------------------------------------------------

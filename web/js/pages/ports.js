@@ -12,14 +12,23 @@ export async function portsPage() {
     return;
   }
 
+  const hasReserved = d.ports.some((p) => !p.removable);
+
   const rows = d.ports.map((p) => `
     <tr>
-      <td class="mono ltr">${p.internal_port}<span class="dim tiny"> ${esc(p.protocol)}</span></td>
-      <td><span class="mono ltr">${esc(p.address)}</span>
+      <td class="mono ltr" dir="ltr">${p.internal_port}<span class="dim tiny"> ${esc(p.protocol)}</span></td>
+      <td><span class="pill" style="font-size:12px;padding:3px 10px">${
+        t("ports.kind." + p.kind)}</span></td>
+      <td><span class="mono ltr" dir="ltr">${esc(p.address)}</span>
         <button class="btn sm ghost icon" data-copy="${esc(p.address)}">${icon.copy}</button></td>
       <td class="muted small">${esc(p.note || "—")}</td>
       <td class="muted small nowrap">${stamp(p.created_at)}</td>
-      <td class="num"><button class="btn sm danger" data-del="${p.id}">${icon.trash}</button></td>
+      <td class="num">${p.removable
+        ? `<button class="btn sm danger" data-del="${p.id}">${icon.trash}</button>`
+        // Disabled rather than hidden: an absent control invites the question
+        // "where did it go"; a disabled one with a reason answers it.
+        : `<button class="btn sm ghost" disabled title="${t("ports.reserved.tooltip")}"
+             style="cursor:not-allowed">${icon.lock}</button>`}</td>
     </tr>`).join("");
 
   render(`
@@ -45,12 +54,15 @@ export async function portsPage() {
 
     <div class="card pad0">
       <div class="card-head"><h2>${t("ports.published")}</h2>
-        <span class="dim small ltr">${d.ports.length} / ${d.max_ports}</span></div>
+        <span class="dim small ltr" dir="ltr">${d.user_port_count} / ${d.max_ports}</span></div>
       ${d.ports.length ? `<div class="table-wrap"><table>
-        <thead><tr><th>${t("ports.internal")}</th><th>${t("ports.address")}</th>
-          <th>${t("ports.label")}</th><th>${t("ports.since")}</th><th></th></tr></thead>
+        <thead><tr><th>${t("ports.internal")}</th><th>${t("ports.kind")}</th>
+          <th>${t("ports.address")}</th><th>${t("ports.label")}</th>
+          <th>${t("ports.since")}</th><th></th></tr></thead>
         <tbody>${rows}</tbody></table></div>`
         : empty(t("ports.empty"), icon.plug)}
+      ${hasReserved ? `<div class="card-body" style="border-top:1px solid var(--border)">
+        ${note("info", t("ports.reserved.note"))}</div>` : ""}
     </div>`);
 
   $("#add").onclick = async () => {

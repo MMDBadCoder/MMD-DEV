@@ -338,3 +338,37 @@ kbd{display:inline-block;padding:1px 7px;border:1px solid var(--border-strong);
   background:var(--brand);color:var(--brand-ink);display:grid;place-items:center;
   font-weight:700;font-size:14px}
 @media (max-width:720px){.lp-hero h1{font-size:29px}}
+
+/* ---- code editor ---- */
+/* CodeMirror sits inside an RTL document but code is always left-to-right;
+   without this the gutter jumps sides and lines render mirrored. */
+.CodeMirror{
+  direction:ltr;text-align:left;height:auto;
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  font-size:13.5px;line-height:1.6;border-radius:10px;
+  border:1px solid var(--border);
+}
+.CodeMirror-gutters{border-inline-end:1px solid var(--border)}
+#cmwrap{direction:ltr}
+.cm-s-eclipse.CodeMirror{background:var(--surface)}
+
+/* ---- tabs ---- */
+.tabs2{display:flex;gap:4px;border-bottom:1px solid var(--border);margin-bottom:20px}
+.tabs2 a{
+  display:flex;align-items:center;gap:8px;padding:11px 16px;
+  color:var(--ink-2);font-weight:550;font-size:14.5px;
+  border-bottom:2px solid transparent;margin-bottom:-1px;white-space:nowrap;
+}
+.tabs2 a:hover{color:var(--ink);text-decoration:none}
+.tabs2 a.active{color:var(--brand);border-bottom-color:var(--brand)}
+.tabs2 .badge{font-size:11px;padding:1px 7px;border-radius:999px;
+  background:var(--surface-2);border:1px solid var(--border);font-weight:600}
+.tabs2 .badge.on{background:var(--ok-soft);border-color:var(--ok);color:var(--ok)}
+
+/* ---- file rows ---- */
+tbody tr[data-row] a{color:var(--ink)}
+tbody tr[data-row]:hover a{color:var(--brand)}
+/* File names are data, not prose. Without isolation the bidi algorithm moves
+   a leading dot to the end, so ".cache" reads as "cache." - wrong, and
+   confusing next to a real file called "cache." */
+tbody tr[data-row] a.ltr{unicode-bidi:isolate;direction:ltr}

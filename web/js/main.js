@@ -7,6 +7,7 @@ import { route, setGuard, setNotFound, startRouter, navigate, currentPath } from
 import { landingPage } from "./pages/landing.js";
 import { signInPage, signUpPage } from "./pages/auth.js";
 import { machinePage, teardownTerminal } from "./pages/machine.js";
+import { filesPage } from "./pages/files.js";
 import { resourcesPage } from "./pages/resources.js";
 import { toolsPage } from "./pages/tools.js";
 import { portsPage } from "./pages/ports.js";
@@ -27,11 +28,14 @@ export async function refreshMe() {
   return state.me;
 }
 
+// Connections sits second, right after the overview: it is what a developer
+// opens most often once the machine is running.
 const NAV = [
-  { href: "/console", key: "nav.machine", ic: "machine" },
+  { href: "/console", key: "nav.overview", ic: "chart" },
+  { href: "/console/connections", key: "nav.connections", ic: "link" },
+  { href: "/console/files", key: "nav.files", ic: "folder" },
   { href: "/console/resources", key: "nav.resources", ic: "sliders" },
   { href: "/console/tools", key: "nav.tools", ic: "box" },
-  { href: "/console/connections", key: "nav.connections", ic: "link" },
   { href: "/console/ports", key: "nav.ports", ic: "plug" },
   { href: "/console/billing", key: "nav.billing", ic: "card" },
   { href: "/console/activity", key: "nav.activity", ic: "clock" },
@@ -42,7 +46,8 @@ function chrome(bodyHtml) {
   const me = state.me;
   const path = currentPath();
   const low = me && me.credits < 1000;
-  const nav = NAV.map((n) => `<a href="${n.href}" class="${path === n.href ? "active" : ""}">
+  const nav = NAV.map((n) => `<a href="${n.href}" class="${
+      path === n.href || (n.href !== "/console" && path.startsWith(n.href + "/")) ? "active" : ""}">
       ${icon[n.ic]}<span>${t(n.key)}</span></a>`).join("")
     + (me?.is_admin ? `<a href="/console/admin" class="${path.startsWith("/console/admin") ? "active" : ""}">
       ${icon.users}<span>${t("nav.admin")}</span></a>` : "");
@@ -89,10 +94,12 @@ export function renderBare(html) {
 route("/", { title: null, view: landingPage, public: true });
 route("/signin", { title: "ورود", view: signInPage, guest: true });
 route("/signup", { title: "ثبت‌نام", view: signUpPage, guest: true });
-route("/console", { title: "ماشین من", view: machinePage });
+route("/console", { title: "نمای کلی", view: machinePage });
 route("/console/resources", { title: "منابع", view: resourcesPage });
 route("/console/tools", { title: "ابزارها", view: toolsPage });
 route("/console/connections", { title: "اتصال‌ها", view: connectionsPage });
+route("/console/connections/:tab", { title: "اتصال‌ها", view: connectionsPage });
+route("/console/files", { title: "فایل‌ها", view: filesPage });
 route("/console/ports", { title: "پورت‌ها", view: portsPage });
 route("/console/billing", { title: "صورتحساب", view: billingPage });
 route("/console/activity", { title: "فعالیت‌ها", view: activityPage });

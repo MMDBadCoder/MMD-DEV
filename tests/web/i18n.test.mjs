@@ -103,9 +103,11 @@ test("customer-facing labels are in Persian", () => {
     const persian = /[؀-ۿ]/.test(v);
     const latinWords = (v.match(/[A-Za-z]{4,}/g) || []).filter((w) =>
       // Established technical terms stay Latin on purpose.
+      // Product and protocol names a Persian reader still types in Latin.
       !["Ubuntu", "Docker", "Claude", "Code", "Codex", "systemd", "apt", "root",
         "Vazirmatn", "MMD", "DEV", "TCP", "UDP", "SSH", "vCPU", "API", "http",
-        "https", "port"].includes(w));
+        "https", "port", "Remote", "Desktop", "Connection", "PowerShell",
+        "Windows"].includes(w));
     if (!persian && v.length > 3) offenders.push(`${k} = ${v}`);
     else if (latinWords.length > 2) offenders.push(`${k} has untranslated words: ${latinWords}`);
   }

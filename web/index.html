@@ -6,6 +6,9 @@
 <title>MMD-DEV</title>
 <meta name="color-scheme" content="light dark">
 <link rel="stylesheet" href="/static/vendor/xterm.css">
+<link rel="stylesheet" href="/static/vendor/cm/codemirror.css">
+<link rel="stylesheet" href="/static/vendor/cm/material-darker.css">
+<link rel="stylesheet" href="/static/vendor/cm/eclipse.css">
 <link rel="stylesheet" href="/static/app.css">
 <script>
   // Applied before first paint so a dark-mode user never sees a white flash.
@@ -20,6 +23,27 @@
 <div class="toast-wrap" id="toasts"></div>
 <script src="/static/vendor/xterm.js"></script>
 <script src="/static/vendor/xterm-addon-fit.js"></script>
+<script src="/static/vendor/cm/codemirror.js"></script>
+<!-- simple-mode must precede every mode built on it. Both rust and dockerfile
+     call CodeMirror.defineSimpleMode at load time, and a mode that throws here
+     takes down the whole page, not just the editor. -->
+<script src="/static/vendor/cm/simple.js"></script>
+<script src="/static/vendor/cm/javascript.js"></script>
+<script src="/static/vendor/cm/python.js"></script>
+<script src="/static/vendor/cm/xml.js"></script>
+<script src="/static/vendor/cm/yaml.js"></script>
+<script src="/static/vendor/cm/css.js"></script>
+<script src="/static/vendor/cm/markdown.js"></script>
+<script src="/static/vendor/cm/shell.js"></script>
+<script src="/static/vendor/cm/sql.js"></script>
+<script src="/static/vendor/cm/go.js"></script>
+<script src="/static/vendor/cm/rust.js"></script>
+<script src="/static/vendor/cm/clike.js"></script>
+<script src="/static/vendor/cm/php.js"></script>
+<script src="/static/vendor/cm/dockerfile.js"></script>
+<script src="/static/vendor/cm/active-line.js"></script>
+<script src="/static/vendor/cm/matchbrackets.js"></script>
+<script src="/static/vendor/cm/closebrackets.js"></script>
 <script type="module" src="/static/js/main.js"></script>
 </body>
 </html>

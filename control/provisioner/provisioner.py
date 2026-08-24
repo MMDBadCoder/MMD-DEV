@@ -49,7 +49,9 @@ MAX_DOCKER_GIB = 40
 
 VERBS = {"provision", "archive", "restore", "destroy",
          "expose_port", "unexpose_port", "install_packages",
-         "service_ssh", "probe_sessions", "ping"}
+         "service_ssh", "service_rdp", "probe_sessions",
+         "fs_list", "fs_pull", "fs_push", "fs_mkdir", "fs_delete",
+         "fs_archive", "ping"}
 
 # Name of the control plane's restricted client certificate in Incus's trust
 # store. The provisioner maintains its project scope; the API itself is
@@ -166,6 +168,42 @@ def _set_project_access(project: str, grant: bool) -> None:
 
 PORT_RULES_FILE = "/etc/nftables/mmd-ports.nft"
 
+# Files move between the workspace and the browser through a spool directory
+# rather than through this socket. Base64 inside a JSON message would hold an
+# entire file in memory twice, in two processes; a spooled file is streamed by
+# the API and deleted afterwards.
+#
+# The file API is routed here at all because a RESTRICTED Incus certificate is
+# denied it (403 Forbidden) - reading arbitrary paths inside an instance is
+# privileged, and the web app deliberately does not hold that privilege.
+SPOOL = "/run/mmd/spool"
+MAX_EDIT_BYTES = 2 * 1024 * 1024
+MAX_TRANSFER_BYTES = 512 * 1024 * 1024
+
+
+def _spool_path(token: str) -> str:
+    if not re.fullmatch(r"[A-Za-z0-9_-]{8,64}", token or ""):
+        raise ValueError("bad spool token")
+    return os.path.join(SPOOL, token)
+
+
+def _safe_path(path: str) -> str | None:
+    """Absolute, normalised, no traversal, no NUL.
+
+    The workspace is the customer's own machine, so there is nothing to hide
+    from them inside it - this guards the SHAPE of the argument, not their
+    reach. A relative path or an embedded newline would let a caller confuse
+    the argv boundary.
+    """
+    if not isinstance(path, str) or not path or len(path) > 4096:
+        return None
+    if "\0" in path or "\n" in path or "\r" in path:
+        return None
+    if not path.startswith("/"):
+        return None
+    norm = os.path.normpath(path)
+    return norm if norm.startswith("/") else None
+
 
 def _sync_port_rules(mappings: list[dict]) -> dict:
     """Rewrite the published-port ruleset to exactly `mappings`.
@@ -224,6 +262,21 @@ def _sync_port_rules(mappings: list[dict]) -> dict:
     if ok:
         log.info("published ports synced: %d mapping(s)", len(pre))
     return {"ok": ok, "output": msg, "count": len(pre)}
+
+
+def _run_split(cmd: list[str], timeout: int = 900) -> tuple[int, str, str]:
+    """Like _run but keeps stdout and stderr apart.
+
+    Needed wherever stdout is DATA: `find` exits non-zero if any subdirectory
+    is unreadable (xrdp leaves a thinclient_drives mount that is), so a merged
+    stream turns a perfectly good listing into a parse error.
+    """
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True,
+                           timeout=timeout, stdin=subprocess.DEVNULL)
+    except subprocess.TimeoutExpired:
+        return 124, "", "timed out"
+    return p.returncode, p.stdout or "", p.stderr or ""
 
 
 def _run(cmd: list[str], timeout: int = 900,
@@ -424,6 +477,245 @@ def handle(req: dict) -> dict:
                         "ss -tln | grep -q ':22 ' && echo LISTENING"],
                        timeout=180, stdin_text=SSHD_DROPIN)
         return {"ok": ok and "LISTENING" in out, "output": out[-600:]}
+
+    if verb == "service_rdp":
+        action = req.get("action")
+        if action not in ("enable", "disable"):
+            return {"ok": False, "error": "action must be enable or disable"}
+
+        if action == "disable":
+            # Stopping the units is NOT enough. sesman deliberately leaves the
+            # X server and desktop running so a disconnected client can
+            # reattach, so ~100 MB stays resident with no listener to reach it.
+            # The session has to be ended explicitly.
+            ok, out = _run(["incus", "exec", "ws", "--project", project, "--",
+                            "bash", "-lc",
+                            "systemctl disable --now xrdp xrdp-sesman >/dev/null 2>&1; "
+                            # Match process NAMES (-x), never command lines.
+                            # `pkill -f` compares against the full command line
+                            # of every process INCLUDING this shell - whose
+                            # command line contains these very patterns - so it
+                            # kills its own parent and the verb returns nothing.
+                            "for p in xfce4-session xfwm4 xfce4-panel xfdesktop "
+                            "         xrdp-chansrv dbus-daemon; do "
+                            "  pkill -u dev -x \"$p\" 2>/dev/null; done; "
+                            "pkill -x Xorg 2>/dev/null; "
+                            "systemctl reset-failed xrdp xrdp-sesman >/dev/null 2>&1; "
+                            "sleep 2; "
+                            "printf 'listeners=%s procs=%s\\n' "
+                            "\"$(ss -tln | grep -c ':3389 ')\" "
+                            "\"$(pgrep -c -f 'Xorg|xfce4-session' 2>/dev/null || echo 0)\""],
+                           timeout=180)
+            clean = "listeners=0" in (out or "")
+            return {"ok": clean, "output": (out or "")[-300:]}
+
+        installed = False
+        if req.get("install"):
+            # Lean set only. Without --no-install-recommends the xfce4
+            # metapackage drags in a display manager, screensaver, CUPS and
+            # Bluetooth - all dead weight, and the screensaver in particular
+            # causes the classic "reconnected to a black screen I cannot
+            # unlock" failure on a machine with no physical seat.
+            ok, out = _run(["incus", "exec", "ws", "--project", project,
+                            "--env", "DEBIAN_FRONTEND=noninteractive", "--",
+                            "bash", "-lc",
+                            "apt-get update -qq && "
+                            "apt-get install -y -qq --no-install-recommends "
+                            "  xfce4-session xfwm4 xfdesktop4 xfce4-panel "
+                            "  xfce4-terminal thunar xfce4-settings dbus-x11 "
+                            "  x11-xserver-utils xrdp xorgxrdp && "
+                            "apt-get purge -y -qq xfce4-screensaver light-locker "
+                            "  >/dev/null 2>&1 || true; "
+                            "apt-get clean"],
+                           timeout=1800)
+            if not ok:
+                return {"ok": False, "error": "install failed",
+                        "output": (out or "")[-800:]}
+            installed = True
+
+            # The post-install fixes that are not optional.
+            _run(["incus", "exec", "ws", "--project", project, "--", "bash", "-lc",
+                  # xrdp drops privileges to the xrdp user but needs the TLS key,
+                  # which is root:ssl-cert 0640. Without the group it answers on
+                  # 3389 and then fails the handshake.
+                  "adduser xrdp ssl-cert >/dev/null 2>&1; "
+                  # A greeter would hold X on :0 and collide with the display
+                  # sesman wants to allocate.
+                  "systemctl disable --now lightdm gdm3 sddm >/dev/null 2>&1; "
+                  # allowed_users=console permits X only for a user at a real
+                  # TTY. No remote session ever qualifies.
+                  "grep -q allowed_users /etc/X11/Xwrapper.config 2>/dev/null || "
+                  "  echo 'allowed_users=anybody' > /etc/X11/Xwrapper.config; "
+                  "printf 'xfce4-session\\n' > /home/dev/.xsession; "
+                  "chown dev:dev /home/dev/.xsession; chmod 644 /home/dev/.xsession; "
+                  "install -d -m 0755 /etc/polkit-1/rules.d"], timeout=300)
+
+            # PolicyKit prompts XFCE raises on first login that a remote
+            # session can never satisfy, because polkit does not treat it as a
+            # local seat.
+            polkit = (
+                'polkit.addRule(function(action, subject) {\n'
+                '    if ((action.id.indexOf("org.freedesktop.color-manager.") === 0 ||\n'
+                '         action.id === "org.freedesktop.packagekit.system-sources-refresh")\n'
+                '        && subject.active && subject.local) {\n'
+                '        return polkit.Result.YES;\n'
+                '    }\n'
+                '});\n')
+            _run(["incus", "exec", "ws", "--project", project, "--", "bash", "-lc",
+                  "cat > /etc/polkit-1/rules.d/02-mmd-desktop.rules"],
+                 timeout=120, stdin_text=polkit)
+
+        password = req.get("password")
+        if password:
+            if not isinstance(password, str) or not (8 <= len(password) <= 128):
+                return {"ok": False, "error": "password must be 8-128 characters"}
+            if "\n" in password or ":" in password:
+                return {"ok": False, "error": "password contains unsupported characters"}
+            # Piped into chpasswd, never placed in argv where it would show up
+            # in the process list.
+            ok, out = _run(["incus", "exec", "ws", "--project", project, "--",
+                            "bash", "-lc", "chpasswd"],
+                           timeout=120, stdin_text=f"dev:{password}\n")
+            if not ok:
+                return {"ok": False, "error": f"could not set password: {out[-200:]}"}
+
+        ok, out = _run(["incus", "exec", "ws", "--project", project, "--",
+                        "bash", "-lc",
+                        # RESTART, not just enable --now. The xrdp package
+                        # starts the service during installation, before
+                        # `adduser xrdp ssl-cert` has run - so `enable --now`
+                        # finds it already active and leaves it without the
+                        # group membership it needs to read the TLS key. The
+                        # listener then answers on 3389 and fails every
+                        # handshake with "Protocol Security Negotiation
+                        # Failure", which looks like a client problem.
+                        "systemctl enable xrdp xrdp-sesman >/dev/null 2>&1; "
+                        "systemctl restart xrdp xrdp-sesman && "
+                        "for i in 1 2 3 4 5 6; do ss -tln | grep -q ':3389 ' && break; sleep 1; done; "
+                        "ss -tln | grep -q ':3389 ' && echo LISTENING"],
+                       timeout=300)
+        return {"ok": ok and "LISTENING" in out, "installed": installed,
+                "output": (out or "")[-400:]}
+
+    if verb.startswith("fs_"):
+        os.makedirs(SPOOL, mode=0o770, exist_ok=True)
+        try:
+            import grp as _g
+            os.chown(SPOOL, 0, _g.getgrnam(ALLOWED_GROUP).gr_gid)
+            os.chmod(SPOOL, 0o770)
+        except (KeyError, OSError):
+            pass
+
+        path = _safe_path(req.get("path", ""))
+        if path is None:
+            return {"ok": False, "error": "invalid path"}
+        base = ["incus", "exec", "ws", "--project", project, "--"]
+
+        if verb == "fs_list":
+            # find -printf gives type, size, mtime, mode and name in one pass,
+            # tab separated - no parsing of ls output, which is not a format.
+            rc, out, err = _run_split(base + [
+                "find", path, "-maxdepth", "1", "-mindepth", "1",
+                "-printf", "%y\\t%s\\t%T@\\t%m\\t%f\\n"], timeout=60)
+            if not out and ("No such file" in err or "cannot access" in err):
+                return {"ok": False, "error": "not found"}
+            # An unreadable subdirectory makes find exit non-zero while still
+            # listing everything it could read. That is a usable answer.
+            entries = []
+            for line in out.splitlines():
+                bits = line.split("\t")
+                if len(bits) != 5:
+                    continue
+                kind, size, mtime, mode, name = bits
+                entries.append({
+                    "name": name,
+                    "type": {"d": "dir", "f": "file", "l": "link"}.get(kind, "other"),
+                    "size": int(size) if size.isdigit() else 0,
+                    "mtime": float(mtime) if mtime.replace(".", "").isdigit() else 0,
+                    "mode": mode,
+                })
+            return {"ok": True, "path": path, "entries": entries,
+                    "partial": bool(err.strip())}
+
+        if verb == "fs_mkdir":
+            ok, out = _run(base + ["install", "-d", "-o", "dev", "-g", "dev",
+                                   "-m", "0755", path], timeout=60)
+            return {"ok": ok, "output": (out or "")[-200:]}
+
+        if verb == "fs_delete":
+            if path in ("/", "/home", "/home/dev", "/etc", "/usr", "/var", "/bin"):
+                return {"ok": False, "error": "refusing to delete a system path"}
+            ok, out = _run(base + ["rm", "-rf", "--", path], timeout=300)
+            return {"ok": ok, "output": (out or "")[-200:]}
+
+        if verb == "fs_pull":
+            try:
+                dest = _spool_path(req.get("token", ""))
+            except ValueError as exc:
+                return {"ok": False, "error": str(exc)}
+            ok, out = _run(["incus", "file", "pull", "--project", project,
+                            f"ws{path}", dest], timeout=600)
+            if not ok:
+                return {"ok": False, "error": (out or "")[-300:]}
+            try:
+                size = os.path.getsize(dest)
+                os.chmod(dest, 0o660)
+            except OSError as exc:
+                return {"ok": False, "error": str(exc)}
+            if size > MAX_TRANSFER_BYTES:
+                os.unlink(dest)
+                return {"ok": False, "error": "file too large"}
+            return {"ok": True, "size": size}
+
+        if verb == "fs_push":
+            try:
+                src = _spool_path(req.get("token", ""))
+            except ValueError as exc:
+                return {"ok": False, "error": str(exc)}
+            if not os.path.isfile(src):
+                return {"ok": False, "error": "spool file missing"}
+            ok, out = _run(["incus", "file", "push", "--project", project,
+                            "--uid", "1000", "--gid", "1000", "--mode", "644",
+                            src, f"ws{path}"], timeout=600)
+            return {"ok": ok, "output": (out or "")[-300:]}
+
+        if verb == "fs_archive":
+            try:
+                dest = _spool_path(req.get("token", ""))
+            except ValueError as exc:
+                return {"ok": False, "error": str(exc)}
+            # Pulled recursively to the host and zipped there, so the workspace
+            # needs no archiver installed and the customer's disk quota is not
+            # spent building their own download.
+            staging = dest + ".d"
+            ok, out = _run(["incus", "file", "pull", "-r", "--project", project,
+                            f"ws{path}", staging], timeout=1800)
+            if not ok:
+                return {"ok": False, "error": (out or "")[-300:]}
+            import shutil, zipfile
+            total = 0
+            try:
+                with zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED,
+                                     compresslevel=6) as z:
+                    for root, _dirs, files in os.walk(staging):
+                        for f in files:
+                            full = os.path.join(root, f)
+                            if os.path.islink(full):
+                                continue
+                            total += os.path.getsize(full)
+                            if total > MAX_TRANSFER_BYTES:
+                                raise ValueError("archive too large")
+                            z.write(full, os.path.relpath(full, staging))
+            except (OSError, ValueError) as exc:
+                shutil.rmtree(staging, ignore_errors=True)
+                if os.path.exists(dest):
+                    os.unlink(dest)
+                return {"ok": False, "error": str(exc)}
+            shutil.rmtree(staging, ignore_errors=True)
+            os.chmod(dest, 0o660)
+            return {"ok": True, "size": os.path.getsize(dest)}
+
+        return {"ok": False, "error": f"unknown fs verb {verb}"}
 
     if verb == "probe_sessions":
         # Read-only. The idle-stop timer must not switch off a machine someone
