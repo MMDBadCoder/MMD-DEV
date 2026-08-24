@@ -97,3 +97,10 @@ test("remaining time is shown in days, not hours", () => {
   }
   assert.equal(t("machine.days"), "روز");
 });
+
+// ---- reported: clicking the logo did not reach the homepage --------------
+test("the console logo links to the public homepage", () => {
+  const src = read("web/js/main.js");
+  assert.match(src, /<a href="\/" class="brand"/);
+  assert.doesNotMatch(src, /<a href="\/console" class="brand"/);
+});

@@ -67,7 +67,11 @@ function chrome(bodyHtml) {
 
   return `
     <header class="header">
-      <a href="/console" class="brand" style="color:inherit;text-decoration:none">
+      <!-- The public homepage, not the console. Many apps send their logo to
+           the dashboard instead, but nothing else in the console linked back to
+           the landing page at all - so a customer who wanted it had no way there
+           short of editing the URL, and clicking the logo is what they tried. -->
+      <a href="/" class="brand" style="color:inherit;text-decoration:none">
         <span class="logo">${icon.machine}</span><span>${t("brand")}</span></a>
       <nav class="nav">${nav}</nav>
       <div class="spacer"></div>
