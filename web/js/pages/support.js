@@ -5,7 +5,7 @@
 import { get, post } from "../api.js";
 import { $, $$, icon, esc, note, toast, when, empty } from "../ui.js";
 import { t } from "../i18n.js";
-import { render } from "../main.js";
+import { render, refreshMe } from "../main.js";
 import { navigate } from "../router.js";
 
 export const STATUSES = ["open", "in_progress", "answered", "closed"];
@@ -101,7 +101,11 @@ export async function supportPage(params) {
 
 async function ticketView(id) {
   let d;
-  try { d = (await get(`/api/tickets/${id}`)).ticket; }
+  try { d = (await get(`/api/tickets/${id}`)).ticket;
+    // Opening the thread is what marks it read, so the header counter is stale
+    // the moment this returns. Refresh before rendering rather than leaving the
+    // customer looking at a badge that still counts the message they just read.
+    await refreshMe(); }
   catch (e) {
     render(`<div class="page-head"><h1>${t("tk.title")}</h1></div>${note("bad", esc(e.message))}`);
     return;

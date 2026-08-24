@@ -876,3 +876,52 @@ coloured edge so the eye finds it without reading every subject.
 Verified by creating two tickets in the two states — one where the customer
 wrote last, one answered by staff — and reading the computed styles back out of
 a real browser rather than trusting the markup.
+
+## The header was drawn from a session object fetched once
+
+A customer: *"I had 2 unread messages, I read them one by one, and the red circle
+still showed ۲."*
+
+`state.me` was fetched at page load, and the route guard only refetched it when
+`state.me === null` — that is, only when signed **out**. Everything in the header
+is drawn from that object: the support badge, the admin badge, and the credit
+chip. Opening a ticket marked it read on the server correctly; the browser
+simply kept showing a number from earlier in the session until a hard reload.
+
+The credit chip had the same staleness and nobody had reported it: the balance
+did not move after powering a machine on or off, or as credit was spent.
+
+Now refetched on every navigation, plus immediately after a thread is opened —
+the guard runs *before* the view marks the ticket read, so without the second
+call the badge would only catch up on the following navigation.
+
+That makes `/api/me` a hot path, so `_unread_count` stopped being N+1. It walked
+the tickets in Python and touched `tk.messages` per ticket, lazy-loading a query
+each time; it is now a single query joining each ticket to its last message
+(`max(id)`, not `max(created_at)` — ids are monotonic and two messages can share
+a timestamp).
+
+Verified in a browser: ۲ → ۱ → gone, as each ticket was opened.
+
+## Remaining time reads in days
+
+«زمان باقی‌مانده» was shown in hours. At the default tier a funded account has
+several hundred, and «۳۵۷٫۱ ساعت» is not a number anyone can act on. It now
+reads «۱۵ روز».
+
+`hours_remaining` stays in the payload — it is the honest unit the figure is
+derived in, and days are a presentation choice on top. Both the overview and the
+billing page were changed: they show the same figure under the same label, and
+leaving one in hours would read as a contradiction.
+
+## Destroying a workspace left its firewall rules behind
+
+Found while cleaning up after a test. `sync_published_ports` rewrites the entire
+DNAT rule set from the mappings it is handed — it was designed to be
+self-healing — but it was only ever *called* when a port changed. Deleting a
+workspace cascades its port rows away and nothing re-synced, so four DNAT rules
+pointing at a machine that no longer existed sat in the kernel.
+
+The worker now pushes the full set on every reconciliation pass rather than only
+when it allocated something. Idempotent by construction, and it is the only
+thing that removes rules for a workspace that is gone.

@@ -22,8 +22,8 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from itsdangerous import BadSignature, URLSafeTimedSerializer
 from pydantic import BaseModel, EmailStr, Field
-from sqlalchemy import desc, func, select
-from sqlalchemy.orm import Session
+from sqlalchemy import desc, func, or_, select
+from sqlalchemy.orm import Session, aliased
 
 from . import ports as portalloc
 from . import sshkeys
@@ -278,19 +278,35 @@ def me(user: User = Depends(current_user), db: Session = Depends(get_session)) -
 
 
 def _unread_count(db: Session, user: User, *, staff: bool) -> int:
-    q = select(Ticket)
-    if not staff:
-        q = q.where(Ticket.user_id == user.id)
-    else:
+    """How many threads the other side has added to since this side last looked.
+
+    One query. It used to walk the tickets in Python and touch `tk.messages` per
+    ticket, which lazy-loads a second query each time - fine when /api/me was
+    fetched once per session, wasteful now that it is fetched on every page
+    change to keep the badge honest.
+
+    "Last message" is max(id), not max(created_at): ids are monotonic per insert
+    and two messages can share a timestamp.
+    """
+    last = (select(TicketMessage.ticket_id.label("tid"),
+                   func.max(TicketMessage.id).label("mid"))
+            .group_by(TicketMessage.ticket_id).subquery())
+    m = aliased(TicketMessage)
+
+    q = (select(func.count()).select_from(Ticket)
+         .join(last, last.c.tid == Ticket.id)
+         .join(m, m.id == last.c.mid))
+
+    if staff:
+        # A closed thread is not waiting on anyone.
+        read_at, from_them = Ticket.staff_read_at, m.from_staff.is_(False)
         q = q.where(Ticket.status != TicketStatus.CLOSED)
-    n = 0
-    for tk in db.scalars(q):
-        last = tk.messages[-1] if tk.messages else None
-        if is_unread(last.from_staff if last else None,
-                     last.created_at if last else None,
-                     tk.staff_read_at if staff else tk.user_read_at, staff=staff):
-            n += 1
-    return n
+    else:
+        read_at, from_them = Ticket.user_read_at, m.from_staff.is_(True)
+        q = q.where(Ticket.user_id == user.id)
+
+    return db.scalar(q.where(from_them,
+                             or_(read_at.is_(None), m.created_at > read_at))) or 0
 
 
 # --- sizes ---------------------------------------------------------------
@@ -418,7 +434,13 @@ def workspace_status(user: User = Depends(current_user),
         "rate_on_per_hour": q["max_per_hour"],
         "rate_idle_per_hour": q["idle_per_hour"],
         "rate_off_per_hour": q["off_per_hour"],
+        # Shown to customers in DAYS. At the default tier a funded account has
+        # hundreds of hours left, and "۱۶۶۶۶٫۷ ساعت" is a number nobody can act
+        # on. Hours are kept in the payload because they are the honest unit the
+        # figure is derived in.
         "hours_remaining": (have / MICRO) / q["max_per_hour"] if q["max_per_hour"] else 0,
+        "days_remaining": ((have / MICRO) / q["max_per_hour"] / 24
+                           if q["max_per_hour"] else 0),
         "published_ports": npub,
         "can_power_on": bool(ws.state == WorkspaceState.OFF and affordable and adm.allowed),
         "blocked": blocked,
@@ -1394,6 +1416,7 @@ def billing_summary(user: User = Depends(current_user),
         out["quote"] = q
         out["hours_remaining"] = ((have / MICRO) / q["max_per_hour"]
                                   if q["max_per_hour"] else 0)
+        out["days_remaining"] = out["hours_remaining"] / 24
     return out
 
 

@@ -191,3 +191,49 @@ def test_samples_are_pruned():
     from mmd import worker
     assert worker.SAMPLE_RETENTION_DAYS > 0
     assert hasattr(worker, "prune_samples_once")
+
+
+# --- remaining time, in days -----------------------------------------------
+def test_remaining_time_is_offered_in_days(env):
+    """Shown to customers in days. At the default tier a funded account has
+    hundreds of hours left, and a four-digit hour count is not a number anyone
+    can act on."""
+    from mmd.models import CreditAccount
+    client, db, ws = env
+    db.add(CreditAccount(user_id=ws.user_id, balance_micro=500_000 * 1_000_000))
+    db.commit()
+    d = client.get("/api/workspace").json()
+    assert d["days_remaining"] == pytest.approx(d["hours_remaining"] / 24, rel=1e-9)
+    assert d["days_remaining"] > 1
+
+
+def test_hours_are_still_reported(env):
+    """Kept in the payload: it is the honest unit the figure is derived in, and
+    the days value is only a presentation choice on top of it."""
+    client, *_ = env
+    assert "hours_remaining" in client.get("/api/workspace").json()
+
+
+def test_a_free_tier_does_not_divide_by_zero(env, monkeypatch):
+    from mmd.billing import pricing
+    monkeypatch.setattr(pricing, "max_hour_micro", lambda *a, **k: 0)
+    client, *_ = env
+    d = client.get("/api/workspace").json()
+    assert d["days_remaining"] == 0
+
+
+def test_the_firewall_is_resynced_on_every_pass():
+    """Deleting a workspace cascades its port rows away, but nothing re-synced
+    the host firewall - so DNAT entries for a machine that no longer existed sat
+    there until some unrelated port change. The provisioner rewrites the whole
+    rule set from what it is handed, so pushing every pass is idempotent and is
+    what makes the mapping self-healing."""
+    import inspect
+    from mmd import worker
+    src = inspect.getsource(worker.reserve_service_ports_once)
+    body = src[src.index("with SessionLocal"):]
+    assert "svc.sync_published_ports(db)" in body
+    # Not nested under the "did we change anything" branch.
+    for line in body.splitlines():
+        if "sync_published_ports" in line:
+            assert line.startswith("        svc."), f"still conditional: {line!r}"

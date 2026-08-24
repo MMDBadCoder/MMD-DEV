@@ -258,8 +258,14 @@ def reserve_service_ports_once() -> None:
                 fixed.append(ws.incus_project)
         if fixed:
             log.info("reserved service ports for %s", ", ".join(fixed))
-            # An address nothing answers on is not a reservation.
-            svc.sync_published_ports(db)
+        # Pushed on EVERY pass, not only when something changed. The provisioner
+        # rewrites the whole rule set from the mappings it is handed, so this is
+        # idempotent - and it is the only thing that removes rules belonging to a
+        # workspace that has been destroyed. Deleting a workspace cascades its
+        # port rows away but nothing re-synced the firewall, so DNAT entries for
+        # a machine that no longer exists sat there until the next unrelated
+        # port change.
+        svc.sync_published_ports(db)
 
 
 async def reconcile_once() -> None:

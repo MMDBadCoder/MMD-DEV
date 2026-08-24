@@ -6,7 +6,7 @@
 import { get, post, put } from "../api.js";
 import { $, $$, icon, esc, note, toast, when, empty } from "../ui.js";
 import { t } from "../i18n.js";
-import { render } from "../main.js";
+import { render, refreshMe } from "../main.js";
 import { navigate } from "../router.js";
 import { STATUSES, statusPill, thread } from "./support.js";
 
@@ -51,7 +51,11 @@ export async function adminTicketsPage(params) {
 
 async function staffTicketView(id) {
   let d;
-  try { d = (await get(`/api/admin/tickets/${id}`)).ticket; }
+  try { d = (await get(`/api/admin/tickets/${id}`)).ticket;
+    // Opening the thread is what marks it read, so the header counter is stale
+    // the moment this returns. Refresh before rendering rather than leaving the
+    // customer looking at a badge that still counts the message they just read.
+    await refreshMe(); }
   catch (e) {
     render(`<div class="page-head"><h1>${t("tk.admin.title")}</h1></div>${note("bad", esc(e.message))}`);
     return;

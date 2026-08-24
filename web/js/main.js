@@ -133,7 +133,13 @@ setNotFound(() => {
 });
 
 setGuard(async (r) => {
-  if (state.me === null) await refreshMe();
+  // Refetched on EVERY navigation, not just when signed out. The header is
+  // drawn from this object - the support badge, the admin badge, the credit
+  // chip - and it used to be fetched once at page load, so reading a ticket
+  // left the red counter showing the old number until a hard reload. A
+  // customer reported exactly that. It is one small local query per page
+  // change, and it keeps the balance honest too.
+  await refreshMe();
   if (r.public) return null;
   if (r.guest) return state.me ? "/console" : null;
   if (!state.me) return "/signin";
@@ -141,5 +147,6 @@ setGuard(async (r) => {
   return null;
 });
 
-await refreshMe();
+// No standalone fetch here: startRouter() resolves the first route immediately,
+// and the guard above fetches before any view renders.
 startRouter();

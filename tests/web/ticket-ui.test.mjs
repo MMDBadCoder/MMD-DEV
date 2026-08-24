@@ -68,3 +68,32 @@ test("an unread row is marked, not just its badge", () => {
     assert.match(src, /class="badge new"/, page);
   }
 });
+
+// ---- reported: the red counter did not go down as tickets were read ------
+test("the session object is refetched on every navigation", () => {
+  const src = read("web/js/main.js");
+  // It used to be `if (state.me === null) await refreshMe()`, so a signed-in
+  // customer kept the object fetched at page load - and the header badge, drawn
+  // from it, never moved until a hard reload.
+  assert.doesNotMatch(src, /if \(state\.me === null\) await refreshMe\(\)/);
+  assert.match(src, /setGuard\(async \(r\) => \{[\s\S]*?await refreshMe\(\);/);
+});
+
+test("reading a thread refreshes the counter before the page draws", () => {
+  // The guard runs BEFORE the view marks the ticket read, so without this the
+  // badge would only catch up on the next navigation.
+  for (const page of ["web/js/pages/support.js", "web/js/pages/admintickets.js"]) {
+    const src = read(page);
+    assert.match(src, /refreshMe/, page);
+    assert.match(src, /import \{ render, refreshMe \} from "\.\.\/main\.js";/, page);
+  }
+});
+
+test("remaining time is shown in days, not hours", () => {
+  for (const page of ["web/js/pages/machine.js", "web/js/pages/billing.js"]) {
+    const src = read(page);
+    assert.match(src, /days_remaining/, page);
+    assert.doesNotMatch(src, /hours_remaining/, page);
+  }
+  assert.equal(t("machine.days"), "روز");
+});

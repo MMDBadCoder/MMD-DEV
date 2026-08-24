@@ -88,6 +88,7 @@ const FA = {
   "machine.stat.running": "هزینه در حالت روشن",
   "machine.stat.off": "هزینه در حالت خاموش",
   "machine.stat.remaining": "زمان باقی‌مانده",
+  "machine.days": "روز",
   "machine.perhour": "در ساعت",
   "unit.toman": "تومان",
   "unit.tomanPerHour": "تومان در ساعت",

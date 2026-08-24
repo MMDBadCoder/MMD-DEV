@@ -57,7 +57,7 @@ export async function billingPage(_params, page = 0) {
       <div class="stat"><div class="k">${t("billing.spent")}</div>
         <div class="v">${fmtMoney(sum.total_spent)}<small>${CURRENCY}</small></div></div>
       <div class="stat"><div class="k">${t("billing.remaining")}</div>
-        <div class="v">${fmtFa(sum.hours_remaining ?? 0, 1)}<small>${t("machine.hours")}</small></div></div>
+        <div class="v">${fmtFa(sum.days_remaining ?? 0, (sum.days_remaining ?? 0) >= 10 ? 0 : 1)}<small>${t("machine.days")}</small></div></div>
     </div>
 
     ${q ? `<div class="card">
