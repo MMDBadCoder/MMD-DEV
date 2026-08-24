@@ -40,9 +40,9 @@ export async function supportPage(params) {
     return;
   }
 
-  const rows = d.tickets.map((k) => `<tr data-open="${k.id}" class="clickable">
+  const rows = d.tickets.map((k) => `<tr data-open="${k.id}" class="clickable${k.unread ? " unread" : ""}">
     <td><div style="font-weight:600">${esc(k.subject)}
-        ${k.unread ? `<span class="badge on">${t("tk.new")}</span>` : ""}</div>
+        ${k.unread ? `<span class="badge new">${t("tk.new")}</span>` : ""}</div>
       <div class="tiny dim">#${k.id} · ${t("tk.messages")}: ${k.message_count}</div></td>
     <td>${statusPill(k.status)}</td>
     <td class="small nowrap">${when(k.last_at || k.updated_at)}</td>
@@ -107,6 +107,8 @@ async function ticketView(id) {
     return;
   }
 
+  const lastIsStaff = !!d.messages.at(-1)?.from_staff;
+
   render(`<div class="page-head">
       <a href="/console/support" class="small">${t("tk.back")}</a>
       <div class="between" style="margin-top:8px">
@@ -118,9 +120,13 @@ async function ticketView(id) {
     <div class="card">
       ${thread(d.messages, false)}
       ${d.status === "closed" ? note("info", t("tk.closed.note")) : ""}
-      <label for="tk-reply" style="margin-top:18px">${t("tk.reply")}</label>
+      <label for="tk-reply" style="margin-top:18px">${
+        // "Your reply" only makes sense when there is something to reply TO.
+        // When the customer's own message is the most recent one, the box is
+        // for adding to what they already said.
+        lastIsStaff ? t("tk.reply") : t("tk.followup")}</label>
       <textarea id="tk-reply" rows="4" maxlength="4000"
-        placeholder="${t("tk.reply.ph")}"></textarea>
+        placeholder="${lastIsStaff ? t("tk.reply.ph") : t("tk.followup.ph")}"></textarea>
       <div class="btn-row" style="margin-top:12px">
         <button class="btn primary" id="tk-post">${icon.arrow}${t("tk.send")}</button>
       </div>

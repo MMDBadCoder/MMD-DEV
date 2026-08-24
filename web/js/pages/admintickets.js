@@ -21,9 +21,9 @@ export async function adminTicketsPage(params) {
     label}${n === undefined ? "" : ` <span class="dim">${n}</span>`}</a>`;
 
   const total = Object.values(d.counts).reduce((a, b) => a + b, 0);
-  const rows = d.tickets.map((k) => `<tr data-open="${k.id}" class="clickable">
+  const rows = d.tickets.map((k) => `<tr data-open="${k.id}" class="clickable${k.unread ? " unread" : ""}">
     <td><div style="font-weight:600">${esc(k.subject)}
-        ${k.unread ? `<span class="badge on">${t("tk.new")}</span>` : ""}</div>
+        ${k.unread ? `<span class="badge new">${t("tk.new")}</span>` : ""}</div>
       <div class="tiny dim">#${k.id} · ${t("tk.messages")}: ${k.message_count}</div></td>
     <td><span class="ltr mono" style="font-size:12.5px">${esc(k.user_email || "—")}</span></td>
     <td>${statusPill(k.status)}</td>

@@ -73,7 +73,7 @@ export function usageChart(series, cap, colour, unit) {
         points="0,${h} ${pts.join(" ")} ${w},${h}"/>
     </svg>
     <div class="chart-legend tiny">
-      <span><b>${num(last)}</b> ${unit}
+      <span><span class="dim">${t("chart.now")}</span> <b>${num(last)}</b> ${unit}
         <span class="dim">${t("chart.of")} ${num(cap)}</span></span>
       <span class="dim">${t("billing.chart.peak")} ${num(peak)} ${unit}</span>
     </div>`;

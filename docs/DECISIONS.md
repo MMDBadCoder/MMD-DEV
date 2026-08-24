@@ -840,3 +840,39 @@ workspace, binding a test account to it, and loading `/console` and
 `/console/admin` in a real browser — which also confirmed the picker requests
 the right window, marks the right button active, and remembers the choice across
 a reload.
+
+## Three things customers noticed that we had not
+
+All three were reported through the support system, which is itself a good sign
+that it works.
+
+**Chart labels ran together.** «بیشترین ۰٫۵۱ هسته» — the word and the number
+with nothing between them. `billing.chart.peak` was the bare word; it now
+carries the colon, because every use site puts a value straight after it.
+`billing.chart.now` deliberately did **not** change: it is a standalone label at
+the right-hand end of a bar chart's time axis, with nothing following, and a
+colon there would be dangling punctuation. A test pins both halves of that.
+
+Not reported, but on the same line: the *current* value had no label at all —
+just a bare number. It now reads «اکنون: ۰٫۳۱ هسته از ۲٫۰۰».
+
+**"Your reply" when you wrote last.** The ticket page labelled its box
+«پاسخ شما» regardless of who had spoken most recently, so a customer adding to
+their own message was invited to reply to themselves. It now reads «پیام شما»
+when their message is the latest and «پاسخ شما» when support's is. The staff
+queue keeps «پاسخ پشتیبانی», because an operator genuinely is always replying.
+
+**The unread badge was invisible.** This is the interesting one. The marker was
+in the DOM the whole time — `<span class="badge on">جدید</span>` on every unread
+row — but `.badge` had a rule **only** as `.tabs2 .badge`, scoped to the
+Connections tab bar. On the support list it inherited nothing and rendered as
+plain inline text. The nav counter said "1" and the list looked untouched.
+
+A styled-only-in-one-place class is worse than a missing one: the markup reads
+as correct in review, and only the rendered page shows otherwise. Fixed with a
+bare `.badge` rule plus `.badge.new`, and the row itself is now tinted with a
+coloured edge so the eye finds it without reading every subject.
+
+Verified by creating two tickets in the two states — one where the customer
+wrote last, one answered by staff — and reading the computed styles back out of
+a real browser rather than trusting the markup.

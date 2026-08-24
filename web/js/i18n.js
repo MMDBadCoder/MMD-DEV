@@ -310,6 +310,8 @@ const FA = {
   "unit.cores": "هسته",
   "unit.gb": "گیگابایت",
   "chart.of": "از",
+  // The current value had no label at all - just a bare number.
+  "chart.now": "اکنون:",
   "chart.waiting": "هنوز داده‌ای برای این بازه ثبت نشده است. ماشین را روشن کنید یا کمی صبر کنید.",
   "chart.win.minutes": (m) => `${fmtFa(m)} دقیقه`,
   "chart.win.hours": (h) => `${fmtFa(h)} ساعت`,
@@ -368,7 +370,11 @@ const FA = {
      پیش از شروع هر ساعت، موجودی شما باید حداکثر هزینه را پوشش دهد — به همین دلیل
      برای روشن کردن ماشین ${max} ${CURRENCY} موجودی لازم است.`,
   "billing.chart": "هزینه در ۴۸ ساعت گذشته",
-  "billing.chart.peak": "بیشترین",
+  // Always followed by a value, so the colon belongs in the string. Reported by
+  // a customer: «بیشترین ۰٫۵۱ هسته» ran together as one phrase.
+  "billing.chart.peak": "بیشترین:",
+  // NB: no colon. This one is a standalone label at the right-hand end of a bar
+  // chart's time axis, with nothing after it.
   "billing.chart.now": "اکنون",
   "billing.chart.empty": "هنوز هزینه‌ای ثبت نشده است.",
   "billing.tx": "تراکنش‌ها",
@@ -590,8 +596,13 @@ const FA = {
   "tk.new": "جدید",
   "tk.back": "بازگشت به فهرست تیکت‌ها",
   "tk.back.admin": "بازگشت به صف پشتیبانی",
+  // Which of these two shows depends on who wrote last. Labelling the box
+  // «پاسخ شما» when the customer's own message is the most recent reads as
+  // though they are replying to themselves.
   "tk.reply": "پاسخ شما",
   "tk.reply.ph": "پاسخ خود را بنویسید…",
+  "tk.followup": "پیام شما",
+  "tk.followup.ph": "اگر نکتهٔ دیگری هست بنویسید…",
   "tk.closed.note": "این تیکت بسته شده است. اگر پیام جدیدی بفرستید، دوباره باز می‌شود.",
   "tk.staff": "پشتیبانی",
   "tk.you.other": "کاربر",
