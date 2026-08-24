@@ -235,8 +235,8 @@ Stated plainly so you do not "fix" a decision or assume a gap is an oversight:
 - **Tokens rotate**, so copied credentials drift out of date and the AI page
   offers a re-sync rather than pretending the sign-in is permanent.
 - **No SMTP.** Approval and low-credit notices are in-dashboard only.
-- **Self-signed TLS** on a bare IP until a domain exists; the reverse proxy is
-  already configured for ACME.
+- **No Content-Security-Policy header.** Everything is same-origin and there
+  are no inline handlers, so the gap is small, but it is a gap.
 
 ---
 

@@ -223,3 +223,60 @@ def test_a_workspace_with_credit_is_not_blocked(env, monkeypatch):
     db.commit()
     d = client.get("/api/workspace").json()
     assert d["blocked"] is None
+
+
+# --- the address the customer is told to connect to ------------------------
+def test_connection_addresses_follow_the_host_the_request_arrived_on(env):
+    """The dashboard moved from a bare IP to a domain, and the SSH and RDP
+    addresses have to move with it.
+
+    They are built from `request.url.hostname`, which Starlette takes from the
+    Host header - so this holds only as long as the reverse proxy forwards it
+    (`proxy_set_header Host $host`). If someone "simplifies" that away, the
+    customer is handed an address pointing at the proxy's own loopback.
+    """
+    client, *_ = env
+    d = client.get("/api/workspace/services", headers={"Host": "mmd-ai.ir"}).json()
+
+    assert d["host"] == "mmd-ai.ir"
+    assert d["ssh"]["address"] == f"mmd-ai.ir:{d['ssh']['port']}"
+    assert d["rdp"]["address"] == f"mmd-ai.ir:{d['rdp']['port']}"
+    assert d["ssh"]["command"] == f"ssh -p {d['ssh']['port']} dev@mmd-ai.ir"
+    # Never the proxy's own address.
+    assert "127.0.0.1" not in str(d)
+    assert "localhost" not in str(d)
+
+
+
+
+def test_published_ports_are_not_advertised_on_the_hsts_host(env):
+    """The dashboard sends Strict-Transport-Security, and HSTS covers a host on
+    EVERY port - not just 443.
+
+    So advertising a customer's published port as `dashboard-domain:29562` makes
+    their plain-HTTP app unreachable from any browser that has ever visited the
+    dashboard: it silently rewrites the URL to https:// and the connection
+    fails. The address must use a host no HSTS policy applies to.
+    """
+    from mmd.config import CONFIG
+    client, db, ws, _ = env
+    client.get("/api/workspace/services")          # allocate the reservations
+
+    d = client.get("/api/workspace/ports", headers={"Host": "mmd-ai.ir"}).json()
+    assert d["host"] == CONFIG.port_host
+    assert d["host"] != "mmd-ai.ir"
+    for row in d["ports"]:
+        assert not row["address"].startswith("mmd-ai.ir:"), row["address"]
+        assert row["address"] == f"{CONFIG.port_host}:{row['external_port']}"
+
+
+def test_the_hsts_header_does_not_claim_subdomains():
+    """includeSubDomains would extend the policy to any name a customer's app
+    might later be served from, which is the same trap one level up."""
+    import re
+    from pathlib import Path
+    script = (Path(__file__).resolve().parents[1] / "host" / "70-reverse-proxy.sh").read_text()
+    hsts = re.search(r"Strict-Transport-Security[^\\]*", script)
+    assert hsts, "no HSTS header configured"
+    assert "includeSubDomains" not in hsts.group(0)
+    assert "preload" not in hsts.group(0)

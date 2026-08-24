@@ -9,6 +9,21 @@ def _env(key: str, default: str) -> str:
     return os.environ.get(key, default)
 
 
+def _detect_public_ip() -> str:
+    """The address this host reaches the internet from.
+
+    Read from the routing table rather than written down, so it is right on any
+    machine and no live address ends up in the repository.
+    """
+    import subprocess
+    try:
+        out = subprocess.run(["ip", "-o", "route", "get", "1.1.1.1"],
+                             capture_output=True, text=True, timeout=5).stdout.split()
+        return out[out.index("src") + 1]
+    except Exception:  # noqa: BLE001
+        return "127.0.0.1"
+
+
 @dataclass(frozen=True)
 class Config:
     database_url: str = field(default_factory=lambda: _env(
@@ -31,6 +46,21 @@ class Config:
 
     provisioner_socket: str = field(default_factory=lambda: _env(
         "MMD_PROVISIONER_SOCKET", "/run/mmd/provisioner.sock"))
+
+    # The host customers are told to use for the ports THEY publish. Defaults to
+    # the machine's public IP, and deliberately not the dashboard's domain.
+    #
+    # HSTS applies to a host across every port, not just 443. Once a browser has
+    # seen the dashboard's Strict-Transport-Security header for mmd-ai.ir, it
+    # rewrites http://mmd-ai.ir:29562 to https:// as well - and a customer
+    # serving plain HTTP on their published port would find it unreachable from
+    # any browser that had ever visited the dashboard. An IP literal is never
+    # subject to HSTS, so this keeps the two concerns apart.
+    #
+    # A subdomain outside the HSTS policy would be prettier; that needs a DNS
+    # record, so it is an operator choice rather than a default.
+    port_host: str = field(default_factory=lambda: _env("MMD_PORT_HOST", "")
+                           or _detect_public_ip())
 
     # Idle auto-stop protects the user's credit: a workspace left running
     # overnight would otherwise burn its balance for nothing.

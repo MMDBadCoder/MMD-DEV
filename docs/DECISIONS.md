@@ -631,3 +631,67 @@ directory, so creating a file while the server reported `/home/dev/` produced
 
 Ten tests now cover both, including the escaping of a directory name containing
 markup.
+
+## Real TLS on mmd-ai.ir, and the trap HSTS sets for published ports
+
+The dashboard ran on a self-signed certificate bound to the bare IP. That is a
+starting point, not a destination: a permanent browser warning trains users to
+click through exactly the dialog phishing depends on.
+
+`host/70-reverse-proxy.sh` now takes `MMD_DOMAIN` and `MMD_ACME_EMAIL` and
+obtains a Let's Encrypt certificate. Without a domain it still falls back to
+self-signed, so a fresh host comes up either way.
+
+Issuance is **two-phase**, and has to be. nginx will not start with a
+certificate path that does not exist, and certbot's HTTP-01 challenge needs
+nginx already serving. So: write a config that serves `/.well-known/` with
+whatever certificate is available, obtain the real one, then rewrite the config
+to use it. The ACME location is excluded from the HTTPS redirect permanently,
+because renewal needs it on port 80 too.
+
+**`certonly --webroot`, not `--nginx`.** The nginx plugin rewrites the config
+file, and this script owns and regenerates that file. Keeping issuance out of
+the config means re-running the script cannot clobber the certificate setup.
+
+Renewal is certbot's own timer plus a **deploy hook that reloads nginx**.
+Without the hook a renewed certificate sits on disk while nginx keeps serving
+the old one until someone happens to restart it — which is how a certificate
+that "renews automatically" still expires.
+
+One canonical origin. `www` gets a 301 rather than a second copy of the site:
+the session cookie is scoped to the host that set it, so serving both names
+means signing in on `www` and then following a link to the apex silently logs
+you out.
+
+### HSTS covers a host on every port
+
+This is the part that nearly broke the product, and it is not obvious.
+
+`Strict-Transport-Security` applies to a **host**, not to a host-and-port. Once
+a browser has seen the header for `mmd-ai.ir`, it rewrites *any*
+`http://mmd-ai.ir:<anything>` to `https://` — including port 29562.
+
+Customers publish their own services on high ports, and the ports page had just
+started advertising them as `mmd-ai.ir:29562`, because the address is built from
+`request.url.hostname` and the request now arrives on the domain. So every
+customer serving plain HTTP on a published port would have found it unreachable
+from any browser that had ever visited the dashboard, with a TLS error that
+looks like their own bug.
+
+Two changes:
+
+- **Published ports are advertised on `CONFIG.port_host`**, which defaults to the
+  machine's public IP detected from the routing table. HSTS is never applied to
+  an IP literal, so the dashboard's policy cannot reach a customer's app.
+  `MMD_PORT_HOST` overrides it.
+- **HSTS is sent without `includeSubDomains` and without `preload`.**
+  `includeSubDomains` would extend the same trap to any name a customer's app
+  might later be served from, and forecloses `apps.<domain>` as the prettier
+  answer. `preload` is effectively irreversible and this is one host.
+
+SSH and RDP addresses still follow the request host, and should: they are not
+HTTP, HSTS does not apply, and `mmd-ai.ir:23409` is friendlier than an IP.
+
+Two tests hold the line: one asserts a published port address never uses the
+dashboard host, the other asserts the HSTS header claims neither subdomains nor
+preload.

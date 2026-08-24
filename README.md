@@ -120,7 +120,12 @@ sudo bash host/30-network-nftables.sh         # workspace isolation
 sudo bash host/40-swap-zram.sh
 sudo bash host/50-harden.sh
 sudo bash host/60-control-plane.sh            # Postgres, services, systemd units
-sudo bash host/70-reverse-proxy.sh            # nginx + TLS
+# nginx, plus a real Let's Encrypt certificate. Without MMD_DOMAIN it falls
+# back to self-signed on the bare IP, which is a starting point and not a
+# destination - a permanent browser warning teaches users to click through
+# exactly the dialog phishing depends on.
+sudo MMD_DOMAIN=example.com MMD_ACME_EMAIL=you@example.com \
+     bash host/70-reverse-proxy.sh
 
 sudo bash image/build-golden-image.sh         # ~10 min
 ```

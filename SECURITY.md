@@ -67,10 +67,10 @@ not mistaken for news:
 - **Single host, no HA, no off-host backup.** One failure domain for every
   tenant and their data.
 
-- **Self-signed TLS** while the deployment runs on a bare IP. It trains users to
-  click through a browser warning, which is exactly the habit phishing relies
-  on. The reverse proxy is configured so ACME can be switched on the moment a
-  domain exists.
+- **No Content-Security-Policy header yet.** The interface loads only
+  same-origin assets and has no inline event handlers, so the exposure is small,
+  but a CSP would make that a guarantee rather than a property of the current
+  code.
 
 ---
 

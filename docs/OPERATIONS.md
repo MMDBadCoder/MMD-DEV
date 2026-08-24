@@ -179,6 +179,36 @@ this; it means an untested deploy.
 
 ---
 
+## TLS
+
+The dashboard is served on **https://mmd-ai.ir**, with a Let's Encrypt
+certificate for the apex and `www`. Everything else — `www`, the bare IP, plain
+HTTP — 301s to that one canonical origin.
+
+```bash
+# reissue or reconfigure (idempotent; skips issuance if a cert already exists)
+sudo MMD_DOMAIN=mmd-ai.ir MMD_ACME_EMAIL=you@example.com bash host/70-reverse-proxy.sh
+
+# inspect
+openssl x509 -in /etc/letsencrypt/live/mmd-ai.ir/fullchain.pem -noout -subject -dates
+certbot certificates
+
+# renewal
+systemctl list-timers certbot.timer
+certbot renew --dry-run
+```
+
+Renewal runs from `certbot.timer`, and
+`/etc/letsencrypt/renewal-hooks/deploy/10-reload-nginx.sh` reloads nginx
+afterwards. Without that hook a renewed certificate sits on disk while nginx
+keeps serving the expired one.
+
+**Do not add `includeSubDomains` or `preload` to the HSTS header.** HSTS applies
+to a host on *every* port, so that policy would reach the high ports customers
+publish their own services on and make any plain-HTTP app unreachable. For the
+same reason, published-port addresses are advertised on `MMD_PORT_HOST`
+(default: the machine's public IP), never on the dashboard's domain.
+
 ## Backups
 
 **Not yet automated.** What matters, in order:
