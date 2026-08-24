@@ -226,53 +226,82 @@ def test_a_workspace_with_credit_is_not_blocked(env, monkeypatch):
 
 
 # --- the address the customer is told to connect to ------------------------
-def test_connection_addresses_follow_the_host_the_request_arrived_on(env):
-    """The dashboard moved from a bare IP to a domain, and the SSH and RDP
-    addresses have to move with it.
-
-    They are built from `request.url.hostname`, which Starlette takes from the
-    Host header - so this holds only as long as the reverse proxy forwards it
-    (`proxy_set_header Host $host`). If someone "simplifies" that away, the
-    customer is handed an address pointing at the proxy's own loopback.
-    """
+# One host for everything a customer connects TO - published ports, SSH, RDP -
+# and deliberately not the dashboard's own hostname. The dashboard sends HSTS,
+# and HSTS covers a host on EVERY port, not just 443. Measured in a browser:
+# with the policy stored, http://<dashboard-host>:28999 is forced to https and
+# fails, while the same request to a subdomain loads normally.
+def test_connection_addresses_ignore_the_dashboard_hostname(env):
+    """Whatever host the dashboard is served on, the addresses handed out must
+    come from configuration - otherwise a customer's plain-HTTP app becomes
+    unreachable from any browser that has visited the dashboard."""
+    from mmd.config import CONFIG
     client, *_ = env
     d = client.get("/api/workspace/services", headers={"Host": "mmd-ai.ir"}).json()
 
-    assert d["host"] == "mmd-ai.ir"
-    assert d["ssh"]["address"] == f"mmd-ai.ir:{d['ssh']['port']}"
-    assert d["rdp"]["address"] == f"mmd-ai.ir:{d['rdp']['port']}"
-    assert d["ssh"]["command"] == f"ssh -p {d['ssh']['port']} dev@mmd-ai.ir"
+    assert d["host"] == CONFIG.endpoint_host
+    assert d["host"] != "mmd-ai.ir"
+    assert d["ssh"]["address"] == f"{CONFIG.endpoint_host}:{d['ssh']['port']}"
+    assert d["rdp"]["address"] == f"{CONFIG.endpoint_host}:{d['rdp']['port']}"
+    assert d["ssh"]["command"] == f"ssh -p {d['ssh']['port']} dev@{CONFIG.endpoint_host}"
     # Never the proxy's own address.
     assert "127.0.0.1" not in str(d)
     assert "localhost" not in str(d)
 
 
-
-
 def test_published_ports_are_not_advertised_on_the_hsts_host(env):
-    """The dashboard sends Strict-Transport-Security, and HSTS covers a host on
-    EVERY port - not just 443.
-
-    So advertising a customer's published port as `dashboard-domain:29562` makes
-    their plain-HTTP app unreachable from any browser that has ever visited the
-    dashboard: it silently rewrites the URL to https:// and the connection
-    fails. The address must use a host no HSTS policy applies to.
-    """
     from mmd.config import CONFIG
     client, db, ws, _ = env
     client.get("/api/workspace/services")          # allocate the reservations
 
     d = client.get("/api/workspace/ports", headers={"Host": "mmd-ai.ir"}).json()
-    assert d["host"] == CONFIG.port_host
+    assert d["host"] == CONFIG.endpoint_host
     assert d["host"] != "mmd-ai.ir"
     for row in d["ports"]:
         assert not row["address"].startswith("mmd-ai.ir:"), row["address"]
-        assert row["address"] == f"{CONFIG.port_host}:{row['external_port']}"
+        assert row["address"] == f"{CONFIG.endpoint_host}:{row['external_port']}"
+
+
+def test_a_published_tcp_port_gets_a_clickable_http_url(env):
+    from mmd.models import PortKind
+    from mmd.config import CONFIG
+    client, db, ws, _ = env
+    PORTS.allocate(db, ws.id, 8080, "tcp", note="my app", kind=PortKind.USER)
+    db.commit()
+
+    rows = client.get("/api/workspace/ports").json()["ports"]
+    user = [r for r in rows if r["kind"] == "user"]
+    assert user, "no user port in the listing"
+    for r in user:
+        assert r["url"] == f"http://{CONFIG.endpoint_host}:{r['external_port']}"
+
+
+def test_reserved_ports_get_no_url(env):
+    """SSH and RDP are not HTTP. A scheme in front of those would be wrong
+    rather than merely unhelpful."""
+    client, db, ws, _ = env
+    client.get("/api/workspace/services")          # allocate the reservations
+    rows = client.get("/api/workspace/ports").json()["ports"]
+    reserved = [r for r in rows if r["kind"] in ("ssh", "rdp")]
+    assert reserved, "no reserved ports in the listing"
+    for r in reserved:
+        assert r["url"] is None, r
+
+
+def test_a_udp_port_gets_no_url(env):
+    from mmd.models import PortKind
+    client, db, ws, _ = env
+    PORTS.allocate(db, ws.id, 5353, "udp", note="dns", kind=PortKind.USER)
+    db.commit()
+    rows = client.get("/api/workspace/ports").json()["ports"]
+    udp = [r for r in rows if r["protocol"] == "udp"]
+    assert udp and all(r["url"] is None for r in udp)
 
 
 def test_the_hsts_header_does_not_claim_subdomains():
-    """includeSubDomains would extend the policy to any name a customer's app
-    might later be served from, which is the same trap one level up."""
+    """This is what makes a subdomain usable for customer ports at all. With
+    includeSubDomains the dashboard's policy would cover ports.<domain> too, and
+    every plain-HTTP app behind it would break."""
     import re
     from pathlib import Path
     script = (Path(__file__).resolve().parents[1] / "host" / "70-reverse-proxy.sh").read_text()

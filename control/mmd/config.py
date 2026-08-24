@@ -47,20 +47,22 @@ class Config:
     provisioner_socket: str = field(default_factory=lambda: _env(
         "MMD_PROVISIONER_SOCKET", "/run/mmd/provisioner.sock"))
 
-    # The host customers are told to use for the ports THEY publish. Defaults to
-    # the machine's public IP, and deliberately not the dashboard's domain.
+    # The host customers are told to connect TO - published ports, SSH, RDP.
+    # Deliberately NOT the dashboard's own hostname.
     #
-    # HSTS applies to a host across every port, not just 443. Once a browser has
-    # seen the dashboard's Strict-Transport-Security header for mmd-ai.ir, it
-    # rewrites http://mmd-ai.ir:29562 to https:// as well - and a customer
-    # serving plain HTTP on their published port would find it unreachable from
-    # any browser that had ever visited the dashboard. An IP literal is never
-    # subject to HSTS, so this keeps the two concerns apart.
+    # HSTS applies to a host across every port, not just 443. Measured: with the
+    # dashboard's policy stored, Chrome turns http://mmd-ai.ir:28999 into https
+    # and the page fails, while http://ports.mmd-ai.ir:28999 loads normally. So
+    # a customer serving plain HTTP on a published port would find it broken
+    # from any browser that had visited the dashboard - and it would look like
+    # their bug, not ours.
     #
-    # A subdomain outside the HSTS policy would be prettier; that needs a DNS
-    # record, so it is an operator choice rather than a default.
-    port_host: str = field(default_factory=lambda: _env("MMD_PORT_HOST", "")
-                           or _detect_public_ip())
+    # A subdomain works because the dashboard sends HSTS *without*
+    # includeSubDomains, which is why that omission is load-bearing rather than
+    # a matter of taste. Defaults to the public IP so a host with no domain
+    # still hands out something that works.
+    endpoint_host: str = field(default_factory=lambda: _env("MMD_ENDPOINT_HOST", "")
+                               or _detect_public_ip())
 
     # Idle auto-stop protects the user's credit: a workspace left running
     # overnight would otherwise burn its balance for nothing.

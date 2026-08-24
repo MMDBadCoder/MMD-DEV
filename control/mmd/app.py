@@ -570,7 +570,7 @@ def list_ports(request: Request, user: User = Depends(current_user),
                            .where(ExposedPort.workspace_id == ws.id)
                            .order_by(ExposedPort.kind, ExposedPort.internal_port)))
     return {
-        "host": CONFIG.port_host,
+        "host": CONFIG.endpoint_host,
         "max_ports": portalloc.MAX_PORTS_PER_WORKSPACE,
         "rate_per_hour": svc.rates(db).port,
         "ports": [{
@@ -580,11 +580,13 @@ def list_ports(request: Request, user: User = Depends(current_user),
             # Reserved ports are part of the machine, not something the
             # customer published, so they cannot be handed back.
             "removable": p.kind is PortKind.USER,
-            # CONFIG.port_host, not the dashboard's hostname: see config.py -
-            # the dashboard sends HSTS, and HSTS covers a host on every port, so
-            # advertising mmd-ai.ir:29562 would make a customer's plain-HTTP app
-            # unreachable from any browser that had visited the dashboard.
-            "note": p.note, "address": f"{CONFIG.port_host}:{p.external_port}",
+            "note": p.note,
+            "address": f"{CONFIG.endpoint_host}:{p.external_port}",
+            # A ready-to-click URL for the ports a customer publishes, which are
+            # almost always HTTP. Not for UDP, and not for the reserved SSH and
+            # RDP rows - prefixing those with a scheme would be simply wrong.
+            "url": (f"http://{CONFIG.endpoint_host}:{p.external_port}"
+                    if p.kind is PortKind.USER and p.protocol == "tcp" else None),
             "created_at": p.created_at.isoformat() if p.created_at else None,
         } for p in rows],
         "user_port_count": sum(1 for p in rows if p.kind is PortKind.USER),
@@ -617,7 +619,9 @@ def create_port(body: PortRequest, request: Request,
               internal=row.internal_port, external=row.external_port)
     return {"ok": True, "internal_port": row.internal_port,
             "external_port": row.external_port, "protocol": row.protocol,
-            "address": f"{CONFIG.port_host}:{row.external_port}",
+            "address": f"{CONFIG.endpoint_host}:{row.external_port}",
+            "url": (f"http://{CONFIG.endpoint_host}:{row.external_port}"
+                    if row.protocol == "tcp" else None),
             "warning_code": ("discouraged_port"
                              if row.internal_port in portalloc.DISCOURAGED_INTERNAL
                              else None)}
@@ -676,7 +680,10 @@ def _service_ports(db: Session, ws: Workspace) -> dict[str, int | None]:
 def services(request: Request, user: User = Depends(current_user),
              db: Session = Depends(get_session)) -> dict:
     ws = my_workspace(db, user)
-    host = request.url.hostname
+    # The endpoint host, not the dashboard's. Two pages showing different
+    # addresses for the same machine is a support ticket waiting to happen, and
+    # SSH and RDP have to live wherever the published ports live.
+    host = CONFIG.endpoint_host
     reserved = _service_ports(db, ws)
     keys = _keys(db, ws)
     running = ws.state == WorkspaceState.ON

@@ -204,10 +204,20 @@ afterwards. Without that hook a renewed certificate sits on disk while nginx
 keeps serving the expired one.
 
 **Do not add `includeSubDomains` or `preload` to the HSTS header.** HSTS applies
-to a host on *every* port, so that policy would reach the high ports customers
-publish their own services on and make any plain-HTTP app unreachable. For the
-same reason, published-port addresses are advertised on `MMD_PORT_HOST`
-(default: the machine's public IP), never on the dashboard's domain.
+to a host on *every* port, and this was measured, not assumed: with the policy
+stored, Chrome turns `http://mmd-ai.ir:28999` into `https://` and the page
+fails, while `http://ports.mmd-ai.ir:28999` loads normally.
+
+That is why everything a customer connects to — published ports, SSH and RDP —
+is advertised on **`MMD_ENDPOINT_HOST`** (`/etc/mmd/api.env`, currently
+`ports.mmd-ai.ir`) rather than the dashboard's own hostname. It falls back to
+the machine's public IP when unset. Adding `includeSubDomains` would extend the
+dashboard's policy over that subdomain and break every plain-HTTP app behind it.
+
+```bash
+grep MMD_ENDPOINT_HOST /etc/mmd/api.env
+sudo systemctl restart mmd-api        # required after changing it
+```
 
 ## Backups
 

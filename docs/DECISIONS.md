@@ -680,10 +680,10 @@ looks like their own bug.
 
 Two changes:
 
-- **Published ports are advertised on `CONFIG.port_host`**, which defaults to the
-  machine's public IP detected from the routing table. HSTS is never applied to
-  an IP literal, so the dashboard's policy cannot reach a customer's app.
-  `MMD_PORT_HOST` overrides it.
+- **Everything a customer connects TO is advertised on `CONFIG.endpoint_host`**
+  (`MMD_ENDPOINT_HOST`), which defaults to the machine's public IP detected from
+  the routing table. In production it is `ports.mmd-ai.ir` — see the section
+  below.
 - **HSTS is sent without `includeSubDomains` and without `preload`.**
   `includeSubDomains` would extend the same trap to any name a customer's app
   might later be served from, and forecloses `apps.<domain>` as the prettier
@@ -695,3 +695,47 @@ HTTP, HSTS does not apply, and `mmd-ai.ir:23409` is friendlier than an IP.
 Two tests hold the line: one asserts a published port address never uses the
 dashboard host, the other asserts the HSTS header claims neither subdomains nor
 preload.
+
+
+## One host for everything a customer connects to
+
+The ports page showed bare IP addresses, which is ugly and unmemorable, so the
+ask was to show the domain with `http://` in front. The obvious version of that
+is wrong, and it is worth recording why.
+
+**Measured in a real browser**, after visiting the dashboard so its HSTS policy
+was stored, against a plain-HTTP listener on port 28999:
+
+| asked for | browser did | result |
+|---|---|---|
+| `http://mmd-ai.ir:28999` | rewrote to `https://` | failed, `chrome-error://` |
+| `http://ports.mmd-ai.ir:28999` | left it alone | loaded |
+
+So the apex cannot carry customer ports while the dashboard sends HSTS. A
+**subdomain** can, precisely because that header goes out without
+`includeSubDomains` — which is what turns an earlier judgement call into a
+load-bearing one. A test asserts the directive stays absent.
+
+The wildcard `*.mmd-ai.ir` record already pointed at the host, so no DNS change
+was needed.
+
+`CONFIG.endpoint_host` now serves **published ports, SSH and RDP alike**, rather
+than only the ports page. Two pages showing different addresses for the same
+machine is a support ticket waiting to happen, and SSH and RDP have to live
+wherever the published ports live. It defaults to the detected public IP so a
+deployment with no domain still hands out something that works.
+
+Published ports also gain a `url` field — `http://host:port` — which the page
+renders as a clickable link. It is set only for **TCP** ports of kind **USER**:
+a scheme in front of the reserved SSH and RDP rows would be wrong rather than
+merely unhelpful, and `http://` makes no sense for UDP at all.
+
+## CUPS was listening on the internet
+
+Found while checking what else on the host answered plain HTTP. A `cups` snap
+was running `cupsd` and `cups-browsed`, serving an unauthenticated web interface
+on `0.0.0.0:631` — `/` and `/printers` both returned 200 — on a server with zero
+printers configured.
+
+Removed with `snap remove --purge cups`. Nothing about the product needed it; it
+had simply arrived as a snap dependency and never been noticed.

@@ -19,8 +19,16 @@ export async function portsPage() {
       <td class="mono ltr" dir="ltr">${p.internal_port}<span class="dim tiny"> ${esc(p.protocol)}</span></td>
       <td><span class="pill" style="font-size:12px;padding:3px 10px">${
         t("ports.kind." + p.kind)}</span></td>
-      <td><span class="mono ltr" dir="ltr">${esc(p.address)}</span>
-        <button class="btn sm ghost icon" data-copy="${esc(p.address)}">${icon.copy}</button></td>
+      <td>${p.url
+        // A published port is almost always an HTTP service, so show a URL the
+        // customer can click straight through to. The reserved SSH and RDP rows
+        // have no url and keep the bare host:port, because a scheme in front of
+        // those would be wrong rather than merely unhelpful.
+        ? `<a class="mono ltr" dir="ltr" href="${esc(p.url)}" target="_blank"
+              rel="noopener noreferrer">${esc(p.url)}</a>`
+        : `<span class="mono ltr" dir="ltr">${esc(p.address)}</span>`}
+        <button class="btn sm ghost icon"
+          data-copy="${esc(p.url || p.address)}">${icon.copy}</button></td>
       <td class="muted small">${esc(p.note || "—")}</td>
       <td class="muted small nowrap">${stamp(p.created_at)}</td>
       <td class="num">${p.removable
@@ -77,7 +85,7 @@ export async function portsPage() {
       const r = await post("/api/workspace/ports", {
         internal_port: port, protocol: $("#proto").value,
         note: $("#note").value.trim() || null });
-      toast(`${r.address}`, "ok");
+      toast(r.url || r.address, "ok");
       if (r.warning_code) toast(t("ports.warn." + r.warning_code), "bad");
       portsPage();
     } catch (err) {
