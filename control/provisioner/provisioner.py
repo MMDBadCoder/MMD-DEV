@@ -36,6 +36,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 WS_CREATE = REPO / "workspace" / "ws-create.sh"
 WS_DESTROY = REPO / "workspace" / "ws-destroy.sh"
+APT_FIXUPS = REPO / "image" / "apt-fixups.sh"
 
 SOCKET_PATH = os.environ.get("MMD_PROVISIONER_SOCKET", "/run/mmd/provisioner.sock")
 ALLOWED_GROUP = os.environ.get("MMD_GROUP", "mmd")
@@ -51,7 +52,42 @@ VERBS = {"provision", "archive", "restore", "destroy",
          "expose_port", "unexpose_port", "install_packages",
          "service_ssh", "service_rdp", "probe_sessions",
          "fs_list", "fs_pull", "fs_push", "fs_mkdir", "fs_delete",
-         "fs_archive", "ping"}
+         "fs_archive", "apt_repair", "ai_claude", "ping"}
+
+# ---------------------------------------------------------------------------
+# Claude Code sign-in propagation
+# ---------------------------------------------------------------------------
+# Workspaces are sold with the coding agents already signed in, using the
+# operator's own Claude subscription. That means reaching into a host home
+# directory and copying something out - the single most dangerous thing this
+# daemon does, because ~/.claude also holds the operator's entire working life:
+# every repository path they have opened, every conversation, every plan.
+#
+# So the copy is not a copy. Nothing is read off disk and forwarded verbatim.
+# _claude_credentials() parses ~/.claude/.credentials.json, keeps ONLY the keys
+# named below, and re-serialises them into a fresh document. Anything the file
+# gains in a future Claude Code release - telemetry, machine identifiers,
+# account details - is dropped by construction rather than by remembering to
+# add it to a blocklist.
+CLAUDE_HOST_HOME = Path(os.environ.get("MMD_CLAUDE_HOST_HOME", "/root"))
+
+# The one file consulted. Sessions, history, projects, caches, plans, todos,
+# shell snapshots, settings and CLAUDE.md are all in the same directory and are
+# never opened.
+CLAUDE_AUTH_FILE = ".credentials.json"
+
+# The one top-level key carried across: the OAuth grant itself.
+CLAUDE_AUTH_KEYS = ("claudeAiOauth",)
+
+# Never touched. Listed explicitly so the intent is testable and so a reviewer
+# can see what was considered, rather than inferring it from an allowlist.
+CLAUDE_NEVER_COPY = (
+    ".claude.json", "history.jsonl", "settings.json", "CLAUDE.md",
+    "projects", "sessions", "session-env", "todos", "tasks", "plans",
+    "shell-snapshots", "file-history", "paste-cache", "cache", "downloads",
+    "backups", "daemon", "jobs", "plugins", "statsig", "memory",
+    "stats-cache.json",
+)
 
 # Name of the control plane's restricted client certificate in Incus's trust
 # store. The provisioner maintains its project scope; the API itself is
@@ -343,6 +379,150 @@ ClientAliveInterval 120
 """
 
 
+def _apply_apt_fixups(project: str) -> tuple[bool, str]:
+    """Install the apt configuration that makes `apt install firefox` work.
+
+    Ubuntu ships firefox as a stub that installs a snap, and snaps cannot run in
+    an unprivileged container - the install hook fails and leaves dpkg wedged.
+    image/apt-fixups.sh replaces it with Mozilla's real .deb repository. That
+    script is the single source of truth: the golden image runs it at build
+    time, and this runs the very same file on machines built before it existed.
+
+    Idempotent, so calling it on every provision costs a few seconds and removes
+    any question of which machines have it.
+    """
+    try:
+        script = APT_FIXUPS.read_text()
+    except OSError as e:  # noqa: BLE001
+        return False, f"cannot read {APT_FIXUPS}: {e}"
+
+    ok, out = _run(["incus", "exec", "ws", "--project", project, "--", "bash", "-lc",
+                    "cat > /usr/local/sbin/mmd-apt-fixups && "
+                    "chmod 0755 /usr/local/sbin/mmd-apt-fixups"],
+                   timeout=120, stdin_text=script)
+    if not ok:
+        return False, f"could not install the fixup script: {out[-300:]}"
+
+    ok, out = _run(["incus", "exec", "ws", "--project", project,
+                    "--env", "DEBIAN_FRONTEND=noninteractive", "--",
+                    "bash", "-lc", "/usr/local/sbin/mmd-apt-fixups 2>&1"],
+                   timeout=900)
+    return ok, (out or "")[-1000:]
+
+
+def _claude_credentials() -> tuple[dict | None, str]:
+    """Build the credential document to place in a workspace.
+
+    Reads exactly one file - CLAUDE_HOST_HOME/.claude/.credentials.json - and
+    rebuilds it from the allowlisted keys only. The returned dict is what gets
+    written; the file on the host is never streamed through.
+    """
+    src = CLAUDE_HOST_HOME / ".claude" / CLAUDE_AUTH_FILE
+    try:
+        raw = json.loads(src.read_text())
+    except FileNotFoundError:
+        return None, "the platform account is not signed in on this host"
+    except (OSError, ValueError) as e:  # noqa: BLE001
+        return None, f"the platform credentials are unreadable: {e}"
+    if not isinstance(raw, dict):
+        return None, "the platform credentials are malformed"
+
+    out = {k: raw[k] for k in CLAUDE_AUTH_KEYS if k in raw}
+    grant = out.get("claudeAiOauth")
+    if not isinstance(grant, dict) or not grant.get("accessToken"):
+        return None, "the platform account is not signed in on this host"
+    return out, ""
+
+
+def _claude_expiry() -> int | None:
+    creds, _ = _claude_credentials()
+    if not creds:
+        return None
+    v = creds["claudeAiOauth"].get("refreshTokenExpiresAt")
+    return int(v) if isinstance(v, (int, float)) else None
+
+
+# Written into the workspace so Claude Code starts straight into a prompt.
+# SYNTHESISED, not copied: the host's own ~/.claude.json is 59 kB of the
+# operator's history - every repository they have opened, their account record,
+# their feature flags - and none of it is needed to be signed in.
+CLAUDE_MIN_CONFIG = {"hasCompletedOnboarding": True}
+
+
+def _claude_status(project: str) -> dict:
+    rc, out, _ = _run_split(
+        ["incus", "exec", "ws", "--project", project, "--", "bash", "-lc",
+         "v=$(su - dev -c 'claude --version' 2>/dev/null | head -1); "
+         "printf 'version=%s\\nlinked=%s\\n' "
+         "  \"${v:-}\" "
+         "  \"$([ -s /home/dev/.claude/.credentials.json ] && echo yes || echo no)\""],
+        timeout=120)
+    info = dict(ln.split("=", 1) for ln in (out or "").splitlines() if "=" in ln)
+    version = (info.get("version") or "").strip()
+    return {"installed": bool(version), "version": version or None,
+            "linked": info.get("linked", "no").strip() == "yes"}
+
+
+def _verb_ai_claude(project: str, req: dict) -> dict:
+    action = req.get("action")
+    if action not in ("status", "install", "unlink"):
+        return {"ok": False, "error": "action must be status, install or unlink"}
+
+    if action == "status":
+        st = _claude_status(project)
+        creds, why = _claude_credentials()
+        return {"ok": True, **st, "available": creds is not None,
+                "unavailable_reason": why or None,
+                "expires_at": _claude_expiry()}
+
+    if action == "unlink":
+        ok, out = _run(["incus", "exec", "ws", "--project", project, "--", "bash", "-lc",
+                        "rm -f /home/dev/.claude/.credentials.json"], timeout=120)
+        return {"ok": ok, "output": (out or "")[-300:], **_claude_status(project)}
+
+    # --- install -----------------------------------------------------------
+    creds, why = _claude_credentials()
+    if creds is None:
+        return {"ok": False, "error": why}
+
+    st = _claude_status(project)
+    if not st["installed"]:
+        # The golden image installs it already; this covers machines built
+        # before that, and any customer who removed it.
+        ok, out = _run(["incus", "exec", "ws", "--project", project, "--", "bash", "-lc",
+                        "command -v npm >/dev/null || exit 90; "
+                        "npm install -g --no-fund --no-audit @anthropic-ai/claude-code"],
+                       timeout=900)
+        if not ok:
+            return {"ok": False, "error": "install failed",
+                    "output": (out or "")[-800:]}
+
+    # Written through stdin, so no token ever appears in a command line or in
+    # the provisioner's own log. Created 0600 under a 0700 directory before
+    # anything is written into it.
+    ok, out = _run(["incus", "exec", "ws", "--project", project, "--", "bash", "-lc",
+                    "install -d -m 0700 -o dev -g dev /home/dev/.claude && "
+                    "install -m 0600 -o dev -g dev /dev/null "
+                    "  /home/dev/.claude/.credentials.json && "
+                    "cat > /home/dev/.claude/.credentials.json"],
+                   timeout=120, stdin_text=json.dumps(creds))
+    if not ok:
+        return {"ok": False, "error": "could not write credentials",
+                "output": (out or "")[-300:]}
+
+    # Only if absent: the customer may have their own settings by now and this
+    # is not important enough to overwrite them.
+    _run(["incus", "exec", "ws", "--project", project, "--", "bash", "-lc",
+          "[ -e /home/dev/.claude.json ] && exit 0; "
+          "install -m 0600 -o dev -g dev /dev/null /home/dev/.claude.json && "
+          "cat > /home/dev/.claude.json"],
+         timeout=120, stdin_text=json.dumps(CLAUDE_MIN_CONFIG))
+
+    st = _claude_status(project)
+    return {"ok": st["linked"], **st, "available": True,
+            "expires_at": _claude_expiry()}
+
+
 def handle(req: dict) -> dict:
     verb = req.get("verb")
     if verb not in VERBS:
@@ -366,6 +546,14 @@ def handle(req: dict) -> dict:
         ])
         if ok:
             _set_project_access(f"ws-{idx}", grant=True)
+            # ws-create leaves the instance running, so the apt configuration
+            # can be applied straight away. A failure here is NOT fatal: the
+            # customer has a working machine, just one where `apt install
+            # firefox` still misbehaves, and that is repairable later.
+            fx_ok, fx_out = _apply_apt_fixups(f"ws-{idx}")
+            if not fx_ok:
+                log.warning("apt fixups failed for ws-%s: %s", idx, fx_out[-300:])
+            return {"ok": True, "output": out, "tier": t, "apt_fixups": fx_ok}
         return {"ok": ok, "output": out, "tier": t}
 
     if verb == "destroy":
@@ -392,6 +580,13 @@ def handle(req: dict) -> dict:
         # every change, so this is idempotent and self-healing rather than a
         # sequence of deltas that can drift.
         return _sync_port_rules(req.get("mappings") or [])
+
+    if verb == "ai_claude":
+        return _verb_ai_claude(project, req)
+
+    if verb == "apt_repair":
+        ok, out = _apply_apt_fixups(project)
+        return {"ok": ok, "output": out}
 
     if verb == "install_packages":
         # Independent validation. The API validates too, but this side runs as

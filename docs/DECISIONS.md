@@ -273,3 +273,173 @@ They are now independent:
 The help text names where the public key lives on Linux, macOS and Windows,
 because "paste your public key" assumes knowledge most people do not have, and
 the failure mode of guessing is pasting a PRIVATE key into a web form.
+
+## `apt install firefox` and why snaps can never work here
+
+Ubuntu's `firefox` package is a 77 kB transitional stub whose only job is to
+install the firefox **snap**. Inside an unprivileged container the snap install
+hook dies with:
+
+```
+error: cannot perform the following tasks:
+- Run install hook of "firefox" snap if present
+  (run hook "install": cannot fstatat canonical snap directory: Permission denied)
+dpkg: error processing archive .../firefox_1%3a1snap1-0ubuntu5_amd64.deb (--unpack)
+```
+
+snap-confine needs mount and AppArmor privileges the container does not have,
+and must never be given - they are the isolation the product rests on. So this
+is not a bug to fix in snapd; snaps are simply unavailable in this design.
+
+The failure is worse than it looks. dpkg is left mid-transaction, so the
+customer's *next* apt command fails too and the machine appears broken rather
+than the package unavailable.
+
+`image/apt-fixups.sh` replaces the stub with **Mozilla's own APT repository**,
+which ships Firefox as a real `.deb`. Two details that are easy to get wrong:
+
+* **The pin is mandatory, and 1000 is the number.** Ubuntu's stub is version
+  `1:1snap1-0ubuntu5` - the *epoch* sorts it above any plain Mozilla version, so
+  a priority of 990 looks reasonable and changes nothing. Only `>= 1000`, which
+  apt documents as "install even if this is a downgrade", actually wins.
+* **The wreckage is cleared first.** A machine that already hit the bug needs
+  `dpkg --remove --force-remove-reinstreq firefox` and `dpkg --configure -a`
+  before anything else, or repairing forward leaves it just as stuck.
+
+snapd itself is purged: it cannot function, it runs two daemons a 1 GiB machine
+cannot spare, and leaving it installed makes snap-backed packages look available
+right up until they fail.
+
+The same file is the single source of truth for both paths - the golden image
+runs it at build time, and the provisioner runs it inside an existing machine
+(`apt_repair`) so workspaces created before it existed are repaired without an
+image rebuild. That made `image/` a **runtime** dependency of the control plane,
+so `host/60-control-plane.sh` now deploys it to `/opt/mmd` alongside `control/`.
+
+Measured: Firefox 154 installs in ~40 s, costs 314 MB, and renders a page
+headlessly inside the container.
+
+## Claude Code sign-in: an allowlist, not a copy
+
+Workspaces are sold with the coding agents already signed in, using the
+platform's own subscription. That means the provisioner reads out of the
+operator's home directory - and `~/.claude` also holds every repository they
+have opened, every conversation, every plan, and a 59 kB `~/.claude.json` that
+is almost entirely account record and history.
+
+So nothing is copied. `_claude_credentials()` opens exactly one file,
+`.credentials.json`, keeps exactly one key, `claudeAiOauth`, and **re-serialises
+it into a fresh document**. Anything that file gains in a future release -
+telemetry ids, machine identifiers, session pointers - is dropped by
+construction rather than by someone remembering to add it to a blocklist. The
+workspace's `~/.claude.json` is *generated* (`{"hasCompletedOnboarding": true}`),
+never copied, purely to skip the first-run wizard.
+
+The boundary is enforced at three levels, on purpose:
+
+1. **systemd.** The provisioner keeps `ProtectHome=yes`, so `/root` is empty to
+   it. One directory is bound back in **read-only** at
+   `/var/lib/mmd/host-claude/.claude`. It cannot write to the operator's home
+   at all, and can see nothing else under it.
+2. **Code.** One filename, one key, re-serialised.
+3. **Tests.** `tests/test_claude_auth.py` asserts the allowlist, and monkeypatches
+   `Path.read_text` to assert that the list of files actually opened is exactly
+   `[".credentials.json"]` - not merely that the output looks right.
+
+The credential travels to the workspace **on stdin**, never in argv, where it
+would be visible in `ps` to every process on the host. It lands `0600 dev:dev`
+under a `0700` directory.
+
+Why the whole `~/.claude` directory is bound in rather than the single file:
+Claude Code rewrites credentials atomically (write, then rename), and a bind
+mount of a *file* would keep pointing at the replaced inode and serve an expired
+token forever. The narrowing therefore happens in code, where it is testable.
+
+Two consequences worth stating plainly, both surfaced in the UI:
+
+* **It is the platform's account, not the customer's.** Anyone with root in
+  their own workspace - which every customer has, by design - can read the token
+  and use it elsewhere. There is no way to hand a container a credential and
+  also withhold it. The AI page says so, and fair-use is a policy control, not a
+  technical one.
+* **Tokens rotate.** A refresh in one place eventually invalidates copies
+  elsewhere, so the page offers "تازه‌سازی ورود" rather than pretending the
+  sign-in is permanent.
+
+## The desktop password is required every time
+
+It used to be required only on the first enable, then reused. That hands the
+customer a desktop on a public port guarded by a credential they may not
+remember, and - if the machine ever changed hands - one a previous holder still
+knows. Retyping eight characters is cheap; a password nobody can account for is
+not.
+
+`RdpRequest.password` deliberately carries **no** `min_length`: Pydantic would
+answer a short password with a 422 whose body the Persian interface cannot
+translate, so the handler checks the length itself and returns
+`rdp_password_short`.
+
+## A reservation that only exists once you look at it is not a reservation
+
+The Connections page promises SSH and RDP ports reserved from the moment the
+machine exists. `reserve_service_ports()` was written for exactly that - and
+never called from anywhere. Workspaces provisioned through the admin approval
+flow got no rows, so both tabs rendered a blank address. It went unnoticed
+because the first workspace had been given its ports by hand during testing.
+
+Now held in three places, because the invariant matters more than any one path:
+
+* at **provision**, so the addresses exist with the machine;
+* in the **worker**, every fifteen minutes, so a machine created before this
+  existed is repaired with nobody present;
+* on **read** in `/api/workspace/services`, so the page is never blank.
+
+All three are idempotent - an existing reservation is returned, never replaced -
+because a customer may already have saved the address in an SSH config.
+
+## A slow stop is not a failure
+
+`/1.0/operations/{id}/wait?timeout=90` is a **long poll**: Incus holds the
+connection open. The httpx client's default read timeout was 30 s, so a machine
+that legitimately took longer to stop - one with an RDP session and a few SSH
+logins holding processes open - raised `ReadTimeout` while Incus went on to
+complete the stop successfully. The API then recorded a failure that had not
+happened and parked the workspace in `ERROR`.
+
+`_wait()` now sets a per-request read timeout of `timeout + 15`.
+
+The second half of the bug was worse: `reconcile_once()` only looked at `ON` and
+`OFF`, so a workspace in `ERROR` (or `STARTING`/`STOPPING`) was never examined
+again. The customer saw a permanently broken machine and had no control that
+could fix it. The reconciler now includes those states and adopts whatever Incus
+reports, clearing the error - a transient failure heals within a tick.
+
+Observed in production on a live workspace, which is how it was found.
+
+## Support tickets
+
+A conversation, not a form. Two status transitions are automatic because leaving
+them manual loses messages: a **customer** message always moves a ticket back to
+`open` (including reopening a closed one), and a **staff** message moves it to
+`answered`. Everything else is the operator's to set.
+
+Answering a *closed* ticket leaves it closed - the operator closed it
+deliberately, and a follow-up note should not silently requeue it. A customer
+writing to a closed ticket does reopen it, because the alternative is refusing
+the message and pushing them into a duplicate that has lost all its context.
+
+`from_staff` is recorded at write time rather than derived from the author's
+current role: a customer later promoted to admin must not have their old
+questions retroactively become staff answers.
+
+Unread marks are per side and are stamped with the **last message's timestamp**,
+not the wall clock. Marking with `now()` leaves the result depending on clock
+precision - and with SQL-side `now()` on one side and Python's on the other, a
+reply written in the same second as a read could never show as unread. That is
+also why `mmd/tickets.py` normalises timezone awareness before comparing:
+PostgreSQL returns aware timestamps and SQLite naive ones, and comparing the two
+raises.
+
+Reading someone else's ticket returns **404, not 403** - a 403 confirms the
+ticket exists, which is enough to enumerate how many other customers there are
+and when they wrote.

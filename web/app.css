@@ -372,3 +372,47 @@ tbody tr[data-row]:hover a{color:var(--brand)}
    a leading dot to the end, so ".cache" reads as "cache." - wrong, and
    confusing next to a real file called "cache." */
 tbody tr[data-row] a.ltr{unicode-bidi:isolate;direction:ltr}
+
+/* Marks a form field the server will refuse without. */
+.req { color: var(--bad); font-weight: 700; }
+
+/* Two-column "what moves / what never moves" panel on the AI page. */
+.copybox{border:1px solid var(--border);border-radius:10px;padding:14px 16px;
+  background:var(--surface-2)}
+.copybox-h{display:flex;align-items:center;gap:7px;font-weight:700;font-size:13.5px;
+  margin-bottom:8px}
+.copybox-h svg{width:16px;height:16px;flex:none}
+.copybox ul{margin:0;padding-inline-start:20px;color:var(--ink-2);font-size:13.5px;
+  line-height:1.9}
+.copybox.ok{border-color:var(--ok)} .copybox.ok .copybox-h{color:var(--ok)}
+.copybox.bad{border-color:var(--bad)} .copybox.bad .copybox-h{color:var(--bad)}
+
+/* --- support tickets ---------------------------------------------------- */
+/* Conversation transcript. `mine` flips the bubble to the reading side, which
+   under RTL is the right - so `margin-inline-start:auto` rather than left. */
+.chat{display:flex;flex-direction:column;gap:14px;max-height:56vh;overflow-y:auto;
+  padding:4px 2px}
+.msg{max-width:min(78%,620px)}
+.msg.mine{margin-inline-start:auto;text-align:start}
+.msg-who{font-size:12px;font-weight:700;color:var(--ink-3);margin-bottom:4px}
+.msg .bubble{background:var(--surface-2);border:1px solid var(--border);
+  border-radius:12px;padding:11px 14px;font-size:14px;line-height:1.85;
+  white-space:pre-wrap;overflow-wrap:anywhere}
+.msg.mine .bubble{background:var(--brand-soft);border-color:var(--brand)}
+.msg-at{margin-top:4px}
+
+/* Status filter chips on the staff queue. */
+.fchips{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:18px}
+.fchip{display:inline-flex;align-items:center;gap:6px;padding:6px 13px;
+  border:1px solid var(--border);border-radius:999px;background:var(--surface);
+  font-size:13px;color:var(--ink-2)}
+.fchip:hover{text-decoration:none;color:var(--ink)}
+.fchip.active{border-color:var(--brand);color:var(--brand);background:var(--brand-soft)}
+
+tr.clickable{cursor:pointer}
+tr.clickable:hover{background:var(--surface-2)}
+
+/* Unread counter on a nav item. */
+.navbadge{display:inline-block;min-width:18px;padding:0 5px;margin-inline-start:6px;
+  border-radius:999px;background:var(--bad);color:#fff;font-size:11px;
+  font-weight:700;line-height:18px;text-align:center}

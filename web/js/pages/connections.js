@@ -177,7 +177,10 @@ function renderSsh(head, d) {
 
 /* ---- rdp ---- */
 function renderRdp(head, d) {
-  const needsPassword = !d.rdp.installed;
+  // The password is required on every switch-on, not only the first. The server
+  // enforces it; this mirrors the rule so the customer is told before the
+  // round trip rather than after it.
+  const firstTime = !d.rdp.installed;
   render(`${head}
     <div class="card">
       <div class="between" style="margin-bottom:14px">
@@ -192,10 +195,12 @@ function renderRdp(head, d) {
       ${d.rdp.memory_ok ? "" : note("warn", t("rdp.needmem"))}
 
       ${d.rdp.enabled ? "" : `
-        <label for="rdppw">${needsPassword ? t("rdp.password") : t("rdp.changepw")}</label>
+        <label for="rdppw">${t("rdp.password")} <span class="req">*</span></label>
         <input id="rdppw" type="password" class="ltr" dir="ltr" minlength="8"
-               autocomplete="new-password" style="max-width:360px">
-        <p class="tiny dim" style="margin:6px 0 14px">${t("rdp.password.hint")}</p>`}
+               required autocomplete="new-password" style="max-width:360px">
+        <p class="tiny dim" style="margin:6px 0 4px">${t("rdp.password.hint")}</p>
+        <p class="tiny dim" style="margin:0 0 14px">${
+          firstTime ? t("rdp.password.required") : t("rdp.password.again")}</p>`}
 
       <div class="btn-row">
         <button class="btn ${d.rdp.enabled ? "danger" : "primary"}" id="rdp-toggle"
@@ -211,17 +216,18 @@ function renderRdp(head, d) {
 
   $("#rdp-toggle").onclick = async () => {
     const b = $("#rdp-toggle"), enabling = !d.rdp.enabled;
-    const pw = $("#rdppw")?.value || null;
-    if (enabling && needsPassword && (!pw || pw.length < 8)) {
-      $("#rdp-msg").innerHTML = note("bad", t("rdp.password.hint"));
+    const pw = $("#rdppw")?.value || "";
+    if (enabling && pw.length < 8) {
+      $("#rdp-msg").innerHTML = note("bad", t("rdp.password.short"));
+      $("#rdppw")?.focus();
       return;
     }
     b.disabled = true;
     b.innerHTML = `<span class="spinner"></span>${
-      enabling && needsPassword ? t("rdp.installing") : t("conn.working")}`;
+      enabling && firstTime ? t("rdp.installing") : t("conn.working")}`;
     try {
       await post("/api/workspace/services/rdp",
-                 enabling ? { enabled: true, password: pw || undefined } : { enabled: false });
+                 enabling ? { enabled: true, password: pw } : { enabled: false });
       toast(enabling ? t("rdp.enabled") : t("rdp.disabled"), "ok");
     } catch (err) { $("#rdp-msg").innerHTML = note("bad", esc(err.message)); }
     connectionsPage({ tab: "rdp" });

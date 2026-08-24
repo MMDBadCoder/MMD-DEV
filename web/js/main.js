@@ -1,6 +1,6 @@
 /* MMD-DEV console shell: session, chrome, routes. */
 import { get, post } from "./api.js";
-import { $, icon, fmtMoney, toast, currentTheme, toggleTheme } from "./ui.js";
+import { $, icon, fmtMoney, fmtFa, toast, currentTheme, toggleTheme } from "./ui.js";
 import { t } from "./i18n.js";
 import { route, setGuard, setNotFound, startRouter, navigate, currentPath } from "./router.js";
 
@@ -16,6 +16,9 @@ import { billingPage } from "./pages/billing.js";
 import { activityPage } from "./pages/activity.js";
 import { securityPage } from "./pages/security.js";
 import { adminPage } from "./pages/admin.js";
+import { aiPage } from "./pages/ai.js";
+import { supportPage } from "./pages/support.js";
+import { adminTicketsPage } from "./pages/admintickets.js";
 
 export const state = { me: null };
 
@@ -36,21 +39,31 @@ const NAV = [
   { href: "/console/files", key: "nav.files", ic: "folder" },
   { href: "/console/resources", key: "nav.resources", ic: "sliders" },
   { href: "/console/tools", key: "nav.tools", ic: "box" },
+  { href: "/console/ai", key: "nav.ai", ic: "sparkle" },
   { href: "/console/ports", key: "nav.ports", ic: "plug" },
   { href: "/console/billing", key: "nav.billing", ic: "card" },
   { href: "/console/activity", key: "nav.activity", ic: "clock" },
   { href: "/console/security", key: "nav.security", ic: "shield" },
+  { href: "/console/support", key: "nav.support", ic: "chat" },
 ];
 
 function chrome(bodyHtml) {
   const me = state.me;
   const path = currentPath();
   const low = me && me.credits < 1000;
+  // Unread counters ride on the nav item they belong to, so an answer is
+  // visible from any page rather than only from the support list.
+  const badge = (key) => {
+    const n = key === "nav.support" ? (state.me?.unread_tickets || 0) : 0;
+    return n ? `<span class="navbadge">${fmtFa(n)}</span>` : "";
+  };
   const nav = NAV.map((n) => `<a href="${n.href}" class="${
       path === n.href || (n.href !== "/console" && path.startsWith(n.href + "/")) ? "active" : ""}">
-      ${icon[n.ic]}<span>${t(n.key)}</span></a>`).join("")
+      ${icon[n.ic]}<span>${t(n.key)}</span>${badge(n.key)}</a>`).join("")
     + (me?.is_admin ? `<a href="/console/admin" class="${path.startsWith("/console/admin") ? "active" : ""}">
-      ${icon.users}<span>${t("nav.admin")}</span></a>` : "");
+      ${icon.users}<span>${t("nav.admin")}</span>${
+        me.unread_staff_tickets ? `<span class="navbadge">${fmtFa(me.unread_staff_tickets)}</span>` : ""
+      }</a>` : "");
 
   return `
     <header class="header">
@@ -104,7 +117,13 @@ route("/console/ports", { title: "پورت‌ها", view: portsPage });
 route("/console/billing", { title: "صورتحساب", view: billingPage });
 route("/console/activity", { title: "فعالیت‌ها", view: activityPage });
 route("/console/security", { title: "امنیت", view: securityPage });
+route("/console/ai", { title: "هوش مصنوعی", view: aiPage });
+route("/console/ai/:tab", { title: "هوش مصنوعی", view: aiPage });
+route("/console/support", { title: "پشتیبانی", view: supportPage });
+route("/console/support/:id", { title: "پشتیبانی", view: supportPage });
 route("/console/admin", { title: "مدیریت", view: adminPage, admin: true });
+route("/console/admin/tickets", { title: "تیکت‌ها", view: adminTicketsPage, admin: true });
+route("/console/admin/tickets/:id", { title: "تیکت‌ها", view: adminTicketsPage, admin: true });
 
 setNotFound(() => {
   if (!state.me) return navigate("/", { replace: true });

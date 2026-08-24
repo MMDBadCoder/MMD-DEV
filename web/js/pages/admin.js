@@ -5,9 +5,9 @@ import { t, CURRENCY } from "../i18n.js";
 import { render, state } from "../main.js";
 
 export async function adminPage() {
-  const [users, cap, settings, presets] = await Promise.all([
+  const [users, cap, settings, presets, tickets] = await Promise.all([
     get("/api/admin/users"), get("/api/admin/capacity"),
-    get("/api/admin/settings"), get("/api/presets"),
+    get("/api/admin/settings"), get("/api/presets"), get("/api/admin/tickets"),
   ]);
 
   const pct = (a, b) => Math.min(100, Math.round(100 * a / Math.max(b, 0.001)));
@@ -44,6 +44,16 @@ export async function adminPage() {
       <p class="muted small" style="margin:0">${t("adm.sub")}</p></div>
 
     ${pending.length ? note("warn", t("adm.pending", fmtNum(pending.length))) : ""}
+
+    <div class="card between">
+      <div><h3 style="margin:0">${t("tk.admin.title")}</h3>
+        <p class="muted small" style="margin:4px 0 0">${
+          tickets.counts.open || tickets.counts.in_progress
+            ? t("adm.tickets.waiting", fmtNum((tickets.counts.open || 0)
+                                            + (tickets.counts.in_progress || 0)))
+            : t("adm.tickets.clear")}</p></div>
+      <a class="btn primary" href="/console/admin/tickets">${icon.chat}${t("adm.tickets.open")}</a>
+    </div>
 
     <div class="card">
       <h3>${t("adm.capacity")}</h3>

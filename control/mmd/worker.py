@@ -23,13 +23,15 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 
+from . import ports as portalloc
 from . import service as svc
 from .config import CONFIG
 from .db import SessionLocal, init_db
 from .incus.client import IncusClient, IncusConfig, IncusError
 from .incus.metrics import MetricsClient
 from .billing.pricing import MICRO
-from .models import UsageSample, Workspace, WorkspaceState
+from .models import (ExposedPort, PortKind, UsageSample, Workspace,
+                     WorkspaceState)
 
 UTC = timezone.utc
 log = logging.getLogger("mmd.worker")
@@ -202,18 +204,77 @@ async def lifecycle_once() -> None:
         await client.aclose()
 
 
+def reserve_service_ports_once() -> None:
+    """Ensure every workspace holds its two permanent addresses.
+
+    The Connections page promises an SSH and an RDP port reserved from the
+    moment the machine exists. Doing this only when someone opens the page
+    would make the reservation a consequence of looking at it - and a machine
+    provisioned before this existed would sit with blank addresses until its
+    owner happened to visit. The API self-heals too; this is what makes the
+    invariant true without anyone present.
+
+    Idempotent: reserve_service_ports returns an existing reservation rather
+    than replacing it, so an address a customer has already written down is
+    never moved.
+    """
+    with SessionLocal() as db:
+        fixed = []
+        for ws in db.scalars(select(Workspace).where(
+                Workspace.state.notin_([WorkspaceState.DELETED,
+                                        WorkspaceState.DELETING]))):
+            have = db.scalars(select(ExposedPort).where(
+                ExposedPort.workspace_id == ws.id,
+                ExposedPort.kind.in_([PortKind.SSH, PortKind.RDP]))).all()
+            if len(have) < 2:
+                portalloc.reserve_service_ports(db, ws.id)
+                db.commit()
+                fixed.append(ws.incus_project)
+        if fixed:
+            log.info("reserved service ports for %s", ", ".join(fixed))
+            # An address nothing answers on is not a reservation.
+            svc.sync_published_ports(db)
+
+
 async def reconcile_once() -> None:
     """Make the database and Incus agree about what is running."""
     client = _incus()
     try:
         with SessionLocal() as db:
+            # ERROR, STARTING and STOPPING are included deliberately. A power
+            # change that raised - a timeout on a slow stop, say - leaves the
+            # workspace parked in one of them, and reconciling only ON and OFF
+            # meant nothing ever moved it back: the customer saw a permanently
+            # broken machine and had no control that could fix it. Incus knows
+            # what is actually running; that is the authority worth trusting
+            # here, and a transient failure should heal itself within a tick.
             for ws in db.scalars(select(Workspace).where(
-                    Workspace.state.in_([WorkspaceState.ON, WorkspaceState.OFF]))):
+                    Workspace.state.in_([WorkspaceState.ON, WorkspaceState.OFF,
+                                         WorkspaceState.ERROR,
+                                         WorkspaceState.STARTING,
+                                         WorkspaceState.STOPPING]))):
                 try:
                     st = await client.state(ws.instance, ws.incus_project)
                 except IncusError:
                     continue
                 actually_on = st.get("status") == "Running"
+
+                if ws.state in (WorkspaceState.ERROR, WorkspaceState.STARTING,
+                                WorkspaceState.STOPPING):
+                    log.info("%s was %s; Incus reports %s - adopting that",
+                             ws.incus_project, ws.state.value,
+                             "running" if actually_on else "stopped")
+                    ws.state = WorkspaceState.ON if actually_on else WorkspaceState.OFF
+                    ws.error = None
+                    # Billing follows the observed state, not the stuck one: a
+                    # machine recorded as running must have a period to bill
+                    # from, and a stopped one must not keep accruing.
+                    if actually_on and ws.period_start is None:
+                        ws.period_start = svc.now()
+                    if not actually_on:
+                        ws.period_start = None
+                    db.commit()
+                    continue
                 if actually_on and ws.state == WorkspaceState.OFF:
                     # Running but the ledger says off - it is being billed as
                     # off. Stop it rather than give away compute.
@@ -246,6 +307,7 @@ async def main() -> None:
     init_db()
     log.info("worker started")
     tick = 0
+    reserve_service_ports_once()
     await reconcile_once()
     while True:
         try:
@@ -255,6 +317,7 @@ async def main() -> None:
                 await lifecycle_once()
             if tick % 15 == 0:
                 await reconcile_once()
+                reserve_service_ports_once()
         except Exception:  # noqa: BLE001
             log.exception("worker tick failed")
         tick += 1

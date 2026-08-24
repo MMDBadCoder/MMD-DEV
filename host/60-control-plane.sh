@@ -97,8 +97,14 @@ fi
 
 # --- code + units --------------------------------------------------------
 install -d -m 0755 /opt/mmd
-rm -rf /opt/mmd/control /opt/mmd/workspace /opt/mmd/host /opt/mmd/web
-cp -r "$REPO/control" "$REPO/workspace" "$REPO/host" "$REPO/web" /opt/mmd/
+# `image` is needed at RUNTIME, not just at build time: the provisioner runs
+# image/apt-fixups.sh inside a workspace to repair its apt configuration, and
+# resolves that path relative to its own installed location.
+rm -rf /opt/mmd/control /opt/mmd/workspace /opt/mmd/host /opt/mmd/web /opt/mmd/image
+cp -r "$REPO/control" "$REPO/workspace" "$REPO/host" "$REPO/web" "$REPO/image" /opt/mmd/
+# Mount point for the read-only view of the operator's Claude Code sign-in.
+# systemd will not create a missing bind-mount destination for us.
+install -d -m 0700 /var/lib/mmd/host-claude/.claude
 install -m 0644 "$REPO/deploy/mmd-provisioner.service" /etc/systemd/system/
 install -m 0644 "$REPO/deploy/mmd-api.service" /etc/systemd/system/
 install -m 0644 "$REPO/deploy/mmd-worker.service" /etc/systemd/system/

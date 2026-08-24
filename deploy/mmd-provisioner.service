@@ -20,6 +20,26 @@ Group=mmd
 # "golden image not found". Point it at the (writable) runtime directory
 # instead of giving up ProtectHome.
 Environment=INCUS_CONF=/run/mmd/incus-conf
+
+# --- the platform's Claude Code sign-in ------------------------------------
+# Workspaces ship with Claude Code already signed in, so the provisioner has to
+# read the operator's OAuth grant. ProtectHome=yes hides /root entirely, which
+# is the correct default - so rather than relax it, one directory is bound back
+# in READ-ONLY at a path that exists only for this purpose. The provisioner can
+# therefore never write to the operator's home, and nothing else under /root is
+# visible to it at all.
+#
+# The whole ~/.claude directory rather than the single credentials file: Claude
+# Code rewrites credentials atomically (new file, then rename), and a bind mount
+# of a *file* would keep pointing at the replaced inode and serve an expired
+# token forever. What may be read out of it is narrowed in code instead - see
+# CLAUDE_AUTH_FILE in provisioner.py, and tests/test_claude_auth.py, which
+# asserts that exactly one filename is ever opened.
+#
+# Change both lines together if the operator account is not root.
+BindReadOnlyPaths=/root/.claude:/var/lib/mmd/host-claude/.claude
+Environment=MMD_CLAUDE_HOST_HOME=/var/lib/mmd/host-claude
+
 ExecStart=/usr/bin/python3 /opt/mmd/control/provisioner/provisioner.py
 Restart=on-failure
 RestartSec=3

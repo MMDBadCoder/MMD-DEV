@@ -36,9 +36,11 @@ from .db import get_session, init_db
 from .incus.client import IncusClient, IncusConfig, IncusError
 from .incus.execws import open_exec
 from .models import (AuditLog, CreditAccount, CreditTransaction, ExposedPort,
-                     PortKind, Setting, SshKey, TxKind, UsageSample, User,
-                     UserStatus, Workspace, WorkspaceState)
+                     PortKind, Setting, SshKey, Ticket, TicketMessage,
+                     TicketStatus, TxKind, UsageSample, User, UserStatus,
+                     Workspace, WorkspaceState)
 from .security import hash_password, verify_password
+from .tickets import is_unread
 
 log = logging.getLogger("mmd.api")
 app = FastAPI(title="MMD-DEV", docs_url=None, redoc_url=None)
@@ -137,7 +139,27 @@ class SshToggle(BaseModel):
 
 class RdpRequest(BaseModel):
     enabled: bool
-    password: str | None = Field(default=None, min_length=8, max_length=128)
+    # No min_length here on purpose. Pydantic would reject a short password with
+    # a 422 whose body the UI cannot translate; the handler checks the length
+    # itself and answers with a proper error code instead.
+    password: str | None = Field(default=None, max_length=128)
+
+
+class TicketCreate(BaseModel):
+    subject: str = Field(min_length=3, max_length=200)
+    body: str = Field(min_length=1, max_length=4000)
+
+
+class TicketReply(BaseModel):
+    body: str = Field(min_length=1, max_length=4000)
+
+
+class TicketStatusChange(BaseModel):
+    status: str = Field(pattern="^(open|in_progress|answered|closed)$")
+
+
+class AiAction(BaseModel):
+    action: str = Field(pattern="^(install|unlink)$")
 
 
 class SshKeyAdd(BaseModel):
@@ -225,7 +247,28 @@ def me(user: User = Depends(current_user), db: Session = Depends(get_session)) -
         "credits": (acct.balance_micro / MICRO) if acct else 0.0,
         "has_workspace": ws is not None,
         "member_since": user.created_at.isoformat() if user.created_at else None,
+        # Nav badges. A support system nobody notices a reply in is a support
+        # system that looks like it never answers.
+        "unread_tickets": _unread_count(db, user, staff=False),
+        "unread_staff_tickets": (_unread_count(db, user, staff=True)
+                                 if user.is_admin else 0),
     }
+
+
+def _unread_count(db: Session, user: User, *, staff: bool) -> int:
+    q = select(Ticket)
+    if not staff:
+        q = q.where(Ticket.user_id == user.id)
+    else:
+        q = q.where(Ticket.status != TicketStatus.CLOSED)
+    n = 0
+    for tk in db.scalars(q):
+        last = tk.messages[-1] if tk.messages else None
+        if is_unread(last.from_staff if last else None,
+                     last.created_at if last else None,
+                     tk.staff_read_at if staff else tk.user_read_at, staff=staff):
+            n += 1
+    return n
 
 
 # --- sizes ---------------------------------------------------------------
@@ -569,11 +612,33 @@ def delete_port(port_id: int, user: User = Depends(current_user),
     return {"ok": True}
 
 
-# --- connections (SSH, and RDP later) ------------------------------------
+# --- connections ----------------------------------------------------------
 def _service_ports(db: Session, ws: Workspace) -> dict[str, int | None]:
-    rows = db.scalars(select(ExposedPort).where(
+    """The workspace's two permanent addresses, allocating them if missing.
+
+    The promise made on the Connections page is that these ports are reserved
+    from the moment the machine exists and never change - so the customer can
+    save an SSH config or an RDP shortcut before either service has ever been
+    switched on. That only holds if the rows exist, and a workspace provisioned
+    before this was wired up has none: both tabs then render an empty address,
+    which reads as a broken product rather than an unfinished one.
+
+    So this allocates on read. It is idempotent - portalloc.reserve_service_ports
+    returns an existing reservation rather than replacing it - and it costs one
+    query on the common path where both rows are already there.
+    """
+    rows = list(db.scalars(select(ExposedPort).where(
         ExposedPort.workspace_id == ws.id,
-        ExposedPort.kind.in_([PortKind.SSH, PortKind.RDP])))
+        ExposedPort.kind.in_([PortKind.SSH, PortKind.RDP]))))
+    if len(rows) < 2:
+        portalloc.reserve_service_ports(db, ws.id)
+        db.commit()
+        # The reservation is only half real until the host firewall knows about
+        # it; without this the customer sees an address that nothing answers on.
+        svc.sync_published_ports(db)
+        rows = list(db.scalars(select(ExposedPort).where(
+            ExposedPort.workspace_id == ws.id,
+            ExposedPort.kind.in_([PortKind.SSH, PortKind.RDP]))))
     out: dict[str, int | None] = {"ssh": None, "rdp": None}
     for r in rows:
         out[r.kind.value] = r.external_port
@@ -723,14 +788,24 @@ def set_rdp(body: RdpRequest, user: User = Depends(current_user),
                  min_memory_mb=2048, current_memory_mb=ws.mem_mib)
         # xrdp authenticates through PAM, and the image creates `dev` with no
         # password at all - so without one set, nobody can ever log in.
-        if not body.password and not ws.rdp_installed:
+        #
+        # Required on EVERY enable, not only the first. Letting a later enable
+        # silently reuse whatever was set during an earlier session hands the
+        # customer a desktop on a public port guarded by a credential they may
+        # no longer remember - and, if the machine changed hands, one a
+        # previous holder still knows. Retyping it is cheap; a password nobody
+        # can account for is not.
+        if not body.password:
             fail(400, "rdp_needs_password",
-                 "Set a desktop password before switching the desktop on.")
+                 "Choose a desktop password before switching the desktop on.")
+        if len(body.password) < 8:
+            fail(400, "rdp_password_short",
+                 "The desktop password must be at least 8 characters.",
+                 min_length=8)
 
         payload = {"verb": "service_rdp", "idx": ws.idx, "action": "enable",
-                   "install": not ws.rdp_installed}
-        if body.password:
-            payload["password"] = body.password
+                   "install": not ws.rdp_installed,
+                   "password": body.password}
         resp = svc.call_provisioner(payload, timeout=1800)
         if not resp.get("ok"):
             log.error("rdp enable failed for %s: %s", ws.incus_project, resp)
@@ -752,6 +827,62 @@ def set_rdp(body: RdpRequest, user: User = Depends(current_user),
     db.commit()
     svc.audit(db, user.id, "rdp_disabled", ws.incus_project)
     return {"ok": True, "enabled": False}
+
+
+# --- AI tools -------------------------------------------------------------
+# Workspaces are sold with the coding agents already signed in, against the
+# platform's own Claude subscription. The provisioner does the copying and is
+# the component that decides what may be copied; this half only decides who may
+# ask. See CLAUDE_AUTH_FILE / CLAUDE_NEVER_COPY in provisioner.py.
+def _ai_state(ws: Workspace) -> dict:
+    if ws.state != WorkspaceState.ON:
+        # Nothing can be inspected inside a stopped machine, and saying so is
+        # more useful than reporting "not installed" about a machine that may
+        # well have it.
+        return {"machine_running": False, "installed": False, "version": None,
+                "linked": False, "available": True, "expires_at": None}
+    resp = svc.call_provisioner({"verb": "ai_claude", "idx": ws.idx,
+                                 "action": "status"}, timeout=180)
+    if not resp.get("ok"):
+        log.error("claude status failed for %s: %s", ws.incus_project, resp)
+        fail(502, "ai_status_failed", "The AI tool status could not be read.")
+    return {"machine_running": True,
+            "installed": bool(resp.get("installed")),
+            "version": resp.get("version"),
+            "linked": bool(resp.get("linked")),
+            "available": bool(resp.get("available")),
+            "expires_at": resp.get("expires_at")}
+
+
+@app.get("/api/workspace/ai")
+def ai_status(user: User = Depends(current_user),
+              db: Session = Depends(get_session)) -> dict:
+    ws = my_workspace(db, user)
+    return {"claude": _ai_state(ws)}
+
+
+@app.post("/api/workspace/ai/claude")
+def ai_claude(body: AiAction, user: User = Depends(current_user),
+              db: Session = Depends(get_session)) -> dict:
+    ws = my_workspace(db, user)
+    if ws.state != WorkspaceState.ON:
+        fail(409, "machine_off", "The machine must be running to change this.")
+
+    # npm install of the CLI is the slow part on a machine that does not have it
+    # yet; the sign-in itself is a single small file.
+    resp = svc.call_provisioner({"verb": "ai_claude", "idx": ws.idx,
+                                 "action": body.action}, timeout=1200)
+    if not resp.get("ok"):
+        log.error("claude %s failed for %s: %s", body.action, ws.incus_project, resp)
+        err = resp.get("error") or ""
+        if "not signed in" in err:
+            fail(409, "ai_host_unlinked",
+                 "The platform account is not signed in on this host.")
+        fail(500, "ai_failed", "The AI tool could not be set up.",
+             output=(resp.get("output") or err)[-300:])
+
+    svc.audit(db, user.id, f"ai_claude_{body.action}", ws.incus_project)
+    return {"ok": True, "claude": _ai_state(ws)}
 
 
 @app.post("/api/workspace/services/ssh")
@@ -1244,6 +1375,185 @@ async def terminal(sock: WebSocket) -> None:
             pass
 
 
+# --- support tickets ------------------------------------------------------
+# One conversation per ticket, with the two automatic status transitions
+# described on the model: a customer message reopens, a staff message answers.
+MAX_OPEN_TICKETS = 10
+
+
+def _ticket_json(tk: Ticket, *, staff: bool, messages: bool = False) -> dict:
+    last = tk.messages[-1] if tk.messages else None
+    # "Unread" means: the other side has written since this side last looked.
+    unread = is_unread(last.from_staff if last else None,
+                       last.created_at if last else None,
+                       tk.staff_read_at if staff else tk.user_read_at,
+                       staff=staff)
+    out = {
+        "id": tk.id,
+        "subject": tk.subject,
+        "status": tk.status.value,
+        "created_at": tk.created_at.isoformat() if tk.created_at else None,
+        "updated_at": tk.updated_at.isoformat() if tk.updated_at else None,
+        "message_count": len(tk.messages),
+        "last_from_staff": bool(last.from_staff) if last else None,
+        "last_at": last.created_at.isoformat() if last and last.created_at else None,
+        "unread": unread,
+    }
+    if staff:
+        out["user_email"] = tk.user.email if tk.user else None
+        out["user_id"] = tk.user_id
+    if messages:
+        out["messages"] = [{
+            "id": m.id,
+            "from_staff": m.from_staff,
+            "body": m.body,
+            "created_at": m.created_at.isoformat() if m.created_at else None,
+        } for m in tk.messages]
+    return out
+
+
+def _mark_read(db: Session, tk: Ticket, *, staff: bool) -> None:
+    """Record that this side has seen the thread up to its last message.
+
+    Marked against the last MESSAGE's timestamp rather than the wall clock, so
+    the comparison in is_unread() is between two values that came from the same
+    place. Marking with "now" instead leaves the result depending on clock
+    precision, and a reply written in the same second as a read can silently
+    never show as unread.
+    """
+    db.flush()  # so a message added in this request has its timestamp
+    last = tk.messages[-1] if tk.messages else None
+    when = last.created_at if last and last.created_at else svc.now()
+    if staff:
+        tk.staff_read_at = when
+    else:
+        tk.user_read_at = when
+
+
+def _my_ticket(db: Session, user: User, ticket_id: int) -> Ticket:
+    tk = db.get(Ticket, ticket_id)
+    # Same answer for "does not exist" and "belongs to someone else", so the
+    # endpoint cannot be used to count other people's tickets.
+    if tk is None or tk.user_id != user.id:
+        fail(404, "no_such_ticket", "No such ticket")
+    return tk
+
+
+@app.get("/api/tickets")
+def list_tickets(user: User = Depends(current_user),
+                 db: Session = Depends(get_session)) -> dict:
+    rows = db.scalars(select(Ticket).where(Ticket.user_id == user.id)
+                      .order_by(Ticket.updated_at.desc())).all()
+    return {"tickets": [_ticket_json(t, staff=False) for t in rows],
+            "max_open": MAX_OPEN_TICKETS}
+
+
+@app.post("/api/tickets")
+def create_ticket(body: TicketCreate, user: User = Depends(current_user),
+                  db: Session = Depends(get_session)) -> dict:
+    open_count = db.scalar(select(func.count()).select_from(Ticket).where(
+        Ticket.user_id == user.id, Ticket.status != TicketStatus.CLOSED))
+    if (open_count or 0) >= MAX_OPEN_TICKETS:
+        fail(409, "too_many_tickets",
+             "You already have the maximum number of open tickets.",
+             max_open=MAX_OPEN_TICKETS)
+
+    tk = Ticket(user_id=user.id, subject=body.subject.strip(),
+                status=TicketStatus.OPEN)
+    tk.messages.append(TicketMessage(author_id=user.id, from_staff=False,
+                                     body=body.body.strip()))
+    db.add(tk)
+    _mark_read(db, tk, staff=False)
+    db.commit()
+    svc.audit(db, user.id, "ticket_opened", f"#{tk.id}", subject=tk.subject)
+    return {"ok": True, "ticket": _ticket_json(tk, staff=False, messages=True)}
+
+
+@app.get("/api/tickets/{ticket_id}")
+def get_ticket(ticket_id: int, user: User = Depends(current_user),
+               db: Session = Depends(get_session)) -> dict:
+    tk = _my_ticket(db, user, ticket_id)
+    _mark_read(db, tk, staff=False)
+    db.commit()
+    return {"ticket": _ticket_json(tk, staff=False, messages=True)}
+
+
+@app.post("/api/tickets/{ticket_id}/messages")
+def reply_ticket(ticket_id: int, body: TicketReply,
+                 user: User = Depends(current_user),
+                 db: Session = Depends(get_session)) -> dict:
+    tk = _my_ticket(db, user, ticket_id)
+    tk.messages.append(TicketMessage(author_id=user.id, from_staff=False,
+                                     body=body.body.strip()))
+    # Writing to a closed ticket reopens it. The alternative - refusing the
+    # message - makes the customer open a duplicate that has lost all the
+    # context of the original.
+    tk.status = TicketStatus.OPEN
+    _mark_read(db, tk, staff=False)
+    tk.updated_at = svc.now()
+    db.commit()
+    return {"ok": True, "ticket": _ticket_json(tk, staff=False, messages=True)}
+
+
+@app.get("/api/admin/tickets")
+def admin_list_tickets(status: str | None = None,
+                       _: User = Depends(require_admin),
+                       db: Session = Depends(get_session)) -> dict:
+    q = select(Ticket)
+    if status in {s.value for s in TicketStatus}:
+        q = q.where(Ticket.status == TicketStatus(status))
+    rows = db.scalars(q.order_by(Ticket.updated_at.desc()).limit(300)).all()
+    counts = dict(db.execute(select(Ticket.status, func.count())
+                             .group_by(Ticket.status)).all())
+    return {"tickets": [_ticket_json(t, staff=True) for t in rows],
+            "counts": {s.value: counts.get(s, 0) for s in TicketStatus}}
+
+
+@app.get("/api/admin/tickets/{ticket_id}")
+def admin_get_ticket(ticket_id: int, _: User = Depends(require_admin),
+                     db: Session = Depends(get_session)) -> dict:
+    tk = db.get(Ticket, ticket_id)
+    if tk is None:
+        fail(404, "no_such_ticket", "No such ticket")
+    _mark_read(db, tk, staff=True)
+    db.commit()
+    return {"ticket": _ticket_json(tk, staff=True, messages=True)}
+
+
+@app.post("/api/admin/tickets/{ticket_id}/messages")
+def admin_reply_ticket(ticket_id: int, body: TicketReply,
+                       admin: User = Depends(require_admin),
+                       db: Session = Depends(get_session)) -> dict:
+    tk = db.get(Ticket, ticket_id)
+    if tk is None:
+        fail(404, "no_such_ticket", "No such ticket")
+    tk.messages.append(TicketMessage(author_id=admin.id, from_staff=True,
+                                     body=body.body.strip()))
+    # An answer that leaves the ticket looking unanswered is the failure mode
+    # worth designing out; the operator can still override the status after.
+    if tk.status is not TicketStatus.CLOSED:
+        tk.status = TicketStatus.ANSWERED
+    _mark_read(db, tk, staff=True)
+    tk.updated_at = svc.now()
+    db.commit()
+    svc.audit(db, admin.id, "ticket_replied", f"#{tk.id}")
+    return {"ok": True, "ticket": _ticket_json(tk, staff=True, messages=True)}
+
+
+@app.put("/api/admin/tickets/{ticket_id}/status")
+def admin_ticket_status(ticket_id: int, body: TicketStatusChange,
+                        admin: User = Depends(require_admin),
+                        db: Session = Depends(get_session)) -> dict:
+    tk = db.get(Ticket, ticket_id)
+    if tk is None:
+        fail(404, "no_such_ticket", "No such ticket")
+    tk.status = TicketStatus(body.status)
+    tk.updated_at = svc.now()
+    db.commit()
+    svc.audit(db, admin.id, "ticket_status", f"#{tk.id}", status=body.status)
+    return {"ok": True, "ticket": _ticket_json(tk, staff=True, messages=True)}
+
+
 # --- administration ------------------------------------------------------
 @app.get("/api/admin/users")
 def admin_users(_: User = Depends(require_admin),
@@ -1333,6 +1643,15 @@ def admin_approve(user_id: int, body: PresetRequest | None = None,
     ws.desired_on = False
     ws.period_start = None
     db.commit()
+
+    # The two permanent addresses are part of what the customer is buying, so
+    # they are allocated with the machine rather than on first use. _service_ports
+    # can also do this lazily, but a reservation that only appears once someone
+    # visits a page is not a reservation.
+    portalloc.reserve_service_ports(db, ws.id)
+    db.commit()
+    svc.sync_published_ports(db)
+
     svc.audit(db, admin.id, "approve", user.email, idx=idx, packages=len(installed))
     return {"ok": True, "workspace": ws.incus_project, "state": ws.state.value,
             "installed": installed}
@@ -1402,6 +1721,30 @@ def admin_credit(user_id: int, body: CreditGrant,
                          detail={"note": body.note, "by": admin.email})
     svc.audit(db, admin.id, "grant_credit", user.email, credits=body.credits)
     return {"ok": True, "balance": svc.balance_micro(db, user.id) / MICRO}
+
+
+@app.post("/api/admin/workspaces/{workspace_id}/apt-repair")
+def admin_apt_repair(workspace_id: int, admin: User = Depends(require_admin),
+                     db: Session = Depends(get_session)) -> dict:
+    """Re-apply the apt configuration inside one machine.
+
+    Machines provisioned before image/apt-fixups.sh existed still have Ubuntu's
+    snap-backed firefox stub, so `apt install firefox` fails partway and leaves
+    dpkg wedged. New machines get this at provision time; this is how the ones
+    already out there are brought up to date without rebuilding the image.
+    """
+    ws = db.get(Workspace, workspace_id)
+    if ws is None:
+        fail(404, "no_such_workspace", "No such workspace")
+    if ws.state != WorkspaceState.ON:
+        fail(409, "machine_off", "The machine must be running to change this.")
+    resp = svc.call_provisioner({"verb": "apt_repair", "idx": ws.idx}, timeout=900)
+    if not resp.get("ok"):
+        log.error("apt repair failed for %s: %s", ws.incus_project, resp)
+        fail(500, "apt_repair_failed", "The package configuration could not be repaired.",
+             output=(resp.get("output") or resp.get("error", ""))[-300:])
+    svc.audit(db, admin.id, "apt_repair", ws.incus_project)
+    return {"ok": True, "output": (resp.get("output") or "")[-300:]}
 
 
 @app.get("/api/admin/settings")

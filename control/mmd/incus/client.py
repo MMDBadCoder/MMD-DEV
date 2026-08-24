@@ -86,9 +86,17 @@ class IncusClient:
         if body.get("type") != "async":
             return body
         op = body["operation"].rsplit("/", 1)[-1].split("?")[0]
+        # `/wait` is a LONG POLL: it holds the connection open for up to
+        # `timeout` seconds. The client's default read timeout is far shorter,
+        # so without overriding it here a stop that legitimately takes a while -
+        # a machine with an RDP session and a few SSH logins holding processes
+        # open - raises ReadTimeout while Incus goes on to complete the
+        # operation successfully. The caller then records a failure that did not
+        # happen, and the workspace is left marked broken.
         res = await self._request(
             "GET", f"/1.0/operations/{op}/wait",
             project=project, params={"timeout": timeout},
+            timeout=timeout + 15,
         )
         md = res.get("metadata", {})
         if md.get("status_code", 0) != 200:

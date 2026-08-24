@@ -53,7 +53,12 @@ test("every dynamically-built key prefix has all its variants", () => {
     "act.a.": ["register", "sign_in", "password_change", "power_on", "power_off",
                "size_change", "port_publish", "port_unpublish",
                "packages_installed", "approve", "reject", "grant_credit",
-               "set_admin", "delete_user", "settings_update", "provision_failed"],
+               "set_admin", "delete_user", "settings_update", "provision_failed",
+               "ticket_opened", "ticket_replied", "ticket_status",
+               "ai_claude_install", "ai_claude_unlink", "apt_repair"],
+    // Every ticket status the API can return needs a label, or the queue
+    // renders a raw enum name at an operator.
+    "tk.status.": ["open", "in_progress", "answered", "closed"],
     "tools.preset.": ["editors", "monitoring", "shell", "network", "build",
                       "python", "databases", "media"],
   };
@@ -91,6 +96,7 @@ const LATIN_ALLOWED = new Set([
   "machine.subtitle",   // "Ubuntu 24.04 · 2 vCPU · 4 GB" - all technical
   "ssh.keygen",              // a literal command the customer types
   "ssh.keys.placeholder",    // a literal example of an SSH key
+  "ai.tab.claude",           // "Claude Code" is the product's own name
 ]);
 
 test("customer-facing labels are in Persian", () => {

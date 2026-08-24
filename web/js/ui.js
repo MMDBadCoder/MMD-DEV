@@ -68,6 +68,7 @@ export const icon = {
   arrowup: P('<path d="M12 19V5M5 12l7-7 7 7"/>'),
   monitor: P('<rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8M12 17v4"/><path d="M6 8h6M6 11h4"/>'),
   chart: P('<path d="M3 3v18h18"/><path d="M7 15l4-5 3 3 5-7"/>'),
+  chat: P('<path d="M21 15a2 2 0 0 1-2 2H8l-5 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>'),
   link: P('<path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/>'),
 };
 

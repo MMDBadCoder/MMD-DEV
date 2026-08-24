@@ -7,7 +7,7 @@ disagree with the ledger. Integers make the ledger the single source of truth.
 from __future__ import annotations
 
 import enum
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlalchemy import (
     BigInteger, Boolean, DateTime, Enum, ForeignKey, Index, Integer,
@@ -44,6 +44,19 @@ class WorkspaceState(str, enum.Enum):
     DELETING = "deleting"
     DELETED = "deleted"
     ERROR = "error"
+
+
+class TicketStatus(str, enum.Enum):
+    """Who the ticket is currently waiting on.
+
+    Deliberately about *whose turn it is* rather than about how the operator
+    feels: a customer opening the list wants to know whether they are waiting
+    for an answer or the answer is waiting for them.
+    """
+    OPEN = "open"                # customer wrote last; waiting on support
+    IN_PROGRESS = "in_progress"  # support is working on it
+    ANSWERED = "answered"        # support wrote last; waiting on the customer
+    CLOSED = "closed"
 
 
 class TxKind(str, enum.Enum):
@@ -275,3 +288,65 @@ class AuditLog(Base):
     action: Mapped[str] = mapped_column(String(64), index=True)
     target: Mapped[str | None] = mapped_column(String(128))
     detail: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class Ticket(Base):
+    """One support conversation.
+
+    Status is the operator's to set, with two exceptions that are automatic
+    because leaving them manual would silently lose messages: a customer reply
+    always moves a ticket back to OPEN (including reopening a closed one), and
+    a staff reply moves it to ANSWERED. Support that requires an operator to
+    remember to flip a flag before the customer's message is visible as
+    outstanding is support that drops tickets.
+    """
+    __tablename__ = "tickets"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    subject: Mapped[str] = mapped_column(String(200))
+    status: Mapped[TicketStatus] = mapped_column(
+        Enum(TicketStatus, name="ticket_status"),
+        default=TicketStatus.OPEN, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    # Read marks, one per side. These drive the "new reply" badge; without them
+    # a customer has no way to tell an answered ticket from one they have
+    # already read, and the list becomes noise.
+    user_read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    staff_read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    user: Mapped[User] = relationship()
+    messages: Mapped[list[TicketMessage]] = relationship(
+        back_populates="ticket", cascade="all, delete-orphan",
+        order_by="TicketMessage.id")
+
+    __table_args__ = (Index("ix_tickets_status_updated", "status", "updated_at"),)
+
+
+class TicketMessage(Base):
+    __tablename__ = "ticket_messages"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ticket_id: Mapped[int] = mapped_column(
+        ForeignKey("tickets.id", ondelete="CASCADE"), index=True)
+    # SET NULL, like the audit log: deleting an operator account must not erase
+    # the answers they gave, or a customer's own thread loses half its content.
+    author_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"))
+    # Recorded at write time rather than derived from the author's current role.
+    # A customer later promoted to admin must not retroactively turn their old
+    # questions into staff answers.
+    from_staff: Mapped[bool] = mapped_column(Boolean, default=False)
+    body: Mapped[str] = mapped_column(Text)
+    # Application clock, not server_default=func.now(). Read marks are written
+    # from Python, and comparing the two decides whether a reply shows as
+    # unread; SQL's now() has different precision and, on some backends, is the
+    # transaction start rather than the insert. One clock removes the question.
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC),
+        server_default=func.now(), index=True)
+
+    ticket: Mapped[Ticket] = relationship(back_populates="messages")
+    author: Mapped[User | None] = relationship()

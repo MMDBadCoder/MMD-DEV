@@ -29,6 +29,9 @@ done
 
 log "provisioning (this takes several minutes)"
 incus file push "$HERE/provision.sh" "$BUILD/root/provision.sh" --mode 0755
+# Shipped to the machine as well as run here, so support can re-run it later on
+# a workspace whose apt configuration has been edited by its owner.
+incus file push "$HERE/apt-fixups.sh" "$BUILD/usr/local/sbin/mmd-apt-fixups" --mode 0755
 incus exec "$BUILD" --env WORKSPACE_USER="$WORKSPACE_USER" -- /root/provision.sh
 
 log "verifying the image can actually do the job"

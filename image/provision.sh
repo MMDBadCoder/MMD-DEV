@@ -52,6 +52,12 @@ curl -LsSf https://astral.sh/uv/install.sh | UV_INSTALL_DIR=/usr/local/bin sh ||
 
 locale-gen en_US.UTF-8 || true
 
+# Ubuntu ships firefox as a stub that installs a snap, and snaps cannot run in
+# an unprivileged container - `apt install firefox` fails partway through and
+# wedges dpkg. This swaps in Mozilla's real .deb repository and removes snapd,
+# which can never work here. See image/apt-fixups.sh for the full reasoning.
+/usr/local/sbin/mmd-apt-fixups
+
 # --- the developer's account ---------------------------------------------
 # Root inside an unprivileged container maps to a harmless high host UID, so
 # giving the developer full sudo grants them nothing on the host. This is the
