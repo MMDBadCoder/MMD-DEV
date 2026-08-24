@@ -170,7 +170,18 @@ function open() {
   };
   sock.onmessage = (ev) =>
     term.write(typeof ev.data === "string" ? ev.data : new Uint8Array(ev.data));
-  sock.onclose = () => term?.write(`\r\n\x1b[90m${t("term.ended")}\x1b[0m\r\n`);
+  // The server refuses with a close CODE rather than by writing English into
+  // the stream - terminal output is the one channel the interface cannot
+  // translate after the fact.
+  const CLOSE_REASON = {
+    4403: "term.closed.denied",
+    4404: "term.closed.nomachine",
+    4409: "term.closed.machineoff",
+  };
+  sock.onclose = (ev) => {
+    const key = CLOSE_REASON[ev?.code] || "term.ended";
+    term?.write(`\r\n\x1b[90m${t(key)}\x1b[0m\r\n`);
+  };
   term.onData((d) => { if (sock.readyState === 1) sock.send(d); });
   addEventListener("resize", refit);
   addEventListener("mmd:theme", applyTheme);

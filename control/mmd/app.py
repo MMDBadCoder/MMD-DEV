@@ -205,7 +205,7 @@ def register(body: Credentials, db: Session = Depends(get_session)) -> dict:
     if db.scalar(select(User).where(User.email == body.email.lower())):
         # Identical to the success response on purpose: differing replies would
         # let anyone enumerate which addresses hold accounts.
-        return {"status": "pending", "message": "Your account is awaiting approval."}
+        return {"status": "pending", "code": "pending_approval"}
     first = db.scalar(select(User).limit(1)) is None
     user = User(
         email=body.email.lower(), password_hash=hash_password(body.password),
@@ -216,9 +216,12 @@ def register(body: Credentials, db: Session = Depends(get_session)) -> dict:
     db.add(CreditAccount(user_id=user.id, balance_micro=0))
     db.commit()
     svc.audit(db, user.id, "register", user.email, first_account=first)
+    # A CODE, not a sentence. The interface is Persian and translates by code;
+    # returning English prose here meant the sign-up page had to compare the
+    # server's exact wording to decide what to show - so a reworded string, or a
+    # second caller, would silently print English at a customer.
     return {"status": user.status.value,
-            "message": ("Administrator account created. You can sign in now."
-                        if first else "Your account is awaiting approval.")}
+            "code": "admin_created" if first else "pending_approval"}
 
 
 @app.post("/api/auth/login")
@@ -248,7 +251,9 @@ def change_password(body: PasswordChange, user: User = Depends(current_user),
     user.password_hash = hash_password(body.new_password)
     db.commit()
     svc.audit(db, user.id, "password_change", user.email)
-    return {"ok": True, "message": "Password changed."}
+    # No message: the page says so in Persian. Nothing consumed this, and a
+    # sentence sitting in a response is a sentence waiting to be displayed.
+    return {"ok": True}
 
 
 @app.get("/api/me")
@@ -372,11 +377,10 @@ def install_presets(body: PresetRequest, user: User = Depends(current_user),
 def workspace_status(user: User = Depends(current_user),
                      db: Session = Depends(get_session)) -> dict:
     if user.status == UserStatus.PENDING:
-        return {"status": "pending",
-                "message": "Your account is awaiting approval by an administrator."}
+        return {"status": "pending", "code": "pending_approval"}
     ws = db.scalar(select(Workspace).where(Workspace.user_id == user.id))
     if ws is None:
-        return {"status": "none", "message": "No machine has been created yet."}
+        return {"status": "none", "code": "no_machine"}
 
     r = svc.rates(db)
     tier = svc.tier_of(ws)
@@ -385,13 +389,20 @@ def workspace_status(user: User = Depends(current_user),
     affordable, have, need = svc.can_afford_next_hour(db, ws)
     adm = svc.check_admission(db, ws)
 
+    # Structured, not prose. This is the string a customer opened a ticket about:
+    # it reached the dashboard as English, said "credits" where the product
+    # charges Toman, and printed Western digits in a Persian interface. The
+    # interface can render all three correctly - but only if it is given the
+    # numbers rather than a finished sentence.
     blocked = None
     if ws.state == WorkspaceState.OFF:
         if not affordable:
-            blocked = (f"You need at least {need / MICRO:.2f} credits to run for "
-                       f"another hour. Your balance is {have / MICRO:.2f}.")
+            blocked = {"code": "insufficient_credit",
+                       "need": need / MICRO, "have": have / MICRO}
         elif not adm.allowed:
-            blocked = adm.reason
+            # `resource` exists precisely so the interface does not have to
+            # parse the English reason. It was already there; nothing used it.
+            blocked = {"code": f"capacity_{adm.resource or 'general'}"}
 
     return {
         "status": ws.state.value,
@@ -407,7 +418,7 @@ def workspace_status(user: User = Depends(current_user),
         "hours_remaining": (have / MICRO) / q["max_per_hour"] if q["max_per_hour"] else 0,
         "published_ports": npub,
         "can_power_on": bool(ws.state == WorkspaceState.OFF and affordable and adm.allowed),
-        "blocked_reason": blocked,
+        "blocked": blocked,
         "started_at": ws.started_at.isoformat() if ws.started_at else None,
         "archived_until": ws.purge_after.isoformat() if ws.purge_after else None,
     }
@@ -604,9 +615,9 @@ def create_port(body: PortRequest, request: Request,
     return {"ok": True, "internal_port": row.internal_port,
             "external_port": row.external_port, "protocol": row.protocol,
             "address": f"{request.url.hostname}:{row.external_port}",
-            "warning": ("Port 22 inside your machine is usually its SSH service; "
-                        "publishing it exposes it to the internet."
-                        if row.internal_port in portalloc.DISCOURAGED_INTERNAL else None)}
+            "warning_code": ("discouraged_port"
+                             if row.internal_port in portalloc.DISCOURAGED_INTERNAL
+                             else None)}
 
 
 @app.delete("/api/workspace/ports/{port_id}")
@@ -1435,8 +1446,10 @@ async def terminal(sock: WebSocket) -> None:
         if ws is None:
             await sock.close(code=4404); return
         if ws.state != WorkspaceState.ON:
-            await sock.send_text("\r\n\x1b[33mYour machine is switched off. "
-                                 "Turn it on to open a terminal.\x1b[0m\r\n")
+            # No text. Writing English into the customer's terminal stream was
+            # the one place the interface could not translate, since it arrives
+            # as terminal output rather than as data. The close code carries the
+            # meaning and the page prints it in Persian.
             await sock.close(code=4409); return
 
         ws.last_activity = svc.now()

@@ -2,6 +2,7 @@
 import { get, post, put, del } from "../api.js";
 import { $, $$, icon, esc, fmtFa, note, toast, empty, confirmDialog } from "../ui.js";
 import { t } from "../i18n.js";
+import { crumbs, join } from "../paths.js";
 import { render } from "../main.js";
 
 let cwd = "/home/dev";
@@ -66,18 +67,6 @@ function human(bytes) {
 const when = (epoch) => epoch
   ? new Date(epoch * 1000).toLocaleString("fa-IR", { dateStyle: "short", timeStyle: "short" })
   : "—";
-
-/* ---- breadcrumbs ---- */
-function crumbs(path) {
-  const parts = path.split("/").filter(Boolean);
-  let acc = "";
-  const items = [`<a href="#" data-go="/" class="mono">/</a>`];
-  for (const p of parts) {
-    acc += "/" + p;
-    items.push(`<a href="#" data-go="${esc(acc)}" dir="ltr">${esc(p)}</a>`);
-  }
-  return items.join('<span class="dim" style="margin:0 4px">/</span>');
-}
 
 /* ---- page ---- */
 export async function filesPage(params) {
@@ -225,7 +214,7 @@ export async function filesPage(params) {
   };
 }
 
-const join = (dir, name) => (dir === "/" ? "" : dir) + "/" + name.replace(/^\/+/, "");
+
 
 function downloadPath(p) {
   // A normal navigation so the browser's own download UI handles it - fetch

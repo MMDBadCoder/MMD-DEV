@@ -561,3 +561,73 @@ it to ignore the result.
 
 Current reading: 425 operator files compared, 0 present in the customer's
 machine.
+
+## English prose must never reach a Persian interface
+
+A customer opened a ticket whose entire body was a quote of what the dashboard
+had shown them:
+
+```
+You need at least 510.00 credits to run for another hour. Your balance is 0.00.
+```
+
+Three faults in one sentence: English in a Persian interface, "credits" where
+the product charges **Toman**, and Western digits. The cause was structural, not
+a missed translation - the API built a finished English sentence and the page
+printed it verbatim, so no amount of translating in the interface could have
+helped.
+
+The contract is now explicit and enforced: **the API returns stable codes and
+numbers; the interface builds the sentence.** `fail()` messages were always fine,
+because api.js resolves those by code and never displays the English. Everything
+else that carried prose was converted:
+
+| was | now |
+|---|---|
+| `blocked_reason: "You need at least…"` | `blocked: {code, need, have}` |
+| `blocked_reason: adm.reason` | `blocked: {code: "capacity_memory"\|"capacity_cpu"}` |
+| `message: "Your account is awaiting approval."` | `code: "pending_approval"` |
+| `message: "Administrator account created…"` | `code: "admin_created"` |
+| `warning: "Port 22 inside your machine…"` | `warning_code: "discouraged_port"` |
+| `send_text("Your machine is switched off…")` | close code 4409, page prints Persian |
+| `message: "Password changed."` | removed; nothing consumed it |
+
+`AdmissionResult` had carried a `resource` field since it was written, with a
+comment saying it existed "so the interface can say so in its own language
+rather than parsing the English reason". Nothing had ever used it.
+
+The sign-up page was the sharpest example of why prose in an API is a trap: it
+decided which Persian message to show by **comparing the server's exact English
+sentence**. Rewording that sentence - or adding a second caller - would have
+silently shown the wrong message.
+
+`tests/test_no_english_prose.py` walks the AST of every decorated request handler
+and fails on any English sentence in a returned dict, including f-string pieces,
+plus any English written into the terminal websocket. It was checked against a
+deliberately reintroduced bug and reported it by function and key. The word
+threshold is **two**, not four: "Password changed." slipped past a stricter one.
+
+## A breadcrumb that printed `//home/dev`
+
+Reported by a customer. The root crumb's *label* is `/`, and every crumb was
+**also** joined with a `/` separator - so the root's own text and the first
+separator were the same character, printed back to back:
+
+```
+"/home/dev"  ->  "//home/dev"
+"/home"      ->  "//home"
+"/"          ->  "/"            (the only path that looked right)
+```
+
+The separator now goes between the named parts only; the root supplies the
+leading slash by itself.
+
+`crumbs()` and `join()` moved into `web/js/paths.js`, a module with no DOM
+imports, because files.js cannot be loaded in Node - which is why neither
+function had ever had a test. Extracting them turned up a second, unreported
+instance of the same bug: `join()` did not strip a trailing slash from the
+directory, so creating a file while the server reported `/home/dev/` produced
+`/home/dev//newfile`.
+
+Ten tests now cover both, including the escaping of a directory name containing
+markup.

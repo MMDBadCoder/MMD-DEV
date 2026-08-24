@@ -116,7 +116,7 @@ export async function machinePage() {
         <a class="btn" href="/console/files">${icon.folder}${t("ov.browsefiles")}</a>
         <a class="btn ghost" href="/console/resources">${icon.sliders}${t("machine.changesize")}</a>
       </div>
-      ${w.blocked_reason ? note("warn", esc(w.blocked_reason)) : ""}
+      ${w.blocked ? note("warn", t("blocked." + w.blocked.code, w.blocked)) : ""}
       ${on ? "" : note("info", t("machine.offnote", fmtMoney(w.rate_off_per_hour)))}
     </div>
 

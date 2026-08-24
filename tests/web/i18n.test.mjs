@@ -61,6 +61,13 @@ test("every dynamically-built key prefix has all its variants", () => {
     // Every ticket status the API can return needs a label, or the queue
     // renders a raw enum name at an operator.
     "tk.status.": ["open", "in_progress", "answered", "closed"],
+    // Why the machine cannot start. Built as t("blocked." + code) from the
+    // server's code, so a missing variant prints a raw key at a customer -
+    // which is how the English message got reported in the first place.
+    "blocked.": ["insufficient_credit", "capacity_memory", "capacity_cpu",
+                 "capacity_general"],
+    // Websocket close codes the terminal maps to a message.
+    "term.closed.": ["machineoff", "nomachine", "denied"],
     "tools.preset.": ["editors", "monitoring", "shell", "network", "build",
                       "python", "databases", "media"],
   };

@@ -57,6 +57,8 @@ const FA = {
   "auth.hasaccount": "قبلاً ثبت‌نام کرده‌اید؟",
   "auth.createone": "ساخت حساب",
   "auth.gosignin": "ورود به حساب",
+  "auth.made.pending": "حساب شما ساخته شد و در انتظار تأیید مدیر است.",
+  "auth.made.admin": "حساب مدیر ساخته شد. اکنون می‌توانید وارد شوید.",
   "auth.err.email": "لطفاً یک ایمیل معتبر وارد کنید.",
   "auth.err.short": (n) => `رمز عبور باید حداقل ۱۰ کاراکتر باشد — این یکی ${n} کاراکتر است.`,
   "auth.err.mismatch": "دو رمز عبور یکسان نیستند.",
@@ -100,6 +102,15 @@ const FA = {
   "machine.lightnote": "این اندازه برای کار با ترمینال مناسب است، اما ادیتور و دستیارهای کدنویسی به ۲ گیگابایت یا بیشتر نیاز دارند.",
   "machine.pending": "حساب شما در انتظار تأیید مدیر است.",
   "machine.none": "هنوز ماشینی برای شما ساخته نشده است.",
+
+  /* Why the machine cannot be switched on. Reported as English prose by a
+     customer; the server now sends a code and the numbers, so the amount is
+     formatted in Toman with Persian digits like everywhere else. */
+  "blocked.insufficient_credit": (d) =>
+    `موجودی شما برای روشن کردن ماشین کافی نیست. برای یک ساعت کار با حداکثر مصرف، ${fmtMoney(d.need)} ${CURRENCY} لازم است و موجودی فعلی شما ${fmtMoney(d.have)} ${CURRENCY} است.`,
+  "blocked.capacity_memory": "در حال حاضر حافظهٔ آزاد کافی روی سرور نیست. کمی بعد دوباره تلاش کنید یا حافظهٔ کمتری انتخاب کنید.",
+  "blocked.capacity_cpu": "در حال حاضر CPU آزاد کافی روی سرور نیست. کمی بعد دوباره تلاش کنید یا پردازندهٔ کمتری انتخاب کنید.",
+  "blocked.capacity_general": "در حال حاضر منابع آزاد کافی روی سرور نیست. کمی بعد دوباره تلاش کنید.",
   "machine.on.toast": "ماشین روشن شد",
   "machine.off.toast": "ماشین خاموش شد",
 
@@ -116,6 +127,9 @@ const FA = {
   "term.fontbigger": "بزرگ‌تر",
   "term.fullscreenhint": "برای خروج، روی دکمهٔ «خروج» در نوار بالای ترمینال کلیک کنید یا کلیدهای Ctrl+Alt+F را بزنید. کلید Esc عمداً برای خود ترمینال آزاد گذاشته شده تا vim و برنامه‌های مشابه درست کار کنند.",
   "term.ended": "— نشست پایان یافت —",
+  "term.closed.machineoff": "— ماشین خاموش است. برای باز کردن ترمینال ابتدا آن را روشن کنید —",
+  "term.closed.nomachine": "— هنوز ماشینی برای شما ساخته نشده است —",
+  "term.closed.denied": "— دسترسی شما به این ترمینال مجاز نیست —",
   "term.exit": "خروج",
 
   // --- resources ---
@@ -291,6 +305,7 @@ const FA = {
 
   // --- ports ---
   "ports.title": "پورت‌های منتشرشده",
+  "ports.warn.discouraged_port": "پورت ۲۲ معمولاً سرویس SSH ماشین است؛ انتشار آن، ماشین شما را در معرض اینترنت قرار می‌دهد.",
   "ports.sub": "یک پورت از داخل ماشین خود را روی اینترنت منتشر کنید. آدرس عمومی برای شما رزرو می‌ماند و با خاموش و روشن شدن ماشین تغییر نمی‌کند.",
   "ports.publish": "انتشار پورت",
   "ports.publishing": "در حال انتشار…",

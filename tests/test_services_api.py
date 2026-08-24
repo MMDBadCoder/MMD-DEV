@@ -190,3 +190,36 @@ def test_an_unsigned_in_host_is_surfaced_as_its_own_error(env, monkeypatch):
     r = client.post("/api/workspace/ai/claude", json={"action": "install"})
     assert r.status_code == 409
     assert r.json()["detail"]["code"] == "ai_host_unlinked"
+
+
+# --- the message a customer opened a ticket about --------------------------
+def test_a_workspace_that_cannot_afford_an_hour_reports_a_code_and_numbers(env):
+    """Reported as: "this text was English, it must be Persian". The dashboard
+    printed the server's sentence verbatim, so it arrived in English, said
+    "credits" where the product charges Toman, and used Western digits."""
+    client, db, ws, _ = env
+    ws.state = WorkspaceState.OFF
+    db.commit()
+    d = client.get("/api/workspace").json()
+
+    assert d["can_power_on"] is False
+    b = d["blocked"]
+    assert b["code"] == "insufficient_credit"
+    # The numbers, so the interface can format them as Toman in Persian digits.
+    assert b["need"] > 0
+    assert b["have"] == 0
+    # And no prose anywhere in the payload.
+    assert "blocked_reason" not in d
+    assert not any(isinstance(v, str) and " " in v and v[:1].isupper()
+                   for k, v in d.items() if k not in {"label", "status"})
+
+
+def test_a_workspace_with_credit_is_not_blocked(env, monkeypatch):
+    from mmd.models import CreditAccount
+    client, db, ws, _ = env
+    db.add(CreditAccount(user_id=ws.user_id, balance_micro=10_000 * 1_000_000))
+    db.commit()
+    ws.state = WorkspaceState.OFF
+    db.commit()
+    d = client.get("/api/workspace").json()
+    assert d["blocked"] is None

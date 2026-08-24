@@ -87,10 +87,10 @@ export function signUpPage() {
     try {
       const r = await post("/api/auth/register", { email, password: pw });
       $("#form").innerHTML = "";
+      // Keyed off the server's CODE. This used to compare the server's English
+      // sentence, so any rewording of it would have shown the wrong message.
       $("#msg").innerHTML = note("ok",
-        `${esc(r.message === "Your account is awaiting approval."
-               ? "حساب شما ساخته شد و در انتظار تأیید مدیر است."
-               : "حساب مدیر ساخته شد. اکنون می‌توانید وارد شوید.")}
+        `${t(r.code === "admin_created" ? "auth.made.admin" : "auth.made.pending")}
          <br><a href="/signin">${t("auth.gosignin")}</a>`);
     } catch (err) {
       fail(err.message);

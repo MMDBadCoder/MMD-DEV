@@ -78,7 +78,7 @@ export async function portsPage() {
         internal_port: port, protocol: $("#proto").value,
         note: $("#note").value.trim() || null });
       toast(`${r.address}`, "ok");
-      if (r.warning) toast("پورت ۲۲ معمولاً سرویس SSH ماشین است؛ انتشار آن، آن را در معرض اینترنت قرار می‌دهد.", "bad");
+      if (r.warning_code) toast(t("ports.warn." + r.warning_code), "bad");
       portsPage();
     } catch (err) {
       $("#msg").innerHTML = note("bad", esc(err.message));
