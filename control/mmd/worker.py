@@ -204,6 +204,32 @@ async def lifecycle_once() -> None:
         await client.aclose()
 
 
+# How often a metrics sample is taken. Was 60s, which gave a five-minute chart
+# only five points - too coarse to read. The multipliers below are set so that
+# settlement, lifecycle and reconciliation keep the cadence they have always
+# had (5 and 15 minutes) rather than silently running three times as often.
+TICK_SECONDS = 20
+SETTLE_EVERY = 15          # 15 x 20s = 5 minutes
+RECONCILE_EVERY = 45       # 45 x 20s = 15 minutes
+
+# Samples are only used for drawing charts and for settling the CURRENT hour;
+# once an hour is settled its charge is in the ledger and the raw samples are
+# just history. Keeping them forever is how a table quietly becomes the biggest
+# thing in the database - this one had no pruning at all.
+SAMPLE_RETENTION_DAYS = 7
+
+
+def prune_samples_once() -> None:
+    cutoff = svc.now() - timedelta(days=SAMPLE_RETENTION_DAYS)
+    with SessionLocal() as db:
+        n = db.query(UsageSample).filter(UsageSample.ts < cutoff).delete(
+            synchronize_session=False)
+        db.commit()
+        if n:
+            log.info("pruned %d usage samples older than %d days",
+                     n, SAMPLE_RETENTION_DAYS)
+
+
 def reserve_service_ports_once() -> None:
     """Ensure every workspace holds its two permanent addresses.
 
@@ -312,16 +338,17 @@ async def main() -> None:
     while True:
         try:
             await meter_once()
-            if tick % 5 == 0:
+            if tick % SETTLE_EVERY == 0:
                 await settle_once()
                 await lifecycle_once()
-            if tick % 15 == 0:
+                prune_samples_once()
+            if tick % RECONCILE_EVERY == 0:
                 await reconcile_once()
                 reserve_service_ports_once()
         except Exception:  # noqa: BLE001
             log.exception("worker tick failed")
         tick += 1
-        await asyncio.sleep(60)
+        await asyncio.sleep(TICK_SECONDS)
 
 
 if __name__ == "__main__":

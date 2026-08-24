@@ -739,3 +739,68 @@ printers configured.
 
 Removed with `snap remove --purge cups`. Nothing about the product needed it; it
 had simply arrived as a snap dependency and never been noticed.
+
+## Publishing a port is free
+
+It used to cost 15 Toman/hour, on the reasoning that "a published port holds a
+scarce resource". It does not: it hands out an nftables DNAT rule and a number
+from a range of ten thousand. Charging for it discouraged exactly the thing the
+product exists to let people do — run something and keep it reachable.
+
+The rate is gone from `DEFAULT_RATES`, `Rates`, and every formula;
+`ports_micro()` no longer exists and `port_count` is no longer a parameter of
+the gate, the settlement or the quote. A test asserts none of it comes back, by
+checking the attributes are absent rather than merely that the number is zero.
+
+Ledger rows written while it *was* charged keep their `ports` breakdown.
+History is not rewritten because a price changed.
+
+## Charts in real units, over a window you choose
+
+The overview drew CPU and memory as **percentages** over a fixed six-hour
+window. Both were wrong for the question people actually open that page with.
+
+A percentage hides the two things worth knowing — how big the machine is and how
+much is spare — and "90%" reads identically on half a core and on three. The
+charts are now **cores** and **gigabytes**, scaled against the tier rather than
+against the tallest sample, so a quiet machine draws a low line instead of a
+dramatic one.
+
+Six hours was the wrong default: in front of a running machine the question is
+"what is it doing now". The default window is **5 minutes**, with a picker
+offering 5m / 15m / 1h / 6h / 24h, remembered per browser.
+
+### What that cost, and what it fixed
+
+Five minutes at the old 60-second sampling is five points — not a chart. So
+`TICK_SECONDS` went to **20**, and `SETTLE_EVERY`/`RECONCILE_EVERY` were set so
+settlement still runs every 5 minutes and reconciliation every 15. That
+preservation is the point: tripling the metering rate must not silently triple
+how often money moves. A test pins the arithmetic.
+
+`usage_samples` had **no pruning at all**, despite the plan claiming seven-day
+retention — the table grew forever, and tripling the sample rate would have
+tripled the rate it grew at. `prune_samples_once()` now runs with settlement.
+
+The interface is told `sample_seconds` and refreshes in step, replacing only the
+two chart bodies rather than re-rendering the page — a full redraw every 20
+seconds would fight with anyone mid-edit to move two lines by a pixel.
+
+`fmtFa` defaults to **zero** decimal places, which rendered 0.31 cores as "۰" and
+made every quiet machine look idle. Precision is now chosen from magnitude.
+
+## The admin capacity panel shows two different things
+
+"ظرفیت سرور" was renamed, because it showed only what is **reserved** —
+capacity promised to customers whether or not they touch it — and that is half
+the question. An operator also needs to know what is actually being *used*: the
+first says whether more machines can be sold, the second says whether the host
+is comfortable.
+
+`/api/admin/metrics` sums real consumption across every workspace, in the same
+units and with the same picker as the customer view. Samples are written per
+workspace within milliseconds of each other, so they are bucketed to the
+sampling interval before summing — otherwise each workspace lands in its own
+bucket and the total reads as a sawtooth of individual machines rather than a
+host total. It scales against *schedulable* capacity, not the raw host: the host
+reserve is not for sale.

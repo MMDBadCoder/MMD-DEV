@@ -53,7 +53,7 @@ and the auth endpoints. Accessing another account's resource returns **404**, no
 | `POST` | `/api/workspace/power` | `{on: bool}`. Runs the affordability gate and the admission check |
 | `POST` | `/api/workspace/tier` | `{cpu_milli, mem_mib}`. Live-applied when running; memory cannot shrink while on |
 | `POST` | `/api/workspace/reset` | **Factory reset.** `{confirm, password}` — see below |
-| `GET` | `/api/workspace/metrics` | Recent CPU and memory samples |
+| `GET` | `/api/workspace/metrics` | `?minutes=` (default 5, one of 5/15/60/360/1440). CPU in **cores** and memory in **GB** — absolute, never percentages — plus the tier so a chart can show headroom, and `sample_seconds` so it can refresh in step |
 | `GET` | `/api/tiers` | Size catalogue with the price of each option |
 
 `blocked` is structured, not prose:
@@ -113,7 +113,7 @@ is denied the file API. Paths are validated server-side.
 | Method | Path | Notes |
 |---|---|---|
 | `GET` | `/api/workspace/ports` | Published and reserved ports |
-| `POST` | `/api/workspace/ports` | `{internal_port, protocol}`. External port allocated from 20000–29999. Returns `warning_code: "discouraged_port"` for port 22 |
+| `POST` | `/api/workspace/ports` | `{internal_port, protocol}`. External port allocated from 20000–29999. Free. Returns a `url` for TCP, and `warning_code: "discouraged_port"` for port 22 |
 | `DELETE` | `/api/workspace/ports/{id}` | Reserved SSH/RDP ports refuse with `port_reserved` |
 
 ## Tools and AI
@@ -153,7 +153,8 @@ is denied the file API. Paths are validated server-side.
 | `POST` | `/api/admin/users/{id}/admin` | Promote or demote |
 | `POST` | `/api/admin/users/{id}/credit` | Grant credit |
 | `DELETE` | `/api/admin/users/{id}` | |
-| `GET` | `/api/admin/capacity` | Allocation against schedulable capacity |
+| `GET` | `/api/admin/capacity` | Reserved against schedulable capacity |
+| `GET` | `/api/admin/metrics` | `?minutes=`. Actual usage summed across every workspace, in cores and GB, scaled against sellable capacity |
 | `GET`/`PUT` | `/api/admin/settings` | Rate card, overcommit ratios, host reserve |
 | `GET` | `/api/admin/activity` | Global audit log |
 | `GET` | `/api/admin/tickets` | Queue, filterable by status, with counts |

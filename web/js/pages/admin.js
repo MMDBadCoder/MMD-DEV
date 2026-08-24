@@ -3,11 +3,15 @@ import { get, post, put, del } from "../api.js";
 import { $, $$, icon, esc, fmtMoney, fmtNum, fmtFa, note, toast, stamp, confirmDialog } from "../ui.js";
 import { t, CURRENCY } from "../i18n.js";
 import { render, state } from "../main.js";
+import { usageChart, windowPicker, wireWindowPicker,
+         savedWindow, saveWindow } from "../usagechart.js";
 
 export async function adminPage() {
-  const [users, cap, settings, presets, tickets] = await Promise.all([
+  const [users, cap, settings, presets, tickets, hostMetrics] = await Promise.all([
     get("/api/admin/users"), get("/api/admin/capacity"),
     get("/api/admin/settings"), get("/api/presets"), get("/api/admin/tickets"),
+    get(`/api/admin/metrics?minutes=${savedWindow()}`)
+      .catch(() => ({ cpu: [], memory: [], cpu_cores: 0, memory_gb: 0 })),
   ]);
 
   const pct = (a, b) => Math.min(100, Math.round(100 * a / Math.max(b, 0.001)));
@@ -56,7 +60,8 @@ export async function adminPage() {
     </div>
 
     <div class="card">
-      <h3>${t("adm.capacity")}</h3>
+      <h3>${t("adm.resources")}</h3>
+      <p class="tiny dim" style="margin:2px 0 14px">${t("adm.resources.sub")}</p>
       <div class="row">
         <div class="stat"><div class="k">${t("adm.running")}</div>
           <div class="v">${fmtFa(cap.running)}</div></div>
@@ -68,6 +73,31 @@ export async function adminPage() {
           <div class="bar"><i class="${cls(memPct)}" style="width:${memPct}%"></i></div></div>
       </div>
       <p class="tiny dim" style="margin:14px 0 0">${t("adm.capacity.note")}</p>
+    </div>
+
+    <div class="card">
+      <div class="between" style="margin-bottom:12px">
+        <div>
+          <h3 style="margin:0">${t("adm.hostuse")}</h3>
+          <p class="tiny dim" style="margin:4px 0 0">${
+            t("adm.hostuse.sub", hostMetrics.workspaces || 0)}</p>
+        </div>
+        ${windowPicker(savedWindow(), "adminwin")}
+      </div>
+      <div class="row" id="hostcharts">
+        <div style="flex:1 1 240px">
+          <label>${t("ov.usage.cpu")}</label>
+          <div id="hchart-cpu">${usageChart(hostMetrics.cpu, hostMetrics.cpu_cores,
+                                            "var(--brand)", t("unit.cores"))}</div>
+        </div>
+        <div style="flex:1 1 240px">
+          <label>${t("ov.usage.mem")}</label>
+          <div id="hchart-mem">${usageChart(hostMetrics.memory, hostMetrics.memory_gb,
+                                            "var(--ok)", t("unit.gb"))}</div>
+        </div>
+      </div>
+      <p class="tiny dim" style="margin:10px 0 0">${
+        t("ov.usage.refresh", hostMetrics.sample_seconds || 20)}</p>
     </div>
 
     <div class="card">
@@ -100,6 +130,32 @@ export async function adminPage() {
       <div class="btn-row" style="margin-top:16px">
         <button class="btn primary" id="save">${icon.save}${t("adm.save")}</button></div>
     </div>`);
+
+  // Same cadence as the customer overview, and only the two chart bodies are
+  // replaced - re-rendering the admin page every 20 seconds would fight with
+  // whoever is halfway through editing a rate.
+  let hostTimer = null;
+  const refreshHost = async () => {
+    clearTimeout(hostTimer);
+    if (!$("#hostcharts")) return;
+    let m;
+    try { m = await get(`/api/admin/metrics?minutes=${savedWindow()}`); }
+    catch { hostTimer = setTimeout(refreshHost, 30000); return; }
+    if (!$("#hostcharts")) return;
+    $("#hchart-cpu").innerHTML =
+      usageChart(m.cpu, m.cpu_cores, "var(--brand)", t("unit.cores"));
+    $("#hchart-mem").innerHTML =
+      usageChart(m.memory, m.memory_gb, "var(--ok)", t("unit.gb"));
+    hostTimer = setTimeout(refreshHost, (m.sample_seconds || 20) * 1000);
+  };
+  wireWindowPicker($("#adminwin"), (mins) => {
+    saveWindow(mins);
+    $("#adminwin").querySelectorAll("[data-win]").forEach((b) =>
+      b.classList.toggle("active", Number(b.dataset.win) === mins));
+    refreshHost();
+  });
+  hostTimer = setTimeout(refreshHost, (hostMetrics.sample_seconds || 20) * 1000);
+
 
   // Default toolsets are remembered locally and sent with each approval.
   const defaults = new Set(JSON.parse(localStorage.getItem("mmd-default-presets") || "[]"));

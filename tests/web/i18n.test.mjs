@@ -68,6 +68,8 @@ test("every dynamically-built key prefix has all its variants", () => {
                  "capacity_general"],
     // Websocket close codes the terminal maps to a message.
     "term.closed.": ["machineoff", "nomachine", "denied"],
+    // Chart window picker: a missing variant prints a raw key on a button.
+    "chart.win.": ["minutes", "hours"],
     "tools.preset.": ["editors", "monitoring", "shell", "network", "build",
                       "python", "databases", "media"],
   };

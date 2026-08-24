@@ -102,11 +102,11 @@ def test_disk_costs_the_same_running_or_stopped():
     assert P.disk_micro(t, R) == P.off_hour_micro(t, R)
 
 
-def test_switched_off_costs_only_disk_and_ports():
+def test_switched_off_costs_only_disk():
+    """A stopped workspace still holds its full ZFS refreservation, so the space
+    is genuinely unavailable to anyone else. Nothing else accrues."""
     t = T()
     assert P.off_hour_micro(t, R) == P.disk_micro(t, R)
-    assert P.off_hour_micro(t, R, port_count=2) == \
-        P.disk_micro(t, R) + P.ports_micro(2, R)
 
 
 def test_reservation_scales_with_both_cpu_and_memory():
@@ -146,9 +146,18 @@ def test_idle_hour_exceeds_a_stopped_hour():
     assert P.idle_hour_micro(t, R) > P.off_hour_micro(t, R)
 
 
-def test_gate_grows_with_published_ports():
+def test_publishing_a_port_is_free():
+    """It hands out an nftables DNAT rule and a number from a range of 10,000 -
+    neither scarce enough to meter. The gate must not move when a customer
+    publishes one, and no rate may exist to make it move."""
     t = T()
-    assert P.max_hour_micro(t, R, port_count=3) > P.max_hour_micro(t, R)
+    assert P.max_hour_micro(t, R) == (P.disk_micro(t, R)
+                                      + P.reservation_micro(t, R)
+                                      + P.usage_micro(t.cpu_cores, t.mem_gib, R))
+    assert not hasattr(R, "port")
+    assert not hasattr(P, "ports_micro")
+    assert not any("port" in k for k in P.DEFAULT_RATES)
+    assert not any("port" in k for k in R.as_dict())
 
 
 def test_bigger_tiers_cost_more():
@@ -166,9 +175,10 @@ def test_stopped_settlement_omits_cpu_and_memory():
 
 def test_running_settlement_includes_every_component():
     _, d = P.settle_micro(T(), R, powered_on=True,
-                          cpu_core_hours=0.4, mem_gib_hours=0.7, port_count=1)
-    for k in ("disk", "ports", "reservation", "usage"):
+                          cpu_core_hours=0.4, mem_gib_hours=0.7)
+    for k in ("disk", "reservation", "usage"):
         assert d[k] > 0
+    assert "ports" not in d
 
 
 def test_archived_settlement_uses_the_reduced_disk_rate():
@@ -217,9 +227,9 @@ def test_default_tier_costs_a_sane_amount_per_hour():
 
 
 def test_quote_itemises_and_totals_consistently():
-    q = P.quote(T(), R, port_count=1)
+    q = P.quote(T(), R)
     ph = q["per_hour"]
-    total = (ph["disk"] + ph["ports"] + ph["cpu_reservation"]
+    total = (ph["disk"] + ph["cpu_reservation"]
              + ph["mem_reservation"] + ph["cpu_usage_max"] + ph["mem_usage_max"])
     assert total == pytest.approx(q["max_per_hour"], rel=1e-6)
 

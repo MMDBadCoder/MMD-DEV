@@ -13,7 +13,7 @@ import os
 import posixpath
 import secrets
 import shutil
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from fastapi import (Depends, FastAPI, File, HTTPException, Request, Response,
@@ -43,6 +43,10 @@ from .security import hash_password, verify_password
 from .tickets import is_unread
 
 log = logging.getLogger("mmd.api")
+
+# Must match worker.TICK_SECONDS. Sent to the interface so the charts refresh in
+# step with the data rather than guessing.
+SAMPLE_SECONDS = 20
 app = FastAPI(title="MMD-DEV", docs_url=None, redoc_url=None)
 
 _serializer = URLSafeTimedSerializer(CONFIG.secret_key or "dev-only-insecure-key",
@@ -297,12 +301,11 @@ def tiers(user: User = Depends(current_user),
     r = svc.rates(db)
     ws = db.scalar(select(Workspace).where(Workspace.user_id == user.id))
     disk = ws.disk_gib if ws else (pricing.DEFAULT_ROOT_GIB + pricing.DEFAULT_DOCKER_GIB)
-    npub = svc.port_count(db, ws) if ws else 0
     options = []
     for cm in pricing.CPU_OPTIONS_MILLI:
         for mm in pricing.MEM_OPTIONS_MIB:
             t = Tier(cm, mm, disk)
-            q = pricing.quote(t, r, port_count=npub)
+            q = pricing.quote(t, r)
             options.append({"cpu_milli": cm, "mem_mib": mm, "label": t.label,
                             "comfortable": t.is_comfortable,
                             "max_per_hour": q["max_per_hour"],
@@ -385,7 +388,7 @@ def workspace_status(user: User = Depends(current_user),
     r = svc.rates(db)
     tier = svc.tier_of(ws)
     npub = svc.port_count(db, ws)
-    q = pricing.quote(tier, r, port_count=npub)
+    q = pricing.quote(tier, r)
     affordable, have, need = svc.can_afford_next_hour(db, ws)
     adm = svc.check_admission(db, ws)
 
@@ -548,7 +551,7 @@ async def workspace_tier(body: TierRequest, user: User = Depends(current_user),
         svc.audit(db, user.id, "size_change", ws.incus_project,
                   cpu_milli=new_tier.cpu_milli, mem_mib=new_tier.mem_mib,
                   applied_live=running)
-        q = pricing.quote(new_tier, svc.rates(db), port_count=svc.port_count(db, ws))
+        q = pricing.quote(new_tier, svc.rates(db))
         return {"ok": True, "applied_live": running, "label": new_tier.label,
                 "cpu_milli": ws.cpu_milli, "memory_mb": ws.mem_mib,
                 "rate_on_per_hour": q["max_per_hour"]}
@@ -572,7 +575,6 @@ def list_ports(request: Request, user: User = Depends(current_user),
     return {
         "host": CONFIG.endpoint_host,
         "max_ports": portalloc.MAX_PORTS_PER_WORKSPACE,
-        "rate_per_hour": svc.rates(db).port,
         "ports": [{
             "id": p.id, "internal_port": p.internal_port,
             "external_port": p.external_port, "protocol": p.protocol,
@@ -1051,13 +1053,24 @@ def set_ssh(body: SshToggle, user: User = Depends(current_user),
     return {"ok": True, "enabled": False}
 
 
+# The windows the overview offers. Five minutes is the default: the question a
+# customer actually has in front of a running machine is "what is it doing right
+# now", not "what did it do overnight".
+METRIC_WINDOWS = (5, 15, 60, 360, 1440)
+
+
 @app.get("/api/workspace/metrics")
-def workspace_metrics(hours: int = 6, user: User = Depends(current_user),
+def workspace_metrics(minutes: int = 5, user: User = Depends(current_user),
                       db: Session = Depends(get_session)) -> dict:
-    """Recent CPU and memory samples, for the overview sparklines."""
+    """Recent CPU and memory, in ABSOLUTE units for the overview charts.
+
+    Cores and gigabytes, not percentages. A percentage hides the two things
+    worth knowing - how big the machine is, and how much of it is spare - and
+    makes 90% of 0.5 vCPU look identical to 90% of 3.
+    """
     ws = my_workspace(db, user)
-    hours = max(1, min(hours, 48))
-    since = svc.now() - timedelta(hours=hours)
+    minutes = max(1, min(minutes, max(METRIC_WINDOWS)))
+    since = svc.now() - timedelta(minutes=minutes)
     rows = list(db.scalars(
         select(UsageSample)
         .where(UsageSample.workspace_id == ws.id, UsageSample.ts >= since)
@@ -1070,13 +1083,18 @@ def workspace_metrics(hours: int = 6, user: User = Depends(current_user),
             continue
         delta = cur.cpu_seconds_total - prev.cpu_seconds_total
         # A restart resets the counter; a negative delta is not a refund.
-        used = max(0.0, delta) / span
-        cpu.append({"ts": cur.ts.isoformat(),
-                    "value": round(min(used, ws.cpu_cores) / ws.cpu_cores * 100, 1)})
+        cores = max(0.0, delta) / span
+        cpu.append({"ts": cur.ts.isoformat(), "value": round(min(cores, ws.cpu_cores), 3)})
         mem.append({"ts": cur.ts.isoformat(),
-                    "value": round(cur.mem_bytes / (ws.mem_mib * 1048576) * 100, 1)})
-    return {"hours": hours, "cpu": cpu, "memory": mem,
-            "cpu_cores": ws.cpu_cores, "memory_mb": ws.mem_mib,
+                    "value": round(cur.mem_bytes / 1073741824, 3)})
+
+    return {"minutes": minutes, "windows": list(METRIC_WINDOWS),
+            "cpu": cpu, "memory": mem,
+            # The tier, so the chart can scale against what was bought rather
+            # than against the tallest bar it happens to have.
+            "cpu_cores": ws.cpu_cores,
+            "memory_gb": round(ws.mem_mib / 1024, 3),
+            "sample_seconds": SAMPLE_SECONDS,
             "samples": len(rows)}
 
 
@@ -1372,7 +1390,7 @@ def billing_summary(user: User = Depends(current_user),
     out = {"credits": have / MICRO, "total_spent": -spent / MICRO,
            "total_granted": granted / MICRO, "rates": r.as_dict()}
     if ws is not None:
-        q = pricing.quote(svc.tier_of(ws), r, port_count=svc.port_count(db, ws))
+        q = pricing.quote(svc.tier_of(ws), r)
         out["quote"] = q
         out["hours_remaining"] = ((have / MICRO) / q["max_per_hour"]
                                   if q["max_per_hour"] else 0)
@@ -1915,6 +1933,63 @@ def admin_capacity(_: User = Depends(require_admin),
             "used_cores": sum(c for c, _ in running),
             "used_mem_gib": round(sum(m for _, m in running), 2),
             "running": len(running)}
+
+
+@app.get("/api/admin/metrics")
+def admin_metrics(minutes: int = 5, _: User = Depends(require_admin),
+                  db: Session = Depends(get_session)) -> dict:
+    """What every workspace on the host is ACTUALLY consuming, over time.
+
+    The bars beside this show what is *reserved* - capacity promised to
+    customers whether or not they use it. This shows what is being used, which
+    is the other half of the question and the one that says whether the host is
+    comfortable or about to be in trouble.
+
+    Samples are written per workspace within a few milliseconds of each other,
+    so they are bucketed to the sampling interval before being summed;
+    otherwise every workspace would land in its own bucket and the total would
+    read as a sawtooth of individual machines.
+    """
+    from .scheduler.admission import host_capacity
+    minutes = max(1, min(minutes, max(METRIC_WINDOWS)))
+    since = svc.now() - timedelta(minutes=minutes)
+
+    rows = list(db.scalars(
+        select(UsageSample).where(UsageSample.ts >= since)
+        .order_by(UsageSample.workspace_id, UsageSample.ts)))
+
+    # cores-in-use needs a delta per workspace, so walk each one separately and
+    # accumulate into shared time buckets.
+    buckets_cpu: dict[int, float] = {}
+    buckets_mem: dict[int, float] = {}
+    by_ws: dict[int, list[UsageSample]] = {}
+    for r in rows:
+        by_ws.setdefault(r.workspace_id, []).append(r)
+
+    for series in by_ws.values():
+        for prev, cur in zip(series, series[1:]):
+            span = (cur.ts - prev.ts).total_seconds()
+            if span <= 0:
+                continue
+            key = int(cur.ts.timestamp() // SAMPLE_SECONDS)
+            delta = cur.cpu_seconds_total - prev.cpu_seconds_total
+            buckets_cpu[key] = buckets_cpu.get(key, 0.0) + max(0.0, delta) / span
+            buckets_mem[key] = buckets_mem.get(key, 0.0) + cur.mem_bytes / 1073741824
+
+    def series_of(b: dict[int, float]) -> list[dict]:
+        return [{"ts": datetime.fromtimestamp(k * SAMPLE_SECONDS, UTC).isoformat(),
+                 "value": round(v, 3)}
+                for k, v in sorted(b.items())]
+
+    cap = host_capacity(svc.get_settings(db))
+    return {"minutes": minutes, "windows": list(METRIC_WINDOWS),
+            "cpu": series_of(buckets_cpu), "memory": series_of(buckets_mem),
+            # Scale against what can actually be handed out, not the raw host
+            # total - the host reserve is not for sale.
+            "cpu_cores": cap.schedulable_cores,
+            "memory_gb": round(cap.schedulable_mem_gib, 2),
+            "sample_seconds": SAMPLE_SECONDS,
+            "workspaces": len(by_ws)}
 
 
 @app.get("/api/admin/activity")

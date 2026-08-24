@@ -39,7 +39,6 @@ Before power-on, and again at every hour boundary:
 max_next_hour = disk
               + cpu_reserve  + (cpu_usage_rate × cores)     ← full-capacity worst case
               + mem_reserve  + (mem_usage_rate × gib)
-              + published ports
 
 balance ≥ max_next_hour  ?  proceed  :  refuse to start / stop at the boundary
 ```
@@ -80,7 +79,12 @@ defaults in `pricing.py`.
 | Memory usage | 50 / GiB-hour average |
 | Disk | 3 / GiB-hour |
 | Archived disk | 1.5 / GiB-hour |
-| Published port | 15 / hour |
+
+**Publishing a port is free.** It hands out an nftables DNAT rule and a number
+from a range of 10,000 — neither scarce enough to meter, and charging for it
+discouraged exactly the thing the product is for. There is deliberately no port
+rate to edit. Ledger entries written while it *was* charged keep their `ports`
+breakdown; history is not rewritten because a price changed.
 
 ### Sizes
 
@@ -123,9 +127,12 @@ Nothing outside `pricing.py` computes a price.
 unique constraint. Without it, a worker restart mid-hour would double-charge a
 real customer.
 
-**Usage comes from Incus's own metrics** — `/1.0/metrics`, scraped every 60
-seconds by the worker using a dedicated **metrics-type certificate**, which is
-read-only and distinct from the client certificate.
+**Usage comes from Incus's own metrics** — `/1.0/metrics`, scraped every **20
+seconds** by the worker using a dedicated **metrics-type certificate**, which is
+read-only and distinct from the client certificate. Settlement still runs every
+5 minutes and reconciliation every 15; the sampling interval was shortened so a
+five-minute chart has enough points to read, not to change billing cadence.
+Samples are pruned after 7 days.
 
 **A factory reset settles first.** If the machine is running when a reset is
 requested, the elapsed period is settled before anything is destroyed —

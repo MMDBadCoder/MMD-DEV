@@ -88,8 +88,7 @@ def post_transaction(db: Session, *, user_id: int, workspace_id: int | None,
 
 # --- the credit gate -----------------------------------------------------
 def gate_micro(db: Session, ws: Workspace) -> int:
-    return pricing.max_hour_micro(tier_of(ws), rates(db),
-                                  port_count=port_count(db, ws))
+    return pricing.max_hour_micro(tier_of(ws), rates(db))
 
 
 def can_afford_next_hour(db: Session, ws: Workspace) -> tuple[bool, int, int]:
@@ -147,8 +146,7 @@ def settle_period(db: Session, ws: Workspace, period_start: datetime, *,
         tier or tier_of(ws), rates(db),
         powered_on=powered_on,
         archived=(ws.state == WorkspaceState.ARCHIVED),
-        cpu_core_hours=cpu_core_hours, mem_gib_hours=mem_gib_hours,
-        port_count=port_count(db, ws), fraction=fraction)
+        cpu_core_hours=cpu_core_hours, mem_gib_hours=mem_gib_hours, fraction=fraction)
     if amount <= 0:
         return 0
     kind = TxKind.CHARGE_HOUR if fraction >= 0.999 else TxKind.CHARGE_PARTIAL

@@ -141,8 +141,13 @@ DEFAULT_RATES: dict[str, float] = {
     "rate_mem_usage_per_gib_hour": 50.0,
     "rate_disk_per_gib_hour": 3.0,
     "rate_disk_archived_per_gib_hour": 1.5,
-    "rate_port_per_hour": 15.0,     # a published port holds a scarce resource
 }
+
+# NB: there is deliberately no port rate. Publishing a port is FREE - it hands
+# out an nftables DNAT rule and a number from a range of 10,000, neither of
+# which is scarce enough to meter. Ledger entries written while it WAS charged
+# keep their `ports` breakdown; history is not rewritten because a price
+# changed.
 
 
 @dataclass(frozen=True)
@@ -153,7 +158,6 @@ class Rates:
     mem_usage: float
     disk: float
     disk_archived: float
-    port: float
 
     @classmethod
     def from_settings(cls, s: dict[str, str] | None = None) -> "Rates":
@@ -170,7 +174,6 @@ class Rates:
             mem_usage=g("rate_mem_usage_per_gib_hour"),
             disk=g("rate_disk_per_gib_hour"),
             disk_archived=g("rate_disk_archived_per_gib_hour"),
-            port=g("rate_port_per_hour"),
         )
 
     def as_dict(self) -> dict[str, float]:
@@ -181,7 +184,6 @@ class Rates:
             "mem_usage_per_gib_hour": self.mem_usage,
             "disk_per_gib_hour": self.disk,
             "disk_archived_per_gib_hour": self.disk_archived,
-            "port_per_hour": self.port,
         }
 
 
@@ -189,10 +191,6 @@ class Rates:
 def disk_micro(tier: Tier, r: Rates, *, archived: bool = False, fraction: float = 1.0) -> int:
     rate = r.disk_archived if archived else r.disk
     return round(tier.disk_gib * rate * fraction * MICRO)
-
-
-def ports_micro(port_count: int, r: Rates, *, fraction: float = 1.0) -> int:
-    return round(port_count * r.port * fraction * MICRO)
 
 
 def reservation_micro(tier: Tier, r: Rates, *, fraction: float = 1.0) -> int:
@@ -206,44 +204,41 @@ def usage_micro(cpu_core_hours: float, mem_gib_hours: float, r: Rates) -> int:
 
 
 # --- the two numbers everything else asks for ---------------------------
-def max_hour_micro(tier: Tier, r: Rates, *, port_count: int = 0) -> int:
+def max_hour_micro(tier: Tier, r: Rates) -> int:
     """The gate: what the coming hour costs if run flat out for all of it."""
     return (disk_micro(tier, r)
-            + ports_micro(port_count, r)
             + reservation_micro(tier, r)
             + usage_micro(tier.cpu_cores, tier.mem_gib, r))
 
 
-def idle_hour_micro(tier: Tier, r: Rates, *, port_count: int = 0) -> int:
+def idle_hour_micro(tier: Tier, r: Rates) -> int:
     """A running but completely idle hour - the floor while switched on."""
-    return disk_micro(tier, r) + ports_micro(port_count, r) + reservation_micro(tier, r)
+    return disk_micro(tier, r) + reservation_micro(tier, r)
 
 
-def off_hour_micro(tier: Tier, r: Rates, *, port_count: int = 0, fraction: float = 1.0) -> int:
-    """Switched off: disk (and any reserved ports), nothing else."""
-    return (disk_micro(tier, r, fraction=fraction)
-            + ports_micro(port_count, r, fraction=fraction))
+def off_hour_micro(tier: Tier, r: Rates, *, fraction: float = 1.0) -> int:
+    """Switched off: disk, and nothing else."""
+    return disk_micro(tier, r, fraction=fraction)
 
 
 def settle_micro(tier: Tier, r: Rates, *, powered_on: bool, archived: bool = False,
                  cpu_core_hours: float = 0.0, mem_gib_hours: float = 0.0,
-                 port_count: int = 0, fraction: float = 1.0) -> tuple[int, dict]:
+                 fraction: float = 1.0) -> tuple[int, dict]:
     """One period's actual bill, with a breakdown for the ledger and the UI."""
     if archived:
         d = disk_micro(tier, r, archived=True, fraction=fraction)
-        return d, {"disk": d, "ports": 0, "reservation": 0, "usage": 0,
+        return d, {"disk": d, "reservation": 0, "usage": 0,
                    "archived": True, "fraction": round(fraction, 4)}
 
     d = disk_micro(tier, r, fraction=fraction)
-    p = ports_micro(port_count, r, fraction=fraction)
     if not powered_on:
-        return d + p, {"disk": d, "ports": p, "reservation": 0, "usage": 0,
-                       "fraction": round(fraction, 4)}
+        return d, {"disk": d, "reservation": 0, "usage": 0,
+                   "fraction": round(fraction, 4)}
 
     res = reservation_micro(tier, r, fraction=fraction)
     use = usage_micro(cpu_core_hours, mem_gib_hours, r)
-    return d + p + res + use, {
-        "disk": d, "ports": p, "reservation": res, "usage": use,
+    return d + res + use, {
+        "disk": d, "reservation": res, "usage": use,
         "cpu_core_hours": round(cpu_core_hours, 4),
         "mem_gib_hours": round(mem_gib_hours, 4),
         "fraction": round(fraction, 4),
@@ -252,7 +247,7 @@ def settle_micro(tier: Tier, r: Rates, *, powered_on: bool, archived: bool = Fal
     }
 
 
-def quote(tier: Tier, r: Rates, *, port_count: int = 0) -> dict:
+def quote(tier: Tier, r: Rates) -> dict:
     """Everything the UI needs to explain a price, itemised."""
     return {
         "currency": CURRENCY,
@@ -262,14 +257,13 @@ def quote(tier: Tier, r: Rates, *, port_count: int = 0) -> dict:
                  "comfortable": tier.is_comfortable},
         "per_hour": {
             "disk": disk_micro(tier, r) / MICRO,
-            "ports": ports_micro(port_count, r) / MICRO,
             "cpu_reservation": round(tier.cpu_cores * r.cpu_reserve, 6),
             "mem_reservation": round(tier.mem_gib * r.mem_reserve, 6),
             "cpu_usage_max": round(tier.cpu_cores * r.cpu_usage, 6),
             "mem_usage_max": round(tier.mem_gib * r.mem_usage, 6),
         },
-        "off_per_hour": off_hour_micro(tier, r, port_count=port_count) / MICRO,
-        "idle_per_hour": idle_hour_micro(tier, r, port_count=port_count) / MICRO,
-        "max_per_hour": max_hour_micro(tier, r, port_count=port_count) / MICRO,
+        "off_per_hour": off_hour_micro(tier, r) / MICRO,
+        "idle_per_hour": idle_hour_micro(tier, r) / MICRO,
+        "max_per_hour": max_hour_micro(tier, r) / MICRO,
         "rates": r.as_dict(),
     }

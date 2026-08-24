@@ -9,6 +9,26 @@ import { t, CURRENCY } from "../i18n.js";
 import { render } from "../main.js";
 
 let poll = null;
+let chartTimer = null;
+
+/* Redraw ONLY the two charts, in step with the worker's sampling interval.
+   Re-rendering the whole page every 20 seconds would fight with anything the
+   customer is in the middle of - a size selector, a scroll position - to show
+   two lines that moved by a pixel. */
+async function refreshCharts() {
+  clearTimeout(chartTimer);
+  const box = $("#charts");
+  if (!box) return;                       // navigated away
+  let m;
+  try { m = await get(`/api/workspace/metrics?minutes=${savedWindow()}`); }
+  catch { chartTimer = setTimeout(refreshCharts, 30000); return; }
+  if (!$("#charts")) return;
+  $("#chart-cpu").innerHTML =
+    usageChart(m.cpu, m.cpu_cores, "var(--brand)", t("unit.cores"));
+  $("#chart-mem").innerHTML =
+    usageChart(m.memory, m.memory_gb, "var(--ok)", t("unit.gb"));
+  chartTimer = setTimeout(refreshCharts, (m.sample_seconds || 20) * 1000);
+}
 
 function pill(status) {
   const cls = { on: "on", starting: "busy", stopping: "busy", provisioning: "busy",
@@ -17,31 +37,6 @@ function pill(status) {
     t("machine.state." + status) || status}</span>`;
 }
 
-/* A sparkline drawn as an inline SVG path - no chart library, no CDN, and it
-   inherits the theme's colours for free. */
-function spark(series, colour, unit = "%") {
-  if (!series || series.length < 2) {
-    return `<div class="tiny dim" style="padding:14px 0">${t("billing.chart.empty")}</div>`;
-  }
-  const vals = series.map((p) => p.value);
-  const max = Math.max(...vals, 1);
-  const w = 100, h = 34;
-  const pts = vals.map((v, i) =>
-    `${(i / (vals.length - 1)) * w},${h - (v / max) * (h - 3) - 1.5}`);
-  const last = vals[vals.length - 1];
-  return `
-    <svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"
-         style="width:100%;height:44px;display:block">
-      <polyline fill="none" stroke="${colour}" stroke-width="1.6"
-        stroke-linejoin="round" stroke-linecap="round" points="${pts.join(" ")}"/>
-      <polygon fill="${colour}" opacity=".12"
-        points="0,${h} ${pts.join(" ")} ${w},${h}"/>
-    </svg>
-    <div class="between tiny dim" style="margin-top:4px">
-      <span>${t("billing.chart.peak")} ${fmtFa(max, max < 10 ? 1 : 0)}${unit}</span>
-      <span>${fmtFa(last, last < 10 ? 1 : 0)}${unit}</span>
-    </div>`;
-}
 
 function bars(series) {
   if (!series.length) return `<div class="empty">${t("billing.chart.empty")}</div>`;
@@ -75,7 +70,8 @@ export async function machinePage() {
   // Everything else is supporting detail; a failure there must not blank the page.
   const [usage, metrics, services, activity] = await Promise.all([
     get("/api/billing/usage?hours=48").catch(() => ({ series: [] })),
-    get("/api/workspace/metrics?hours=6").catch(() => ({ cpu: [], memory: [] })),
+    get(`/api/workspace/metrics?minutes=${savedWindow()}`)
+      .catch(() => ({ cpu: [], memory: [], cpu_cores: 0, memory_gb: 0 })),
     get("/api/workspace/services").catch(() => null),
     get("/api/activity?limit=6").catch(() => ({ events: [] })),
   ]);
@@ -120,15 +116,25 @@ export async function machinePage() {
       ${on ? "" : note("info", t("machine.offnote", fmtMoney(w.rate_off_per_hour)))}
     </div>
 
-    <div class="row" style="margin-bottom:16px">
-      <div class="card" style="margin:0">
-        <h3>${t("ov.usage.cpu")}</h3>
-        ${spark(metrics.cpu, "var(--brand)")}
+    <div class="card" style="margin-bottom:16px">
+      <div class="between" style="margin-bottom:12px">
+        <h3 style="margin:0">${t("ov.usage.title")}</h3>
+        ${windowPicker(savedWindow())}
       </div>
-      <div class="card" style="margin:0">
-        <h3>${t("ov.usage.mem")}</h3>
-        ${spark(metrics.memory, "var(--ok)")}
+      <div class="row" id="charts">
+        <div style="flex:1 1 240px">
+          <label>${t("ov.usage.cpu")}</label>
+          <div id="chart-cpu">${
+            usageChart(metrics.cpu, metrics.cpu_cores, "var(--brand)", t("unit.cores"))}</div>
+        </div>
+        <div style="flex:1 1 240px">
+          <label>${t("ov.usage.mem")}</label>
+          <div id="chart-mem">${
+            usageChart(metrics.memory, metrics.memory_gb, "var(--ok)", t("unit.gb"))}</div>
+        </div>
       </div>
+      <p class="tiny dim" style="margin:10px 0 0">${
+        t("ov.usage.refresh", metrics.sample_seconds || 20)}</p>
     </div>
 
     <div class="card"><h3>${t("ov.spend")}</h3>${bars(usage.series || [])}</div>
@@ -171,7 +177,16 @@ export async function machinePage() {
     catch (err) { toast(err.message, "bad"); }
     machinePage();
   };
+  wireWindowPicker($("#win"), (m) => {
+    saveWindow(m);
+    $("#win").querySelectorAll("[data-win]").forEach((b) =>
+      b.classList.toggle("active", Number(b.dataset.win) === m));
+    refreshCharts();
+  });
+  clearTimeout(chartTimer);
+  chartTimer = setTimeout(refreshCharts, (metrics.sample_seconds || 20) * 1000);
+
   if (busy) poll = setTimeout(machinePage, 2500);
 }
 
-export function teardownTerminal() { clearTimeout(poll); }
+export function teardownTerminal() { clearTimeout(poll); clearTimeout(chartTimer); }

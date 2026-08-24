@@ -445,3 +445,16 @@ tr.clickable:hover{background:var(--surface-2)}
   font-weight:500;color:var(--ink-2);cursor:pointer;line-height:1.7}
 .ack input{margin:3px 0 0;flex:none;width:16px;height:16px;accent-color:var(--bad)}
 .ack:hover{color:var(--ink)}
+
+/* --- usage charts -------------------------------------------------------- */
+.winpick{display:flex;gap:4px;flex-wrap:wrap}
+.winpick button{padding:4px 11px;border:1px solid var(--border);border-radius:999px;
+  background:var(--surface);color:var(--ink-2);font-size:12.5px;font-family:inherit;
+  cursor:pointer;line-height:1.7}
+.winpick button:hover{color:var(--ink);border-color:var(--border-strong)}
+.winpick button.active{border-color:var(--brand);color:var(--brand);
+  background:var(--brand-soft);font-weight:600}
+.chart-legend{display:flex;justify-content:space-between;align-items:baseline;
+  gap:10px;margin-top:6px;flex-wrap:wrap}
+.chart-legend b{font-size:15px;font-weight:700;color:var(--ink)}
+.chart-empty{padding:22px 0;text-align:center}
