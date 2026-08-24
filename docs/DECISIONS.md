@@ -804,3 +804,39 @@ sampling interval before summing — otherwise each workspace lands in its own
 bucket and the total reads as a sawtooth of individual machines rather than a
 host total. It scales against *schedulable* capacity, not the raw host: the host
 reserve is not for sale.
+
+## A page shipped broken because `node --check` cannot see a missing import
+
+The overview page threw a `ReferenceError` and rendered nothing for every
+customer. The cause: a shared chart module was added, and the edit that was
+supposed to insert `import { usageChart, savedWindow, … } from "../usagechart.js"`
+into `pages/machine.js` targeted the line `import { t } from "../i18n.js";` —
+which does not exist in that file, since it reads `import { t, CURRENCY }`. The
+replacement matched nothing and was never applied. Every one of those names was
+then simply undefined.
+
+Nothing in the existing checks could catch it:
+
+- **`node --check` passes.** The file parses perfectly; an undefined identifier
+  is not a syntax error.
+- **Loading the module passes.** An undefined *identifier* is a runtime
+  `ReferenceError`, not a link error, so imports resolving is not the same as
+  names existing.
+- **The console check on the landing page passed**, because `machine.js` is only
+  *evaluated* when the overview renders, and the landing page never renders it.
+- The unit suite never rendered the page at all.
+
+`tests/web/imports.test.mjs` closes the gap: it collects every name exported by
+any module under `web/js`, and for each file flags any of those names used as a
+bare identifier without being imported or declared locally. Verified against the
+bug by removing the import again — it names both symbols and where they come
+from, while `node --check` still passes on the same file.
+
+The wider lesson, which had already been written down here twice and was not
+applied: **a page is not verified until it has been rendered.** Checking that a
+module parses, that its assets return 200, and that some *other* page loads
+cleanly proves nothing about it. The fix was verified by creating a disposable
+workspace, binding a test account to it, and loading `/console` and
+`/console/admin` in a real browser — which also confirmed the picker requests
+the right window, marks the right button active, and remembers the choice across
+a reload.

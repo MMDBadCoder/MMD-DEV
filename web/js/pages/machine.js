@@ -7,6 +7,8 @@ import { get, post } from "../api.js";
 import { $, icon, esc, fmtMoney, fmtNum, fmtFa, note, toast, stamp } from "../ui.js";
 import { t, CURRENCY } from "../i18n.js";
 import { render } from "../main.js";
+import { usageChart, windowPicker, wireWindowPicker,
+         savedWindow, saveWindow } from "../usagechart.js";
 
 let poll = null;
 let chartTimer = null;
