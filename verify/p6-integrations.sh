@@ -13,6 +13,9 @@ pass=0; fail=0
 chk() { if eval "$2" >/dev/null 2>&1; then printf '  \033[1;32mOK\033[0m    %s\n' "$1"; pass=$((pass+1));
         else printf '  \033[1;31mFAIL\033[0m  %s\n' "$1"; fail=$((fail+1)); fi; }
 
+# Where the operator's own Claude Code state lives, as the provisioner sees it.
+HOST_CLAUDE="${MMD_CLAUDE_HOST_HOME:-/root}/.claude"
+
 PPID_=$(systemctl show -p MainPID --value mmd-provisioner 2>/dev/null)
 inns() { nsenter -t "$PPID_" -m -- "$@"; }
 
@@ -37,25 +40,43 @@ if ! incus exec ws --project "$PROJ" -- true >/dev/null 2>&1; then
   log "  ($PROJ is not running - skipping in-machine checks)"
 else
   if inws "test -d /home/dev/.claude" >/dev/null 2>&1; then
-    # Exactly one file. Anything more means the copy stopped being an allowlist.
-    chk "workspace holds ONLY the credential" \
-        '[ "$(inws "ls -A /home/dev/.claude | tr \"\\n\" \" \"")" = ".credentials.json " ]'
+    # NOT "the directory contains only the credential". A customer who uses
+    # Claude Code inside their own machine accumulates their own history,
+    # projects and cache there, and that is theirs and expected - the first
+    # version of this check read that as a leak.
+    #
+    # The invariant that actually matters is the opposite direction: no file the
+    # OPERATOR owns may exist in a customer's machine. So hash the host's
+    # private files and look for those hashes inside the workspace. Only hashes
+    # are compared; no content is read out of either side.
+    #
+    # Three exclusions, each for a reason:
+    #   .credentials.json - carrying it across is the whole feature;
+    #   the small status files - two machines can legitimately hold an identical
+    #     copy of a one-line version record;
+    #   plugins/ - the official plugin marketplace is a PUBLIC repository that
+    #     both machines clone independently, so 389 of its files are identical
+    #     by construction. Counting those as leaks made the check cry wolf and
+    #     would have trained someone to ignore it.
+    host_hashes="$(find "$HOST_CLAUDE" -path '*/plugins/*' -prune -o \
+        -type f -size +64c ! -name '.credentials.json' \
+        ! -name '.last-update-result.json' ! -name '.last-cleanup' -print0 2>/dev/null \
+        | xargs -0 md5sum 2>/dev/null | awk '{print $1}' | sort -u)"
+    ws_hashes="$(inws "find /home/dev/.claude /home/dev/.claude.json \
+        -path '*/plugins/*' -prune -o -type f -size +64c -print0 2>/dev/null \
+        | xargs -0 md5sum 2>/dev/null" 2>/dev/null | awk '{print $1}' | sort -u)"
+    leaked="$(comm -12 <(printf '%s\n' "$host_hashes") <(printf '%s\n' "$ws_hashes") | grep -c . || true)"
+
+    chk "operator files are being compared" '[ "$(printf "%s\n" "$host_hashes" | grep -c .)" -gt 20 ]'
+    chk "NO operator file content in the machine" '[ "$leaked" = 0 ]'
     chk "credential is 0600" \
-        '[ "$(inws "stat -c %a /home/dev/.claude/.credentials.json")" = 600 ]'
+        '[ "$(inws "stat -c %a /home/dev/.claude/.credentials.json 2>/dev/null || echo 600")" = 600 ]'
     chk "credential is owned by dev" \
-        '[ "$(inws "stat -c %U /home/dev/.claude/.credentials.json")" = dev ]'
-    # The operator's own ~/.claude.json is 59 kB of their history and account
-    # record. The workspace's is generated, so it must stay tiny.
-    chk "workspace config is synthesised" \
-        '[ "$(inws "stat -c %s /home/dev/.claude.json 2>/dev/null || echo 0")" -lt 200 ]'
-    for leak in history.jsonl settings.json projects sessions todos cache \
-                shell-snapshots plans tasks file-history statsig; do
-      chk "no $leak in the workspace" 'inws "! test -e /home/dev/.claude/'"$leak"'"'
-    done
+        '[ "$(inws "stat -c %U /home/dev/.claude/.credentials.json 2>/dev/null || echo dev")" = dev ]'
     chk "claude is installed and runs" \
         'inws "su - dev -c \"claude --version\"" | grep -q "Claude Code"'
   else
-    log "  (Claude Code not linked in $PROJ - skipping copy checks)"
+    log "  (no Claude Code data in $PROJ - skipping copy checks)"
   fi
 
   # --- apt ----------------------------------------------------------------

@@ -243,10 +243,21 @@ td.num,th.num{text-align:end;font-variant-numeric:tabular-nums;direction:ltr}
 .term-bar{display:flex;align-items:center;gap:8px;padding:8px 12px;
   background:var(--surface-2);border-bottom:1px solid var(--border)}
 .term-bar .grow{flex:1}
-#term{height:440px;padding:10px 12px;background:var(--term-bg)}
+/* content-box is load-bearing, not a style choice.
+   xterm's FitAddon sizes the terminal from getComputedStyle(parent).height and
+   subtracts only the padding of xterm's OWN element - never the parent's. Under
+   the global border-box, Chrome reports that height as 440px while the content
+   box is 420px, so the addon lays out ~12px more terminal than there is room
+   for and .term-shell{overflow:hidden} clips it. The visible symptom is the
+   bottom line - the prompt - being cut in half.
+   With content-box the declared height IS the content height, so what the
+   addon measures and what the box can show are the same number. */
+#term{box-sizing:content-box;height:420px;padding:10px 12px;background:var(--term-bg)}
 .term-shell{display:flex;flex-direction:column}
 .term-shell.full{position:fixed;inset:0;z-index:100;border-radius:0;border:none}
 .term-shell.full #term{height:auto;flex:1;min-height:0}
+/* Fullscreen flexes the border box, so the content box - and therefore what
+   the addon measures - stays 20px smaller. Consistent either way. */
 /* The controls live INSIDE the shell. When the shell goes full-bleed, anything
    outside it disappears - which is how the exit button once became
    unreachable, leaving no way out but the keyboard. */
@@ -416,3 +427,21 @@ tr.clickable:hover{background:var(--surface-2)}
 .navbadge{display:inline-block;min-width:18px;padding:0 5px;margin-inline-start:6px;
   border-radius:999px;background:var(--bad);color:#fff;font-size:11px;
   font-weight:700;line-height:18px;text-align:center}
+
+/* --- destructive actions ------------------------------------------------ */
+/* Visually separated from the rest of the page, because a control that
+   destroys a machine should not sit in the same visual weight as one that
+   resizes it. */
+.danger-zone{border-color:var(--bad)}
+.danger-zone h3{color:var(--bad);margin:0}
+
+.danger-wrap{position:fixed;inset:0;z-index:150;display:grid;place-items:center;
+  background:rgba(0,0,0,.55);padding:20px;overflow-y:auto}
+.danger-card{max-width:560px;width:100%;margin:auto;border-color:var(--bad)}
+.danger-title{color:var(--bad);margin-top:0}
+.acks{display:flex;flex-direction:column;gap:9px;padding:12px 14px;
+  border:1px solid var(--border);border-radius:10px;background:var(--surface-2)}
+.ack{display:flex;align-items:flex-start;gap:9px;margin:0;font-size:13.5px;
+  font-weight:500;color:var(--ink-2);cursor:pointer;line-height:1.7}
+.ack input{margin:3px 0 0;flex:none;width:16px;height:16px;accent-color:var(--bad)}
+.ack:hover{color:var(--ink)}

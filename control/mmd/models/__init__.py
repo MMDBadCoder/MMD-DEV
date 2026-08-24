@@ -39,6 +39,7 @@ class WorkspaceState(str, enum.Enum):
     STARTING = "starting"
     ON = "on"
     STOPPING = "stopping"
+    RESETTING = "resetting"    # being rebuilt from the golden image
     ARCHIVING = "archiving"
     ARCHIVED = "archived"      # instance destroyed, disk archived, restorable
     DELETING = "deleting"

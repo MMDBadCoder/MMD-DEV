@@ -36,6 +36,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 WS_CREATE = REPO / "workspace" / "ws-create.sh"
 WS_DESTROY = REPO / "workspace" / "ws-destroy.sh"
+WS_RESET = REPO / "workspace" / "ws-reset.sh"
 APT_FIXUPS = REPO / "image" / "apt-fixups.sh"
 
 SOCKET_PATH = os.environ.get("MMD_PROVISIONER_SOCKET", "/run/mmd/provisioner.sock")
@@ -52,7 +53,7 @@ VERBS = {"provision", "archive", "restore", "destroy",
          "expose_port", "unexpose_port", "install_packages",
          "service_ssh", "service_rdp", "probe_sessions",
          "fs_list", "fs_pull", "fs_push", "fs_mkdir", "fs_delete",
-         "fs_archive", "apt_repair", "ai_claude", "ping"}
+         "fs_archive", "apt_repair", "ai_claude", "reset", "ping"}
 
 # ---------------------------------------------------------------------------
 # Claude Code sign-in propagation
@@ -580,6 +581,25 @@ def handle(req: dict) -> dict:
         # every change, so this is idempotent and self-healing rather than a
         # sequence of deltas that can drift.
         return _sync_port_rules(req.get("mappings") or [])
+
+    if verb == "reset":
+        # Destroys the customer's machine and builds a new one from the golden
+        # image. The confirmation that makes this safe - password, typed
+        # acknowledgement - is the API's job; by the time it reaches here the
+        # decision has been made and this simply carries it out.
+        t = _clamp(req)
+        ok, out = _run([
+            "bash", str(WS_RESET), str(idx),
+            str(t["cores"]), str(t["mem_mib"]),
+            str(t["root_gib"]), str(t["docker_gib"]),
+        ], timeout=1800)
+        if not ok:
+            return {"ok": False, "output": out[-2000:], "tier": t}
+        # A fresh machine carries the same apt problem a fresh provision does.
+        fx_ok, fx_out = _apply_apt_fixups(project)
+        if not fx_ok:
+            log.warning("apt fixups failed after reset of ws-%s: %s", idx, fx_out[-300:])
+        return {"ok": True, "output": out[-2000:], "tier": t, "apt_fixups": fx_ok}
 
     if verb == "ai_claude":
         return _verb_ai_claude(project, req)

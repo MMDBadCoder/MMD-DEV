@@ -75,3 +75,68 @@ ws_setup_profile() {
       security.mac_filtering=true \
       --project "$proj" >/dev/null
 }
+
+# --- instance -----------------------------------------------------------
+# Defined here rather than inline in ws-create.sh because ws-reset.sh has to
+# rebuild exactly the same instance. Two copies of this block would drift, and
+# the drift would show up as a reset machine that is subtly not what the
+# customer originally bought.
+#
+# NB: the key is security.guestapi, not security.devlxd - Incus renamed it in
+# the fork. LXD documentation and most tutorials still say devlxd, which Incus
+# rejects outright as an unknown key. Setting it false stops the workspace from
+# reading or altering its own instance configuration from the inside.
+#
+# NB: limits.memory.swap is deliberately NOT set. Incus classifies it as
+# low-level config, and restricted.containers.lowlevel=block rejects it - which
+# is the restriction working as intended. Its default is already `true`, so
+# omitting it yields exactly the wanted behaviour (an over-budget workspace
+# swaps and goes slow rather than having its coding agent OOM-killed) without
+# weakening the project's security posture to say so explicitly.
+ws_create_instance() {
+  local proj="$1" inst="$2" cores="$3" mem_mib="$4"
+  incus create "$GOLDEN_IMAGE_ALIAS" "$inst" --project "$proj" \
+    -c security.nesting=true \
+    -c security.privileged=false \
+    -c security.guestapi=false \
+    -c security.idmap.isolated=true \
+    -c security.syscalls.intercept.mknod=true \
+    -c security.syscalls.intercept.setxattr=true \
+    -c security.syscalls.intercept.sysinfo=true \
+    -c limits.cpu="$cores" \
+    -c limits.cpu.allowance="$((cores * 100))ms/100ms" \
+    -c limits.memory="${mem_mib}MiB" \
+    -c limits.memory.enforce=hard \
+    -c limits.processes=4096 \
+    -c boot.autostart=false \
+    >/dev/null
+}
+
+# Docker needs its own ext4-on-zvol volume. On a ZFS-backed rootfs Docker
+# selects the `zfs` graph driver and fails outright - the container has no zfs
+# binary and no delegated dataset. block_mode gives it a real block device
+# formatted ext4, so overlay2 works natively at close to disk speed, and the
+# volume persists across stop/start exactly like the rootfs.
+ws_attach_docker_volume() {
+  local proj="$1" inst="$2" docker_gib="$3" vol="${4:-docker}"
+  incus storage volume create "$INCUS_POOL_NAME" "$vol" --project "$proj" \
+    size="${docker_gib}GiB" \
+    zfs.block_mode=true \
+    block.filesystem=ext4 \
+    >/dev/null
+  incus config device add "$inst" docker disk --project "$proj" \
+    pool="$INCUS_POOL_NAME" source="$vol" path=/var/lib/docker >/dev/null
+}
+
+# Wait for systemd inside the instance to finish coming up. `is-system-running`
+# exits non-zero while still starting AND when degraded, so success is judged by
+# the command answering at all rather than by its exit code.
+ws_wait_booted() {
+  local proj="$1" inst="$2" i
+  for i in $(seq 1 30); do
+    incus exec "$inst" --project "$proj" -- systemctl is-system-running >/dev/null 2>&1 && return 0
+    sleep 2
+  done
+  return 1
+}
+

@@ -86,7 +86,14 @@ function wireControls() {
   const setFont = (d) => {
     const next = Math.min(FONT_MAX, Math.max(FONT_MIN, fontSize() + d));
     localStorage.setItem(FONT_KEY, String(next));
-    if (term) { term.options.fontSize = next; refit(); }
+    // Refit on the NEXT frame. Changing fontSize makes xterm re-measure its
+    // cell size, and fitting in the same tick can compute rows from the old
+    // metrics - the same measure-before-layout mistake that used to clip the
+    // bottom line. enterFull/exitFull defer for the same reason.
+    if (term) {
+      term.options.fontSize = next;
+      requestAnimationFrame(refit);
+    }
     labels();
   };
   for (const id of ["#font-down", "#f-down"]) if ($(id)) $(id).onclick = () => setFont(-1);
@@ -149,6 +156,10 @@ function open() {
   });
   fit = new FitAddon.FitAddon();
   term.loadAddon(fit); term.open(el); fit.fit();
+  // ...and once more after layout has settled. The first fit runs before the
+  // browser has necessarily resolved the monospace font's metrics, so the row
+  // count it lands on can be off by one.
+  requestAnimationFrame(refit);
 
   const proto = location.protocol === "https:" ? "wss" : "ws";
   sock = new WebSocket(`${proto}://${location.host}/api/workspace/terminal`);

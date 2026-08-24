@@ -145,6 +145,19 @@ class RdpRequest(BaseModel):
     password: str | None = Field(default=None, max_length=128)
 
 
+class ResetRequest(BaseModel):
+    """Deliberately awkward to construct by accident.
+
+    Both fields are required and both are checked server-side, so the
+    confirmation is not something a stray click - or a script poking the API -
+    can satisfy. The typed value is the account's own email address: unlike a
+    fixed phrase, it cannot be copied from documentation, and unlike a checkbox
+    it has to be produced rather than dismissed.
+    """
+    confirm: str = Field(min_length=3, max_length=320)
+    password: str = Field(min_length=1, max_length=256)
+
+
 class TicketCreate(BaseModel):
     subject: str = Field(min_length=3, max_length=200)
     body: str = Field(min_length=1, max_length=4000)
@@ -827,6 +840,102 @@ def set_rdp(body: RdpRequest, user: User = Depends(current_user),
     db.commit()
     svc.audit(db, user.id, "rdp_disabled", ws.incus_project)
     return {"ok": True, "enabled": False}
+
+
+@app.post("/api/workspace/reset")
+async def workspace_reset(body: ResetRequest, user: User = Depends(current_user),
+                          db: Session = Depends(get_session)) -> dict:
+    """Rebuild the machine from the golden image. Everything on it is destroyed.
+
+    Kept: the reserved SSH and RDP ports, the saved public keys, the machine's
+    size and the credit balance. All of those live in the dashboard rather than
+    on the machine, and losing them would make a reset feel like an account
+    closure.
+
+    Gone: the filesystem, every installed package, every configuration change,
+    and all Docker images, containers and volumes.
+    """
+    ws = my_workspace(db, user)
+    # ERROR is allowed on purpose. A machine wedged by a failed operation is
+    # exactly when a customer wants to start over, and refusing there would
+    # leave the one state with no self-service way out. ws-reset.sh tolerates a
+    # half-destroyed workspace, so this is also how a reset that died partway
+    # is retried.
+    if ws.state not in (WorkspaceState.ON, WorkspaceState.OFF, WorkspaceState.ERROR):
+        fail(409, "reset_bad_state",
+             "The machine must be running or stopped to be reset.",
+             state=ws.state.value)
+
+    # --- the two confirmations ---------------------------------------------
+    # Checked in this order on purpose: the typed value is the cheap check and
+    # answering it first means a wrong password is only ever reported to someone
+    # who already demonstrated they know whose account this is.
+    if body.confirm.strip().lower() != user.email.lower():
+        fail(400, "reset_confirm_mismatch",
+             "The typed confirmation does not match your email address.")
+    if not verify_password(body.password, user.password_hash):
+        # Same code the sign-in page uses, so a wrong password reads the same
+        # here as anywhere else.
+        svc.audit(db, user.id, "reset_refused", ws.incus_project, reason="password")
+        fail(403, "bad_password", "That password is not correct.")
+
+    was_on = ws.state == WorkspaceState.ON
+    if was_on:
+        # Settle before destroying. The machine ran for part of an hour and that
+        # time was real; skipping it would quietly make "reset" the cheapest way
+        # to avoid a bill.
+        svc.settle_elapsed(db, ws, powered_on=True)
+
+    ws.state = WorkspaceState.RESETTING
+    ws.error = None
+    db.commit()
+    svc.audit(db, user.id, "reset_started", ws.incus_project, was_on=was_on)
+
+    resp = svc.call_provisioner({
+        "verb": "reset", "idx": ws.idx,
+        "cores": max(1, round(ws.cpu_milli / 1000)), "mem_mib": ws.mem_mib,
+        "root_gib": ws.root_gib, "docker_gib": ws.docker_gib}, timeout=1800)
+
+    if not resp.get("ok"):
+        log.error("reset failed for %s: %s", ws.incus_project, resp)
+        ws.state = WorkspaceState.ERROR
+        ws.error = (resp.get("error") or resp.get("output", ""))[-500:]
+        db.commit()
+        svc.audit(db, user.id, "reset_failed", ws.incus_project, error=ws.error[:200])
+        # ws-reset.sh tolerates a half-destroyed workspace, so retrying is the
+        # recovery path rather than something only an operator can unstick.
+        fail(500, "reset_failed", "The machine could not be reset.",
+             output=(resp.get("output") or "")[-300:])
+
+    # ws-reset.sh leaves it running so it can be checked; hand it back off, the
+    # same as a new machine. Restarting it is the customer's decision and their
+    # credit.
+    client = _incus()
+    try:
+        await client.stop(ws.instance, ws.incus_project)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("post-reset stop failed for %s: %s", ws.incus_project, exc)
+    finally:
+        await client.aclose()
+
+    ws.state = WorkspaceState.OFF
+    ws.desired_on = False
+    ws.period_start = None
+    ws.started_at = None
+    ws.last_activity = None
+    # The services were installed on a filesystem that no longer exists. Leaving
+    # these true would show the customer a desktop switch for software that is
+    # not there, and an SSH toggle for a machine with no keys pushed.
+    ws.ssh_enabled = False
+    ws.ssh_keys = None
+    ws.rdp_enabled = False
+    ws.rdp_installed = False
+    db.commit()
+
+    # The keys themselves are kept - they are the customer's, not the machine's -
+    # and go back on the machine the moment SSH is switched on again.
+    svc.audit(db, user.id, "reset_done", ws.incus_project)
+    return {"ok": True, "state": ws.state.value}
 
 
 # --- AI tools -------------------------------------------------------------

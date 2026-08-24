@@ -443,3 +443,121 @@ raises.
 Reading someone else's ticket returns **404, not 403** - a 403 confirms the
 ticket exists, which is enough to enumerate how many other customers there are
 and when they wrote.
+
+## The terminal was clipping its own last line
+
+Reported by a customer: *"the bottom of the terminal is not visible and I cannot
+see the last line."* Reproduced and measured in a headless browser rather than
+guessed at.
+
+xterm's FitAddon sizes the terminal from `getComputedStyle(parent).height` and
+subtracts only the padding of **xterm's own element** - never the parent's. The
+stylesheet had:
+
+```css
+#term{height:440px;padding:10px 12px}     /* under a global *{box-sizing:border-box} */
+```
+
+Chrome reports that element's computed height as the full **440px** while its
+content box is **420px**, so the addon laid out ~12px more terminal than there
+was room for and `.term-shell{overflow:hidden}` cut it off. The clipped strip is
+the bottom line - which in a shell is the prompt, the one line you are always
+looking at.
+
+Measured before the fix, overflow past the visible area:
+
+| font | 9 | 12 | 14 | 16 | 20 | 26 |
+|---|---|---|---|---|---|---|
+| overflow | **+20px** | +8px | **+12px** | +6px | +12px | 0px |
+
+At font 9 a whole line was lost. At 26 it happened to land on zero, which is
+presumably why it survived a manual look.
+
+The fix is one declaration: `#term{box-sizing:content-box;height:420px}`. Under
+content-box the declared height *is* the content height, so what the addon
+measures and what the box can show are the same number. Re-measured across every
+font size from 9 to 26: overflow ≤ 0 everywhere.
+
+Two related deferrals went in at the same time, being the same
+measure-before-layout mistake: fitting now happens on the next animation frame
+after a font change and after the terminal first opens, rather than in the same
+tick, because xterm re-measures its cell size asynchronously.
+
+## Factory reset
+
+A rebuild, not a snapshot rollback. A snapshot taken at provision time would
+drift from the current golden image, so "factory reset" would restore whatever
+the factory looked like months ago rather than what a new customer receives
+today. `ws-reset.sh` deletes the instance and the Docker volume and builds both
+again, keeping the project, its restrictions, its profile and its IP - so the
+customer's reserved ports still point at the same machine and the addresses they
+saved keep working.
+
+The instance definition moved into `ws-lib.sh` (`ws_create_instance`,
+`ws_attach_docker_volume`, `ws_wait_booted`) so create and reset cannot drift. A
+second copy of that config block would eventually produce a reset machine that
+is subtly not what the customer bought; a test asserts the block exists exactly
+once.
+
+Deleting the instance releases the Docker device but **not** the volume, so it
+has to be removed explicitly or images and containers survive a reset the
+customer was told is clean.
+
+Kept across a reset - all of it lives in the dashboard, not on the machine, and
+losing it would make a reset feel like an account closure: the reserved SSH and
+RDP ports, the saved public keys, the machine's size, the credit balance and the
+ledger. The service *switches* are turned off, because they described software on
+a filesystem that no longer exists.
+
+A machine in `ERROR` **can** be reset. That is the state where starting over is
+most useful, and refusing there would leave the one situation with no
+self-service way out. It is also how a reset that died partway is retried, since
+every removal in the script is conditional.
+
+Measured: a full reset takes ~14 seconds.
+
+### The confirmation
+
+Three separate, non-interchangeable things, all re-checked server-side:
+
+1. **One acknowledgement per category of loss**, ticked individually - so the
+   list is read rather than dismissed.
+2. **The account's own email, typed.** Unlike a fixed phrase it cannot be copied
+   out of the dialog, and unlike a checkbox it has to be produced.
+3. **The account password**, verified by the server. This is the only part a
+   stranger at an unlocked browser cannot supply, which makes it the one that
+   carries real weight rather than ceremony.
+
+The button stays disabled until all three hold and re-locks the moment any one is
+undone. Escape cancels; **nothing confirms on Enter**, and a backdrop click does
+not dismiss - a misplaced click should not throw away a half-filled dialog, and a
+destructive action should never be reachable from a keystroke someone was
+already making. A refused attempt is written to the account's activity log, so
+someone probing an unlocked browser leaves a trace.
+
+Verified by driving the dialog in a real browser: disabled on open, still
+disabled with only the boxes ticked, still disabled with boxes and email, enabled
+only once the password is entered, and re-disabled by changing the email or
+unticking a box.
+
+## A verification that cried wolf
+
+The first version of the P6 leak check asserted that a workspace's `~/.claude`
+contained *only* the credential file. It failed immediately on a live workspace -
+because that customer had signed into Claude Code themselves and accumulated
+their own history, projects and cache. Their data, in their machine, exactly as
+intended.
+
+The check had the direction wrong. What matters is not "the customer has nothing
+extra" but "**the operator has nothing here**". It now hashes every private file
+in the operator's `~/.claude` and asserts none of those hashes appears in the
+workspace - only hashes are compared, no content is read out of either side.
+
+That rewrite surfaced a second false positive: 389 identical files under
+`plugins/marketplaces/claude-plugins-official/`, which is a **public** repository
+both machines clone independently. Excluded by path. A check that reports 389
+leaks when there are none is worse than no check, because it trains whoever reads
+it to ignore the result.
+
+Current reading: 425 operator files compared, 0 present in the customer's
+machine.

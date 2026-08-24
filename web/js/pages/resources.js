@@ -4,6 +4,8 @@ import { $, $$, icon, esc, fmtMoney, fmtNum, note, toast } from "../ui.js";
 import { t } from "../i18n.js";
 import { render } from "../main.js";
 import { navigate } from "../router.js";
+import { dangerDialog } from "../dangerdialog.js";
+import { state } from "../main.js";
 
 export async function resourcesPage() {
   const [tiers, w] = await Promise.all([get("/api/tiers"), get("/api/workspace")]);
@@ -55,6 +57,18 @@ export async function resourcesPage() {
     <div class="card">
       <h3>${t("res.billing.title")}</h3>
       <p class="muted small" style="margin:0">${t("res.billing.body")}</p>
+    </div>
+
+    <div class="card danger-zone">
+      <h3>${t("reset.zone")}</h3>
+      <div class="between" style="gap:18px;margin-top:10px">
+        <div>
+          <div style="font-weight:650">${t("reset.title")}</div>
+          <p class="muted small" style="margin:4px 0 0;max-width:52ch">${t("reset.blurb")}</p>
+        </div>
+        <button class="btn danger" id="reset-btn">${icon.refresh}${t("reset.button")}</button>
+      </div>
+      <div id="reset-msg"></div>
     </div>`);
 
   const priceOf = (cpu, mem) =>
@@ -85,6 +99,31 @@ export async function resourcesPage() {
   $$("#cpu .opt").forEach((b) => b.onclick = () => { sel.cpu = +b.dataset.cpu; paint(); });
   $$("#mem .opt").forEach((b) => b.onclick = () => { sel.mem = +b.dataset.mem; paint(); });
   paint();
+
+  $("#reset-btn").onclick = async () => {
+    const answer = await dangerDialog({
+      title: t("reset.title"),
+      intro: t("reset.intro"),
+      destroys: [t("reset.d.files"), t("reset.d.packages"), t("reset.d.docker")],
+      keeps: [t("reset.k.ports"), t("reset.k.keys"), t("reset.k.size"), t("reset.k.credit")],
+      expect: state.me?.email || "",
+      label: t("reset.confirm"),
+    });
+    if (!answer) return;
+
+    const btn = $("#reset-btn");
+    btn.disabled = true;
+    btn.innerHTML = `<span class="spinner"></span>${t("reset.working")}`;
+    try {
+      await post("/api/workspace/reset", answer);
+      toast(t("reset.done"), "ok");
+      navigate("/console");
+    } catch (err) {
+      $("#reset-msg").innerHTML = note("bad", esc(err.message));
+      btn.disabled = false;
+      btn.innerHTML = `${icon.refresh}${t("reset.button")}`;
+    }
+  };
 
   $("#apply").onclick = async () => {
     const btn = $("#apply");
