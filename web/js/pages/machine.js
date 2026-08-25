@@ -4,7 +4,8 @@
  * this page to answer the question someone actually opens it with - what is my
  * machine doing, and what is it costing me. */
 import { get, post } from "../api.js";
-import { $, icon, esc, fmtMoney, fmtNum, fmtFa, note, toast, stamp } from "../ui.js";
+import { $, icon, esc, fmtMoney, fmtNum, fmtFa, note, toast, stamp,
+         statePill } from "../ui.js";
 import { t, CURRENCY } from "../i18n.js";
 import { render } from "../main.js";
 import { usageChart, windowPicker, wireWindowPicker,
@@ -32,12 +33,6 @@ async function refreshCharts() {
   chartTimer = setTimeout(refreshCharts, (m.sample_seconds || 20) * 1000);
 }
 
-function pill(status) {
-  const cls = { on: "on", starting: "busy", stopping: "busy", provisioning: "busy",
-                archiving: "busy", archived: "bad", error: "bad", pending: "busy" }[status] || "";
-  return `<span class="pill"><span class="dot ${cls}"></span>${
-    t("machine.state." + status) || status}</span>`;
-}
 
 
 function bars(series) {
@@ -62,7 +57,7 @@ export async function machinePage() {
       <div class="card"><div class="between">
         <div><h2>${t("machine.state." + w.status)}</h2>
         <p class="muted small" style="margin:6px 0 0">${t("machine." + w.status)}</p></div>
-        ${pill(w.status)}</div></div>`);
+        ${statePill(w.status)}</div></div>`);
     return;
   }
 
@@ -93,7 +88,7 @@ export async function machinePage() {
       <div><h1>${t("ov.title")}</h1>
         <p class="muted small ltr" style="margin:0;text-align:start">${
           esc(t("machine.subtitle", { label: w.label, disk: fmtNum(w.disk_gb) }))}</p></div>
-      ${pill(w.status)}
+      ${statePill(w.status)}
     </div>
 
     <div class="card">

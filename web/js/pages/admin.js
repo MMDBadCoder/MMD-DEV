@@ -1,6 +1,7 @@
 /* Administration: people, capacity, pricing, default toolsets. */
 import { get, post, put, del } from "../api.js";
-import { $, $$, icon, esc, fmtMoney, fmtNum, fmtFa, note, toast, stamp, confirmDialog } from "../ui.js";
+import { $, $$, icon, esc, fmtMoney, fmtNum, fmtFa, note, toast, stamp,
+         confirmDialog, statePill } from "../ui.js";
 import { t, CURRENCY } from "../i18n.js";
 import { render, state } from "../main.js";
 import { usageChart, windowPicker, wireWindowPicker,
@@ -28,8 +29,14 @@ export async function adminPage() {
       <div class="tiny dim">${u.is_admin ? t("sec.role.admin") + " · " : ""}${t("adm.joined")} ${stamp(u.created_at)}</div></td>
     <td><span class="pill"><span class="dot ${u.status === "approved" ? "on"
         : u.status === "pending" ? "busy" : "bad"}"></span>${statusLabel[u.status] || u.status}</span></td>
-    <td class="small">${u.workspace
-      ? `${t("machine.state." + u.workspace.state) || u.workspace.state} · <span class="ltr">${fmtNum(u.workspace.cpu_cores, 1)} vCPU · ${fmtNum(u.workspace.memory_mb / 1024, 1)} GB</span>`
+    <td class="small nowrap">${u.workspace
+      // The same pill the customer sees, so this column can be read down rather
+      // than word by word - it was the one place the state was bare text, next
+      // to an account-status column that already had the treatment.
+      ? `${statePill(u.workspace.state)}
+         <div class="tiny dim ltr" style="margin-top:3px">${
+           fmtNum(u.workspace.cpu_cores, 1)} vCPU · ${
+           fmtNum(u.workspace.memory_mb / 1024, 1)} GB</div>`
       : `<span class="dim">${t("adm.none")}</span>`}</td>
     <td class="num">${fmtMoney(u.credits)}</td>
     <td class="num nowrap">

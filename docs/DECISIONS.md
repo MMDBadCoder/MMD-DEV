@@ -1010,3 +1010,60 @@ rather than a guess about what the customer wants, and they were explicitly kept
 destructive action in the lifecycle pass is reached through a balance check,
 that the one stop in the settlement pass is guarded by the affordability check,
 and that nothing in the API stops a workspace outside a request handler.
+
+## `node --check` does not check ES modules
+
+While fixing something else, a stray closing brace went into `pages/machine.js`.
+`bash tests/run.sh` passed. So did `node --check web/js/pages/machine.js`.
+
+Node treats a `.js` file as CommonJS. When it meets an `import` statement it
+stops rather than failing, so **the syntax gate was passing every file under
+`web/js`** — all of which are modules. Demonstrated with identical content:
+
+```
+ctrl.js   (import + stray brace)  ->  node --check exits 0
+ctrl.mjs  (same bytes)            ->  node --check exits 1, SyntaxError
+```
+
+That is the second page-breaking bug to reach production past that gate; the
+first was a missing import, which `node --check` also cannot see because an
+undefined identifier is a runtime error. The gate now copies each file to `.mjs`
+before checking, which forces module parsing. Verified by reintroducing the
+brace: the suite fails and names the file.
+
+Two lessons, both already written here and both re-learned the hard way:
+editing by string index eats adjacent code, and a check that has never failed is
+not evidence that it works.
+
+## Numbers were rendered with tabular figures everywhere
+
+A customer: *"on various pages the numbers — remaining credit, hourly costs —
+use an unsuitable font, the characters and digits are too far apart."*
+
+`font-variant-numeric: tabular-nums` pads every digit to one advance width so
+columns line up. On Persian numerals that stretches the narrow ones, and it was
+applied to the header credit chip and the big overview values as well as to
+table columns. Measured on «۴۹۹٬۳۲۷ تومان» at 24px: **160.9px tabular vs 145.4px
+proportional — 9.6% wider**, showing as gaps between the digits.
+
+Tabular figures are right for a column read vertically and wrong for a single
+value read as a phrase. Display values are now proportional; `td.num` keeps
+tabular, and a test asserts both — removing it there would make the ledger
+ragged, which is the same mistake pointing the other way.
+
+Two things found alongside: the unit («تومان») could wrap away from its number,
+and `font-feature-settings:"ss01","ss02"` carried a comment saying those read
+better *off* while the syntax turned them **on** — a bare tag means 1. Measured
+at zero width difference either way; they change the drawn shapes of ۴ ۵ ۶ only.
+Now off, as the comment always claimed.
+
+## The admin list was the hardest place to read machine state
+
+It printed the state as bare text — «روشن · 1.0 vCPU · 1.0 GB» — while every
+other view, including the account-status column immediately beside it in the
+same table, used a pill with a coloured dot. The one screen showing every
+machine at once was the one you had to read word by word.
+
+`statePill()` moved to `ui.js` so there is a single definition: green running,
+amber mid-change, red needs attention, grey stopped. A test asserts no page
+redefines it and that every state the API can return has a tone.

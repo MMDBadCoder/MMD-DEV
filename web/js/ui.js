@@ -1,4 +1,5 @@
 /* Small DOM helpers, icons and shared chrome. */
+import { t } from "./i18n.js";
 
 export const $ = (sel, root = document) => root.querySelector(sel);
 export const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
@@ -71,6 +72,27 @@ export const icon = {
   chat: P('<path d="M21 15a2 2 0 0 1-2 2H8l-5 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>'),
   link: P('<path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/>'),
 };
+
+/* Machine state as a pill with a coloured dot.
+ *
+ * Lives here rather than in one page because the admin list used to print the
+ * state as bare text while every other view showed a pill - so the one screen
+ * that shows every machine at once was the hardest to read at a glance, sitting
+ * next to an account-status column that DID have the treatment.
+ *
+ * green = running, amber = mid-change, red = needs attention, grey = stopped. */
+const STATE_TONE = {
+  on: "on",
+  starting: "busy", stopping: "busy", provisioning: "busy",
+  resetting: "busy", archiving: "busy", pending: "busy",
+  archived: "bad", error: "bad", deleting: "bad",
+};
+
+export function statePill(state) {
+  const label = t("machine.state." + state);
+  return `<span class="pill"><span class="dot ${STATE_TONE[state] || ""}"></span>${
+    label === "machine.state." + state ? esc(state) : label}</span>`;
+}
 
 export function toast(message, kind = "") {
   const el = document.createElement("div");

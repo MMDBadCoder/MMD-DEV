@@ -73,8 +73,11 @@ body{
   -webkit-font-smoothing:antialiased;
   -moz-osx-font-smoothing:grayscale;
   text-rendering:optimizeLegibility;
-  /* Persian numerals and proportional figures render better with these off. */
-  font-feature-settings:"ss01","ss02";
+  /* Vazirmatn's ss01/ss02 swap in alternate shapes for some numerals. The
+     comment here used to say they read better OFF while the declaration turned
+     them ON - `"ss01"` with no value means 1. Now actually off. No effect on
+     width either way; this is purely which shapes are drawn. */
+  font-feature-settings:"ss01" 0,"ss02" 0;
 }
 /* Islands that must stay left-to-right inside an RTL page: terminal output,
    host:port addresses, package names, anything copied into a shell. */
@@ -125,7 +128,11 @@ p{margin:0 0 12px}
 .credit-chip{
   display:flex;align-items:center;gap:7px;padding:6px 11px;border-radius:999px;
   background:var(--surface-2);border:1px solid var(--border);
-  font-size:13px;font-weight:650;font-variant-numeric:tabular-nums;
+  /* Proportional, not tabular. Tabular figures pad every digit to one advance
+     width, which on Persian numerals adds ~10% and reads as gaps between the
+     digits - a customer reported exactly that. They are right for a column that
+     must align (see td.num) and wrong for a value read as a phrase. */
+  font-size:13px;font-weight:650;font-variant-numeric:proportional-nums;
 }
 .credit-chip.low{background:var(--warn-soft);border-color:var(--warn);color:var(--warn)}
 
@@ -199,8 +206,11 @@ input:focus,select:focus,textarea:focus{
   border-radius:var(--radius);padding:14px 16px}
 .stat .k{font-size:12.5px;font-weight:600;color:var(--ink-3);letter-spacing:0}
 .stat .v{font-size:24px;font-weight:700;margin-top:4px;line-height:1.4;
-  font-variant-numeric:tabular-nums;letter-spacing:0}
-.stat .v small{font-size:13px;font-weight:600;color:var(--ink-3);margin-inline-start:5px}
+  font-variant-numeric:proportional-nums;letter-spacing:0;white-space:nowrap}
+/* The unit reads with the number rather than as a separate word, and never
+   wraps away from it. */
+.stat .v small{font-size:13px;font-weight:600;color:var(--ink-3);
+  margin-inline-start:3px;white-space:nowrap}
 .bar{height:6px;background:var(--border);border-radius:4px;overflow:hidden;margin-top:9px}
 .bar>i{display:block;height:100%;background:var(--brand);border-radius:4px;transition:width .3s}
 .bar>i.warn{background:var(--warn)} .bar>i.bad{background:var(--bad)}
