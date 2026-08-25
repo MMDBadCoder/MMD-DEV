@@ -64,9 +64,6 @@ class Config:
     endpoint_host: str = field(default_factory=lambda: _env("MMD_ENDPOINT_HOST", "")
                                or _detect_public_ip())
 
-    # Idle auto-stop protects the user's credit: a workspace left running
-    # overnight would otherwise burn its balance for nothing.
-    idle_stop_minutes: int = field(default_factory=lambda: int(_env("MMD_IDLE_STOP_MINUTES", "60")))
     archive_retention_days: int = field(default_factory=lambda: int(
         _env("MMD_ARCHIVE_RETENTION_DAYS", "30")))
     session_hours: int = field(default_factory=lambda: int(_env("MMD_SESSION_HOURS", "12")))

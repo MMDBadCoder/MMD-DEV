@@ -969,3 +969,44 @@ refused and a small one is not.
 
 The limit stays 512 MB. It is now enforced where it can actually prevent
 something.
+
+## Nothing switches off a workspace the customer has paid for
+
+There was an idle auto-stop: sixty minutes without activity and the machine was
+powered off, commented as "protects the user's credit directly". The operator's
+instruction was blunt and correct — *we must not touch their space without their
+allowance*.
+
+It went, and it deserved to go on the facts as well as the principle.
+
+**What it measured was wrong.** `last_activity` is written in exactly two
+places: power-on, and opening the browser terminal. Nothing else. So a customer
+running a long build with no terminal attached, working in the file manager, or
+serving traffic on a published port registered as idle and had their machine
+switched off mid-work. It probed for live SSH and RDP sessions first — but only
+when those services were switched on, which for most machines they are not.
+
+**And it was firing.** Seven times in the week before removal: six on the
+operator's own workspace and once on a customer's.
+
+The argument for it was that it protects credit. Billing is hourly and in
+arrears, so a machine left running is simply paid for — which makes leaving it
+on the customer's decision, and one they are already paying to make. Guessing on
+their behalf, from a signal that only sees one of the five ways into the
+machine, is not protection.
+
+Removed with it: `MMD_IDLE_STOP_MINUTES`, and the `probe_sessions` provisioner
+verb, which existed solely so the timer would not kill a live SSH session. A
+verb that serves nothing is surface for no benefit.
+
+`last_activity` is still recorded and is now purely informational.
+
+**What still stops a machine, and why that is different:** running out of credit.
+The hourly gate stops a workspace whose balance cannot cover the coming hour, and
+a zero balance archives it (recoverable for 30 days). Those are the billing model
+rather than a guess about what the customer wants, and they were explicitly kept.
+
+`tests/test_no_auto_stop.py` asserts there is no idle timer, that every
+destructive action in the lifecycle pass is reached through a balance check,
+that the one stop in the settlement pass is guarded by the affordability check,
+and that nothing in the API stops a workspace outside a request handler.

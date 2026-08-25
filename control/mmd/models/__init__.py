@@ -112,6 +112,9 @@ class Workspace(Base):
     period_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     purge_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Informational only. Recorded on power-on and when the browser terminal
+    # opens, and acted on by nothing: the idle auto-stop that used to read it
+    # has been removed. Nothing switches off a funded workspace.
     last_activity: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     error: Mapped[str | None] = mapped_column(Text)
 

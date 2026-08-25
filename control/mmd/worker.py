@@ -2,10 +2,11 @@
 
 Runs three loops:
 
-  * meter   - scrape /1.0/metrics every 60s into usage_samples
+  * meter   - scrape /1.0/metrics every TICK_SECONDS into usage_samples
   * settle  - at each hour boundary, charge the completed hour IN ARREARS,
               then apply the credit gate to the hour about to start
-  * lifecycle - idle auto-stop, archive at zero credit, purge after retention
+  * lifecycle - archive at zero credit, purge after retention. NOTHING here
+    stops a funded workspace; only running out of credit does.
 
 Reconciliation, not scheduling, is the design here: the worker compares what
 the database says should be true against what Incus reports and closes the
@@ -144,34 +145,19 @@ async def lifecycle_once() -> None:
     try:
         with SessionLocal() as db:
             for ws in db.scalars(select(Workspace)):
-                # Idle auto-stop: protects the user's credit directly.
+                # NOTHING here stops a funded workspace. There used to be an
+                # idle auto-stop - 60 minutes without browser-terminal activity
+                # and the machine was switched off "to protect the customer's
+                # credit". It was removed on the operator's instruction, and it
+                # deserved to be: `last_activity` only ever tracked the browser
+                # terminal, so a customer running a long build, working in the
+                # file manager, or serving traffic on a published port read as
+                # idle and had their machine killed mid-work. Billing is hourly,
+                # so a machine left running is simply paid for - that is the
+                # customer's decision to make, not ours.
                 #
-                # `last_activity` only tracks the browser terminal. Someone
-                # working over SSH or RDP never touches it, so acting on that
-                # timestamp alone would switch the machine off underneath a
-                # live session. Ask the machine before deciding.
-                idle = (ws.state == WorkspaceState.ON and CONFIG.idle_stop_minutes > 0
-                        and ws.last_activity
-                        and now - ws.last_activity > timedelta(minutes=CONFIG.idle_stop_minutes))
-                if idle and (ws.ssh_enabled or ws.rdp_enabled):
-                    probe = svc.call_provisioner(
-                        {"verb": "probe_sessions", "idx": ws.idx}, timeout=90)
-                    if probe.get("active"):
-                        log.info("%s is idle in the browser but has %s SSH / %s RDP "
-                                 "session(s); not stopping",
-                                 ws.incus_project, probe.get("ssh"), probe.get("rdp"))
-                        ws.last_activity = now      # count it as activity
-                        db.commit()
-                        idle = False
-                if idle:
-                    log.info("idle-stopping %s", ws.incus_project)
-                    try:
-                        await client.stop(ws.instance, ws.incus_project)
-                        ws.state = WorkspaceState.OFF
-                        ws.desired_on = False
-                        db.commit()
-                    except IncusError as exc:
-                        log.error("idle stop failed: %s", exc)
+                # The blocks below act only when an account has run out of
+                # credit. A funded workspace is never touched.
 
                 # Archive at zero credit: frees the CPU, memory AND the disk
                 # reservation, while keeping the tenant's data recoverable.

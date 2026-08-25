@@ -51,7 +51,7 @@ MAX_DOCKER_GIB = 40
 
 VERBS = {"provision", "archive", "restore", "destroy",
          "expose_port", "unexpose_port", "install_packages",
-         "service_ssh", "service_rdp", "probe_sessions",
+         "service_ssh", "service_rdp",
          "fs_list", "fs_pull", "fs_push", "fs_mkdir", "fs_delete",
          "fs_archive", "apt_repair", "ai_claude", "reset", "ping"}
 
@@ -980,25 +980,6 @@ def handle(req: dict) -> dict:
             return {"ok": True, "size": os.path.getsize(dest)}
 
         return {"ok": False, "error": f"unknown fs verb {verb}"}
-
-    if verb == "probe_sessions":
-        # Read-only. The idle-stop timer must not switch off a machine someone
-        # is working on over SSH or RDP - those sessions never touch the web
-        # terminal, so the dashboard's own activity timestamp says nothing
-        # about them.
-        ok, out = _run(["incus", "exec", "ws", "--project", project, "--",
-                        "bash", "-lc",
-                        "printf 'ssh=%s rdp=%s\\n' "
-                        "\"$(pgrep -fc 'sshd: ' 2>/dev/null || echo 0)\" "
-                        "\"$(pgrep -c 'xrdp-chansrv' 2>/dev/null || echo 0)\""],
-                       timeout=60)
-        counts = {"ssh": 0, "rdp": 0}
-        for part in (out or "").split():
-            if "=" in part:
-                k, _, v = part.partition("=")
-                if k in counts and v.isdigit():
-                    counts[k] = int(v)
-        return {"ok": ok, **counts, "active": counts["ssh"] + counts["rdp"] > 0}
 
     # archive / restore land with the billing lifecycle work.
     return {"ok": False, "error": f"{verb} not implemented yet"}
