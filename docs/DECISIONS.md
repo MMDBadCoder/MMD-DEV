@@ -1143,3 +1143,63 @@ Charged every 5 minutes, matching the worker tick, with the bucket as the
 idempotency key. Running often is the point: the platform's own subscription is
 what is being spent, so the gap between usage and payment is the window in which
 an empty account keeps spending.
+
+## Hermes on a shared OpenRouter account: three problems, one answer
+
+The operator asked for a second agent, Hermes, backed by a single OpenRouter
+account — and named the three things that made it hard. Researching OpenRouter's
+own capabilities answered all three without building a proxy.
+
+**"If I expose my secret api key to the spaces it will be revealed."** Correct,
+and unavoidable if the key is handed out. So it is not: the account key is used
+as a **Management key** that never leaves the host, and every workspace gets its
+own key minted from it (`POST /api/v1/keys`). A workspace key IS visible to its
+owner — that cannot be prevented, the agent has to read it — but it spends only
+their budget, is capped by its own `limit`, is model-restricted, and is revoked
+with one call. The master key is never exposed at all.
+
+**"Different spaces must have a distinguishing parameter."** OpenRouter meters
+per key: `usage`, `usage_daily/weekly/monthly`, `limit_remaining`. Attribution
+comes from OpenRouter's own billing rather than from a log inside a machine the
+customer controls, so it cannot be under-reported by tampering — a strictly
+better position than the Claude metering, which reads files the customer could
+edit.
+
+**"Users are not able to select each model, it can lead to very high price."** A
+**guardrail** attached to the key carries a model allowlist; anything else is
+refused with 403 upstream, before a token is spent. The spread justifies the
+worry: `openai/o1-pro` is **$600/Mtok** output against **$10** for
+`claude-sonnet-5`. Sixty times.
+
+### The allowlist is a price ceiling, not a list
+
+OpenRouter carries 417 models today and adds more constantly. A hand-written
+list is wrong within a month, and the failure mode of a stale list is a customer
+reaching a model nobody meant to sell them. `build_allowlist()` therefore
+generates the list from a **ceiling in USD per million output tokens**, so it
+holds whatever appears.
+
+At $40 it blocks 52 models — o1-pro, the gpt-5.x-pro family, opus-4.7-fast,
+o3-pro, opus-4.1 — and leaves 365, including claude-opus-5 at $25 and everything
+cheaper. Named families are denied outright as well, because a ceiling alone
+would admit a cheap member of an expensive family.
+
+Unpriced models are excluded rather than assumed free: an entry with no price is
+usually one whose cost is not published yet, and guessing in the customer's
+favour there is guessing with the operator's money.
+
+### The spend cap closes the window that token metering leaves open
+
+Each key's `limit` is set to what the customer can actually afford. OpenRouter
+then refuses the request the moment they run out, instead of us noticing at the
+next poll. For Claude the exposure is bounded by the five-minute charge cycle;
+here it is zero.
+
+### The Management key lives with the worker, not the API
+
+`mmd-api` faces the internet. A key that can mint spending capability does not
+belong in the process most likely to be attacked, so the worker holds it and
+reconciles: mint on enable, sync the cap when the balance moves, poll usage,
+revoke on disable. The provisioner cannot hold it either — it runs with
+`IPAddressDeny=any` and has no route to OpenRouter at all, which is exactly the
+property that makes it safe to run as root.
