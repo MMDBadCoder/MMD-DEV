@@ -37,6 +37,7 @@ REPO = Path(__file__).resolve().parents[2]
 WS_CREATE = REPO / "workspace" / "ws-create.sh"
 WS_DESTROY = REPO / "workspace" / "ws-destroy.sh"
 WS_RESET = REPO / "workspace" / "ws-reset.sh"
+AI_USAGE_SCAN = Path(__file__).resolve().parent / "scan_ai_usage.py"
 APT_FIXUPS = REPO / "image" / "apt-fixups.sh"
 
 SOCKET_PATH = os.environ.get("MMD_PROVISIONER_SOCKET", "/run/mmd/provisioner.sock")
@@ -53,7 +54,7 @@ VERBS = {"provision", "archive", "restore", "destroy",
          "expose_port", "unexpose_port", "install_packages",
          "service_ssh", "service_rdp",
          "fs_list", "fs_pull", "fs_push", "fs_mkdir", "fs_delete",
-         "fs_archive", "apt_repair", "ai_claude", "reset", "ping"}
+         "fs_archive", "apt_repair", "ai_claude", "ai_usage", "reset", "ping"}
 
 # ---------------------------------------------------------------------------
 # Claude Code sign-in propagation
@@ -306,16 +307,21 @@ def _sync_port_rules(mappings: list[dict]) -> dict:
     return {"ok": ok, "output": msg, "count": len(pre)}
 
 
-def _run_split(cmd: list[str], timeout: int = 900) -> tuple[int, str, str]:
+def _run_split(cmd: list[str], timeout: int = 900,
+               stdin_text: str | None = None) -> tuple[int, str, str]:
     """Like _run but keeps stdout and stderr apart.
 
     Needed wherever stdout is DATA: `find` exits non-zero if any subdirectory
     is unreadable (xrdp leaves a thinclient_drives mount that is), so a merged
     stream turns a perfectly good listing into a parse error.
+
+    `stdin_text` feeds a program in - used to pipe a script to `python3 -`
+    rather than leaving a file behind inside a customer's machine.
     """
     try:
-        p = subprocess.run(cmd, capture_output=True, text=True,
-                           timeout=timeout, stdin=subprocess.DEVNULL)
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
+                           input=stdin_text,
+                           stdin=None if stdin_text is not None else subprocess.DEVNULL)
     except subprocess.TimeoutExpired:
         return 124, "", "timed out"
     return p.returncode, p.stdout or "", p.stderr or ""
@@ -626,6 +632,32 @@ def handle(req: dict) -> dict:
         if not fx_ok:
             log.warning("apt fixups failed after reset of ws-%s: %s", idx, fx_out[-300:])
         return {"ok": True, "output": out[-2000:], "tier": t, "apt_fixups": fx_ok}
+
+    if verb == "ai_usage":
+        # Counted INSIDE the workspace. The session logs run to tens of
+        # megabytes; pulling them to the host to parse them here would repeat
+        # the mistake the zip download made, and would put a customer's
+        # conversations on the host for no reason. Only totals come back.
+        try:
+            script = AI_USAGE_SCAN.read_text()
+        except OSError as e:  # noqa: BLE001
+            return {"ok": False, "error": f"cannot read {AI_USAGE_SCAN}: {e}"}
+
+        # Piped to `python3 -` rather than written to the workspace: this runs
+        # every few minutes and leaving a file behind on a machine the customer
+        # owns, to be found and wondered about, is worse than passing it on
+        # stdin each time.
+        rc, out, err = _run_split(
+            ["incus", "exec", "ws", "--project", project, "--",
+             "su", "-", "dev", "-c", "python3 - ~/.claude/projects"],
+            timeout=300, stdin_text=script)
+        if not (out or "").strip():
+            return {"ok": False, "error": (err or "scanner produced no output")[-300:]}
+        try:
+            data = json.loads(out)
+        except ValueError:
+            return {"ok": False, "error": f"unparseable scanner output: {out[:200]}"}
+        return {"ok": True, **data}
 
     if verb == "ai_claude":
         return _verb_ai_claude(project, req)

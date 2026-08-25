@@ -204,6 +204,45 @@ RECONCILE_EVERY = 45       # 45 x 20s = 15 minutes
 # thing in the database - this one had no pruning at all.
 SAMPLE_RETENTION_DAYS = 7
 
+# AI tokens are pay-as-you-go and bill against the platform's own Claude
+# subscription, so the gap between usage and payment is real exposure. Five
+# minutes, matching the charge bucket in service.AI_PERIOD_SECONDS.
+AI_EVERY = 15              # 15 x 20s = 5 minutes
+
+
+def meter_ai_once() -> None:
+    """Charge every running workspace for the AI tokens it has used.
+
+    Pay-as-you-go, every AI_EVERY ticks. Running often is the point: the
+    platform's own Claude subscription is what is being spent, so the window
+    between a customer using tokens and paying for them is the window in which
+    an empty account can keep spending. Five minutes bounds that.
+
+    A workspace that is off cannot be scanned and cannot be using anything, so
+    it is skipped rather than treated as an error.
+    """
+    with SessionLocal() as db:
+        for ws in db.scalars(select(Workspace).where(
+                Workspace.state == WorkspaceState.ON)):
+            resp = svc.call_provisioner({"verb": "ai_usage", "idx": ws.idx}, timeout=300)
+            if not resp.get("ok"):
+                log.warning("ai usage scan failed for %s: %s",
+                            ws.incus_project, str(resp.get("error"))[:200])
+                continue
+            try:
+                out = svc.meter_ai_usage(db, ws, resp)
+            except Exception:  # noqa: BLE001
+                log.exception("ai metering failed for %s", ws.incus_project)
+                db.rollback()
+                continue
+            if out.get("charged_micro"):
+                log.info("%s: AI usage %.2f Toman (%s)", ws.incus_project,
+                         out["charged_micro"] / MICRO,
+                         ", ".join(f"{m} {v:.2f}" for m, v in out["models"].items()))
+            if out.get("unpriced"):
+                log.warning("%s: no price set for model(s) %s - tokens left uncounted "
+                            "until one is", ws.incus_project, ", ".join(out["unpriced"]))
+
 
 def prune_samples_once() -> None:
     cutoff = svc.now() - timedelta(days=SAMPLE_RETENTION_DAYS)
@@ -330,6 +369,8 @@ async def main() -> None:
     while True:
         try:
             await meter_once()
+            if tick % AI_EVERY == 0:
+                meter_ai_once()
             if tick % SETTLE_EVERY == 0:
                 await settle_once()
                 await lifecycle_once()

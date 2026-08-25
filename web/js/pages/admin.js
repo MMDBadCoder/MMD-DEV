@@ -66,6 +66,12 @@ export async function adminPage() {
       <a class="btn primary" href="/console/admin/tickets">${icon.chat}${t("adm.tickets.open")}</a>
     </div>
 
+    <div class="card between">
+      <div><h3 style="margin:0">${t("adm.ai.title")}</h3>
+        <p class="muted small" style="margin:4px 0 0;max-width:60ch">${t("adm.ai.sub")}</p></div>
+      <a class="btn" href="/console/admin/ai-pricing">${icon.sparkle}${t("adm.ai.title")}</a>
+    </div>
+
     <div class="card">
       <h3>${t("adm.resources")}</h3>
       <p class="tiny dim" style="margin:2px 0 14px">${t("adm.resources.sub")}</p>

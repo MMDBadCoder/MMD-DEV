@@ -19,6 +19,7 @@ import { adminPage } from "./pages/admin.js";
 import { aiPage } from "./pages/ai.js";
 import { supportPage } from "./pages/support.js";
 import { adminTicketsPage } from "./pages/admintickets.js";
+import { aiPricingPage } from "./pages/aipricing.js";
 
 export const state = { me: null };
 
@@ -127,6 +128,7 @@ route("/console/support", { title: "پشتیبانی", view: supportPage });
 route("/console/support/:id", { title: "پشتیبانی", view: supportPage });
 route("/console/admin", { title: "مدیریت", view: adminPage, admin: true });
 route("/console/admin/tickets", { title: "تیکت‌ها", view: adminTicketsPage, admin: true });
+route("/console/admin/ai-pricing", { title: "قیمت‌گذاری هوش مصنوعی", view: aiPricingPage, admin: true });
 route("/console/admin/tickets/:id", { title: "تیکت‌ها", view: adminTicketsPage, admin: true });
 
 setNotFound(() => {

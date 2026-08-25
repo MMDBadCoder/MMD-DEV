@@ -8,8 +8,9 @@
  * limit. It also states exactly what crosses from the host, because "we copied
  * a file out of our machine into yours" deserves to be legible. */
 import { get, post } from "../api.js";
-import { $, $$, icon, esc, note, toast, stamp, confirmDialog } from "../ui.js";
-import { t } from "../i18n.js";
+import { $, $$, icon, esc, note, toast, stamp, confirmDialog,
+         fmtMoney, fmtFa } from "../ui.js";
+import { t, CURRENCY } from "../i18n.js";
 import { render } from "../main.js";
 
 const TABS = [{ key: "claude", ic: "sparkle" }];
@@ -27,8 +28,13 @@ function tabBar(active, d) {
 export async function aiPage(params) {
   const tab = params?.tab && TABS.some((x) => x.key === params.tab) ? params.tab : "claude";
 
-  let d;
-  try { d = await get("/api/workspace/ai"); }
+  let d, usage;
+  try {
+    [d, usage] = await Promise.all([
+      get("/api/workspace/ai"),
+      get("/api/workspace/ai/usage").catch(() => null),
+    ]);
+  }
   catch (e) {
     render(`<div class="page-head"><h1>${t("ai.title")}</h1></div>${note("bad", esc(e.message))}`);
     return;
@@ -39,10 +45,38 @@ export async function aiPage(params) {
     ${tabBar(tab, d)}
     ${d.claude.machine_running ? "" : note("warn", t("ai.machineoff"))}`;
 
-  return renderClaude(head, d.claude);
+  return renderClaude(head, d.claude, usage);
 }
 
-function renderClaude(head, c) {
+/* What the tokens have actually cost. Read from the platform's own records, not
+   from the machine - so it survives the customer rebuilding their workspace,
+   which is exactly when someone wants to check where their credit went. */
+function usageCard(u) {
+  if (!u) return "";
+  const rows = (u.models || []).map((m) => `<tr>
+      <td class="ltr mono" style="font-size:12.5px">${esc(m.model)}</td>
+      ${["input", "cache_write_5m", "cache_write_1h", "cache_read", "output"]
+        .map((c) => `<td class="num">${m[c] ? fmtFa(m[c]) : "—"}</td>`).join("")}
+      <td class="num">${fmtMoney(m.toman)}</td></tr>`).join("");
+
+  return `<div class="card">
+    <div class="between" style="margin-bottom:6px">
+      <h2 style="margin:0">${t("ai.usage.title")}</h2>
+      <span class="pill"><b>${fmtMoney(u.total_toman)}</b>&nbsp;${CURRENCY}</span>
+    </div>
+    <p class="muted small" style="margin:0 0 14px">${t("ai.usage.sub")}</p>
+    ${rows ? `<div class="table-wrap"><table>
+      <thead><tr><th>${t("ai.usage.model")}</th>
+        ${["input", "cache_write_5m", "cache_write_1h", "cache_read", "output"]
+          .map((c) => `<th class="num">${t("ai.tok." + c)}</th>`).join("")}
+        <th class="num">${t("ai.usage.cost")}</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>`
+      : `<p class="tiny dim">${t("ai.usage.none")}</p>`}
+    <p class="tiny dim" style="margin:12px 0 0">${t("ai.usage.how", u)}</p>
+  </div>`;
+}
+
+function renderClaude(head, c, usage) {
   const busy = !c.machine_running;
   // Three distinct states, three distinct primary actions. Collapsing them into
   // one "Set up" button hides whether anything would actually change.
@@ -83,6 +117,8 @@ function renderClaude(head, c) {
       ${c.linked ? note("ok", t("ai.run")) : ""}
       <div id="ai-msg"></div>
     </div>
+
+    ${usageCard(usage)}
 
     <div class="card">
       <h2>${t("ai.privacy.title")}</h2>

@@ -388,6 +388,7 @@ const FA = {
   "billing.kind.grant": "افزایش موجودی",
   "billing.kind.charge_hour": "هزینهٔ ساعتی",
   "billing.kind.charge_partial": "هزینهٔ بخشی از ساعت",
+  "billing.kind.charge_ai": "مصرف توکن هوش مصنوعی",
   "billing.kind.adjustment": "اصلاح",
   "billing.d.disk": "فضا",
   "billing.d.ports": "پورت",
@@ -430,6 +431,9 @@ const FA = {
   "act.a.delete_user": "حذف حساب",
   "act.a.settings_update": "تغییر تنظیمات",
   "act.a.provision_failed": "خطا در ساخت ماشین",
+  "act.a.ai_price_update": "تغییر قیمت مدل هوش مصنوعی",
+  "act.a.ai_price_add": "افزودن قیمت مدل هوش مصنوعی",
+  "act.a.ai_price_delete": "حذف قیمت مدل هوش مصنوعی",
   "act.a.reset_started": "شروع بازنشانی کارخانه‌ای",
   "act.a.reset_done": "بازنشانی کارخانه‌ای ماشین",
   "act.a.reset_failed": "خطا در بازنشانی ماشین",
@@ -504,6 +508,7 @@ const FA = {
 
   // --- shared ---
   "common.cancel": "انصراف",
+  "common.delete": "حذف",
   "common.yes": "بله",
   "common.no": "خیر",
   "common.prev": "قبلی",
@@ -552,6 +557,38 @@ const FA = {
   "ai.privacy.never.3": "پروژه‌ها، مسیرها و فایل‌های شخصی",
   "ai.privacy.never.4": "تنظیمات شخصی و افزونه‌ها",
   "ai.shared": "این ورود با اشتراک مشترک پلتفرم انجام می‌شود، نه با حساب شخصی شما. لطفاً منصفانه استفاده کنید؛ مصرف بیش از حد ممکن است برای همهٔ کاربران محدودیت ایجاد کند.",
+
+  /* --- AI token usage and pricing --- */
+  "ai.usage.title": "مصرف توکن هوش مصنوعی",
+  "ai.usage.sub": "هزینهٔ توکن‌ها بر اساس مصرف واقعی و به‌صورت لحظه‌ای از اعتبار شما کم می‌شود.",
+  "ai.usage.none": "هنوز مصرفی ثبت نشده است. پس از استفاده از Claude Code، مصرف شما اینجا نمایش داده می‌شود.",
+  "ai.usage.total": "مجموع هزینهٔ توکن",
+  "ai.usage.sessions": "تعداد نشست‌ها",
+  "ai.usage.model": "مدل",
+  "ai.usage.cost": "هزینه",
+  "ai.usage.how": (d) => `هر ${fmtFa(Math.round(d.period_seconds / 60))} دقیقه یک‌بار مصرف شما محاسبه و از اعتبارتان کم می‌شود. نرخ تبدیل: هر دلار ${fmtMoney(d.usd_to_toman)} ${CURRENCY}، با ${fmtFa(d.discount_percent)}٪ تخفیف.`,
+  "ai.tok.input": "ورودی",
+  "ai.tok.cache_write_5m": "نوشتن حافظهٔ نهان (۵ دقیقه)",
+  "ai.tok.cache_write_1h": "نوشتن حافظهٔ نهان (۱ ساعت)",
+  "ai.tok.cache_read": "خواندن حافظهٔ نهان",
+  "ai.tok.output": "خروجی",
+
+  "adm.back": "بازگشت به صفحهٔ مدیریت",
+  "adm.ai.title": "قیمت‌گذاری هوش مصنوعی",
+  "adm.ai.sub": "قیمت هر مدل به دلار برای هر یک میلیون توکن، به‌علاوهٔ نرخ تبدیل و تخفیف. این مقادیر مبنای محاسبهٔ هزینهٔ کاربران است.",
+  "adm.ai.usdrate": "هر دلار چند تومان",
+  "adm.ai.discount": "درصد تخفیف",
+  "adm.ai.discount.hint": (d) => `${fmtFa(d)}٪ تخفیف یعنی کاربر ${fmtFa(100 - d)}٪ هزینهٔ واقعی را می‌پردازد.`,
+  "adm.ai.model": "مدل",
+  "adm.ai.save": "ذخیره",
+  "adm.ai.saved": "قیمت‌ها ذخیره شد",
+  "adm.ai.add": "افزودن مدل",
+  "adm.ai.unpriced": (n) => `برای ${fmtFa(n)} مدل قیمتی ثبت نشده است. توکن‌های آن‌ها شمرده نمی‌شوند تا زمانی که قیمت تعیین شود — یعنی از دست نمی‌روند، اما تا آن موقع محاسبه هم نمی‌شوند.`,
+  "adm.ai.col.input": "ورودی",
+  "adm.ai.col.w5": "نوشتن ۵ دقیقه",
+  "adm.ai.col.w1h": "نوشتن ۱ ساعت",
+  "adm.ai.col.read": "خواندن",
+  "adm.ai.col.output": "خروجی",
 
   /* --- factory reset --- */
   "reset.zone": "منطقهٔ خطر",
@@ -667,6 +704,8 @@ const FA = {
   // about how far over the folder is rather than just refusing.
   "err.download_too_large": (d) =>
     `حجم این پوشه ${fmtFa((d.size || 0) / 1048576, 0)} مگابایت است و از حد مجاز دانلود (${fmtFa((d.limit || 0) / 1048576, 0)} مگابایت) بیشتر است. پوشهٔ کوچک‌تری را انتخاب کنید یا فایل‌ها را جداگانه دانلود کنید.`,
+  "err.no_such_price": "چنین مدلی در جدول قیمت‌ها پیدا نشد.",
+  "err.price_exists": "برای این مدل از قبل قیمتی ثبت شده است.",
   "err.no_such_ticket": "چنین تیکتی پیدا نشد.",
   "err.too_many_tickets": "تعداد تیکت‌های باز شما به حداکثر رسیده است. ابتدا تیکت‌های قبلی را ببندید.",
   "err.no_such_workspace": "چنین ماشینی پیدا نشد.",

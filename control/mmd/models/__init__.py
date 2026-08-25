@@ -10,7 +10,7 @@ import enum
 from datetime import UTC, datetime
 
 from sqlalchemy import (
-    BigInteger, Boolean, DateTime, Enum, ForeignKey, Index, Integer,
+    BigInteger, Boolean, DateTime, Enum, Float, ForeignKey, Index, Integer,
     JSON, String, Text, UniqueConstraint, func,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -64,6 +64,7 @@ class TxKind(str, enum.Enum):
     GRANT = "grant"                    # admin adds credit
     CHARGE_HOUR = "charge_hour"        # hourly settlement, in arrears
     CHARGE_PARTIAL = "charge_partial"  # pro-rata on power-off mid-hour
+    CHARGE_AI = "charge_ai"            # AI tokens, pay-as-you-go
     ADJUSTMENT = "adjustment"
 
 
@@ -354,3 +355,71 @@ class TicketMessage(Base):
 
     ticket: Mapped[Ticket] = relationship(back_populates="messages")
     author: Mapped[User | None] = relationship()
+
+
+class AiModelPrice(Base):
+    """What one model's tokens cost, in USD per million.
+
+    A table rather than settings keys because there are five figures per model
+    and a growing list of models; the admin panel edits these directly. Seeded
+    from Anthropic's published pricing, which changes - so this host can keep up
+    without a deploy.
+    """
+    __tablename__ = "ai_model_prices"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    service: Mapped[str] = mapped_column(String(32), default="claude", index=True)
+    # Matched against the model string in the session log by longest prefix, so
+    # a dated variant resolves to its family.
+    model: Mapped[str] = mapped_column(String(96))
+    input_usd: Mapped[float] = mapped_column(Float, default=0.0)
+    cache_write_5m_usd: Mapped[float] = mapped_column(Float, default=0.0)
+    cache_write_1h_usd: Mapped[float] = mapped_column(Float, default=0.0)
+    cache_read_usd: Mapped[float] = mapped_column(Float, default=0.0)
+    output_usd: Mapped[float] = mapped_column(Float, default=0.0)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (UniqueConstraint("service", "model", name="uq_ai_price_model"),)
+
+
+class AiUsageMark(Base):
+    """How many tokens of one session, on one model, have already been billed.
+
+    A HIGH-WATER MARK, not a running total to add to. The scanner inside the
+    workspace reports cumulative totals per session; this records what was last
+    seen and the difference is what gets charged. That makes the whole path
+    idempotent - a pass that runs twice, or crashes halfway, cannot double-bill.
+
+    It is also what survives a customer destroying their workspace. The session
+    files go with it; these rows do not. A vanished session simply stops
+    producing deltas, so its history is neither re-charged nor refunded. And
+    because the mark only ever moves UP, a workspace rebuilt from scratch cannot
+    be billed again for tokens that were already paid for.
+    """
+    __tablename__ = "ai_usage_marks"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
+    service: Mapped[str] = mapped_column(String(32), default="claude")
+    session_id: Mapped[str] = mapped_column(String(96))
+    model: Mapped[str] = mapped_column(String(96))
+
+    input_tokens: Mapped[int] = mapped_column(BigInteger, default=0)
+    cache_write_5m_tokens: Mapped[int] = mapped_column(BigInteger, default=0)
+    cache_write_1h_tokens: Mapped[int] = mapped_column(BigInteger, default=0)
+    cache_read_tokens: Mapped[int] = mapped_column(BigInteger, default=0)
+    output_tokens: Mapped[int] = mapped_column(BigInteger, default=0)
+
+    # What has been taken for this session/model so far, for the dashboard and
+    # for answering "where did my credit go".
+    billed_micro: Mapped[int] = mapped_column(BigInteger, default=0)
+    first_seen: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "service", "session_id", "model",
+                         name="uq_ai_mark"),
+        Index("ix_ai_marks_ws_service", "workspace_id", "service"),
+    )

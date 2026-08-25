@@ -1067,3 +1067,79 @@ machine at once was the one you had to read word by word.
 `statePill()` moved to `ui.js` so there is a single definition: green running,
 amber mid-change, red needs attention, grey stopped. A test asserts no page
 redefines it and that every state the API can return has a tone.
+
+## Billing AI tokens: two facts that decide the whole design
+
+The ask was to meter Claude Code usage per workspace from
+`~/.claude/projects/<project>/<session>.jsonl`, price it per model, and take it
+from the customer's credit as they go. Reading the real logs first changed two
+things about how it had to work.
+
+### One API response is written to the log many times
+
+Claude Code appends an assistant record **per content block** — the text, the
+thinking, each `tool_use` — and every one of them repeats the *same*
+`message.usage` totals. Measured on one real session: **2,317 assistant records
+for 1,122 actual messages**, which inflates output tokens by **2.37×**.
+
+Usage is therefore attributed once per `message.id`. Summing rows would have
+billed every customer roughly double, and it would have looked entirely
+plausible.
+
+### Cache tokens are the bill
+
+The ticket said "input and output tokens". On that same session, base input was
+**2,240** tokens against **526 million** cache reads:
+
+| category | tokens | rate | USD |
+|---|---|---|---|
+| input | 2,240 | $5/M | $0.01 |
+| cache write (1h) | 10,088,199 | $10/M | $100.88 |
+| cache read | 526,112,225 | $0.50/M | $263.06 |
+| output | 1,284,858 | $25/M | $32.12 |
+| | | | **$396.07** |
+
+Billing input and output only would have charged **8%** of what the usage cost.
+All four categories are metered, and the two cache-write durations are kept
+apart because a 1-hour write is 2× base input where a 5-minute write is 1.25×.
+Where an older record carries only the combined figure it is treated as the
+cheaper 5-minute write — the choice that cannot overcharge.
+
+### Counting happens inside the workspace
+
+38 MB of session logs here, largest file 19.9 MB. Copying them to the host to
+parse would repeat the mistake the zip download made, and would put customers'
+conversations on the host for no reason. A scanner is piped to `python3 -` in
+the container and returns only totals — 0.25 s for the lot. It is piped rather
+than written, so nothing is left behind in a machine the customer owns.
+
+### High-water marks, not offsets
+
+The scanner reports **cumulative** totals per session; the control plane stores
+what it last saw and charges the difference. That makes the whole path
+idempotent — a pass that runs twice, or dies halfway, cannot double-bill — and
+it is what answers the operator's question about a customer destroying their
+workspace. The session files go; the marks do not. A vanished session simply
+stops producing deltas.
+
+Deltas are **clamped at zero** and marks only ever move **up**, so a rebuilt
+workspace reporting smaller numbers produces no charge and no refund rather than
+a negative one.
+
+A model with no price is deliberately left **unmarked**: its tokens stay
+uncounted, so they bill correctly once someone sets a price instead of being
+silently given away. The admin panel surfaces those models.
+
+### The chain, all of it editable
+
+tokens → USD at Anthropic's per-model rates → Toman at an admin-set exchange
+rate → a discount multiplier. Seeded at 200,000 Toman per USD and 90% off, i.e.
+the customer pays a tenth. The discount is stored as the *percentage* because
+that is what an operator says out loud, and converted in one place. It is
+clamped to 0–100 so a typo cannot invert a charge into a credit — a test covers
+that.
+
+Charged every 5 minutes, matching the worker tick, with the bucket as the
+idempotency key. Running often is the point: the platform's own subscription is
+what is being spent, so the gap between usage and payment is the window in which
+an empty account keeps spending.

@@ -29,16 +29,16 @@ from . import ports as portalloc
 from . import sshkeys
 from . import presets as presetlib
 from . import service as svc
-from .billing import pricing
+from .billing import aipricing, pricing
 from .billing.pricing import MICRO, InvalidTier, Tier
 from .config import CONFIG
 from .db import get_session, init_db
 from .incus.client import IncusClient, IncusConfig, IncusError
 from .incus.execws import open_exec
-from .models import (AuditLog, CreditAccount, CreditTransaction, ExposedPort,
-                     PortKind, Setting, SshKey, Ticket, TicketMessage,
-                     TicketStatus, TxKind, UsageSample, User, UserStatus,
-                     Workspace, WorkspaceState)
+from .models import (AiModelPrice, AiUsageMark, AuditLog, CreditAccount,
+                     CreditTransaction, ExposedPort, PortKind, Setting, SshKey,
+                     Ticket, TicketMessage, TicketStatus, TxKind, UsageSample,
+                     User, UserStatus, Workspace, WorkspaceState)
 from .security import hash_password, verify_password
 from .tickets import is_unread
 
@@ -160,6 +160,15 @@ class ResetRequest(BaseModel):
     """
     confirm: str = Field(min_length=3, max_length=320)
     password: str = Field(min_length=1, max_length=256)
+
+
+class AiPriceRow(BaseModel):
+    model: str = Field(min_length=1, max_length=96)
+    input_usd: float = Field(ge=0, le=10_000)
+    cache_write_5m_usd: float = Field(ge=0, le=10_000)
+    cache_write_1h_usd: float = Field(ge=0, le=10_000)
+    cache_read_usd: float = Field(ge=0, le=10_000)
+    output_usd: float = Field(ge=0, le=10_000)
 
 
 class TicketCreate(BaseModel):
@@ -2032,6 +2041,129 @@ def admin_metrics(minutes: int = 5, _: User = Depends(require_admin),
             "memory_gb": round(cap.schedulable_mem_gib, 2),
             "sample_seconds": SAMPLE_SECONDS,
             "workspaces": len(by_ws)}
+
+
+# --- AI pricing -----------------------------------------------------------
+@app.get("/api/workspace/ai/usage")
+def workspace_ai_usage(user: User = Depends(current_user),
+                       db: Session = Depends(get_session)) -> dict:
+    """What this account has spent on AI tokens, and on what.
+
+    Read from the marks rather than recomputed, so it survives the customer
+    destroying their workspace - which is the whole reason the totals live here
+    and not in the machine.
+    """
+    ws = my_workspace(db, user)
+    rows = db.scalars(select(AiUsageMark).where(
+        AiUsageMark.workspace_id == ws.id)).all()
+
+    by_model: dict[str, dict] = {}
+    for m in rows:
+        acc = by_model.setdefault(m.model, {
+            "model": m.model, "toman": 0.0,
+            **{c: 0 for c in aipricing.CATEGORIES}})
+        acc["toman"] += (m.billed_micro or 0) / MICRO
+        acc["input"] += m.input_tokens or 0
+        acc["cache_write_5m"] += m.cache_write_5m_tokens or 0
+        acc["cache_write_1h"] += m.cache_write_1h_tokens or 0
+        acc["cache_read"] += m.cache_read_tokens or 0
+        acc["output"] += m.output_tokens or 0
+
+    usd_rate, discount = svc.ai_settings(db)
+    models = sorted(by_model.values(), key=lambda m: -m["toman"])
+    return {
+        "models": models,
+        "total_toman": round(sum(m["toman"] for m in models), 2),
+        "sessions": len({m.session_id for m in rows}),
+        "usd_to_toman": usd_rate,
+        "discount_percent": discount,
+        # So the page can explain the arithmetic rather than showing a number
+        # that arrived from nowhere.
+        "period_seconds": svc.AI_PERIOD_SECONDS,
+    }
+
+
+@app.get("/api/admin/ai-pricing")
+def admin_ai_pricing(_: User = Depends(require_admin),
+                     db: Session = Depends(get_session)) -> dict:
+    """The whole chain a customer's AI bill is computed from.
+
+    Prices in USD per million tokens, the exchange rate, and the discount - all
+    editable, because Anthropic changes its rates and this host should not need
+    a deploy to keep up.
+    """
+    prices = svc.ai_prices(db)
+    usd_rate, discount = svc.ai_settings(db)
+
+    rows = db.scalars(select(AiModelPrice)
+                      .where(AiModelPrice.service == svc.AI_SERVICE)
+                      .order_by(AiModelPrice.model)).all()
+
+    # Models seen in real usage that nothing prices. Their tokens are being held
+    # uncounted rather than given away, so this needs to be visible.
+    seen = {m.model for m in db.scalars(select(AiUsageMark))}
+    unpriced = sorted(m for m in seen if aipricing.resolve(m, prices) is None)
+
+    return {
+        "service": svc.AI_SERVICE,
+        "usd_to_toman": usd_rate,
+        "discount_percent": discount,
+        "categories": list(aipricing.CATEGORIES),
+        "unpriced_models": unpriced,
+        "prices": [{"id": r.id, "model": r.model, "input_usd": r.input_usd,
+                    "cache_write_5m_usd": r.cache_write_5m_usd,
+                    "cache_write_1h_usd": r.cache_write_1h_usd,
+                    "cache_read_usd": r.cache_read_usd,
+                    "output_usd": r.output_usd} for r in rows],
+    }
+
+
+@app.put("/api/admin/ai-pricing/{price_id}")
+def admin_ai_price_update(price_id: int, body: AiPriceRow,
+                          admin: User = Depends(require_admin),
+                          db: Session = Depends(get_session)) -> dict:
+    row = db.get(AiModelPrice, price_id)
+    if row is None:
+        fail(404, "no_such_price", "No such model price")
+    for f in ("model", "input_usd", "cache_write_5m_usd", "cache_write_1h_usd",
+              "cache_read_usd", "output_usd"):
+        setattr(row, f, getattr(body, f))
+    db.commit()
+    svc.audit(db, admin.id, "ai_price_update", row.model)
+    return {"ok": True}
+
+
+@app.post("/api/admin/ai-pricing")
+def admin_ai_price_add(body: AiPriceRow, admin: User = Depends(require_admin),
+                       db: Session = Depends(get_session)) -> dict:
+    """Adding a price is what releases tokens that were held uncounted."""
+    row = AiModelPrice(service=svc.AI_SERVICE, model=body.model,
+                       input_usd=body.input_usd,
+                       cache_write_5m_usd=body.cache_write_5m_usd,
+                       cache_write_1h_usd=body.cache_write_1h_usd,
+                       cache_read_usd=body.cache_read_usd,
+                       output_usd=body.output_usd)
+    db.add(row)
+    try:
+        db.commit()
+    except Exception:  # noqa: BLE001
+        db.rollback()
+        fail(409, "price_exists", "A price for that model already exists.")
+    svc.audit(db, admin.id, "ai_price_add", body.model)
+    return {"ok": True, "id": row.id}
+
+
+@app.delete("/api/admin/ai-pricing/{price_id}")
+def admin_ai_price_delete(price_id: int, admin: User = Depends(require_admin),
+                          db: Session = Depends(get_session)) -> dict:
+    row = db.get(AiModelPrice, price_id)
+    if row is None:
+        fail(404, "no_such_price", "No such model price")
+    name = row.model
+    db.delete(row)
+    db.commit()
+    svc.audit(db, admin.id, "ai_price_delete", name)
+    return {"ok": True}
 
 
 @app.get("/api/admin/activity")

@@ -50,14 +50,18 @@ test("every dynamically-built key prefix has all its variants", () => {
     "machine.state.": ["on", "off", "starting", "stopping", "provisioning",
                        "resetting", "archiving", "archived", "error", "pending",
                        "none"],
-    "billing.kind.": ["grant", "charge_hour", "charge_partial", "adjustment"],
+    "billing.kind.": ["grant", "charge_hour", "charge_partial", "charge_ai",
+                      "adjustment"],
     "act.a.": ["register", "sign_in", "password_change", "power_on", "power_off",
                "size_change", "port_publish", "port_unpublish",
                "packages_installed", "approve", "reject", "grant_credit",
                "set_admin", "delete_user", "settings_update", "provision_failed",
                "ticket_opened", "ticket_replied", "ticket_status",
                "ai_claude_install", "ai_claude_unlink", "apt_repair",
-               "reset_started", "reset_done", "reset_failed", "reset_refused"],
+               "reset_started", "reset_done", "reset_failed", "reset_refused",
+               "ai_price_update", "ai_price_add", "ai_price_delete"],
+    // Token categories, built as t("ai.tok." + category) from the API's list.
+    "ai.tok.": ["input", "cache_write_5m", "cache_write_1h", "cache_read", "output"],
     // Every ticket status the API can return needs a label, or the queue
     // renders a raw enum name at an operator.
     "tk.status.": ["open", "in_progress", "answered", "closed"],
