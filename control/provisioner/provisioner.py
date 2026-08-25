@@ -213,7 +213,12 @@ PORT_RULES_FILE = "/etc/nftables/mmd-ports.nft"
 # The file API is routed here at all because a RESTRICTED Incus certificate is
 # denied it (403 Forbidden) - reading arbitrary paths inside an instance is
 # privileged, and the web app deliberately does not hold that privilege.
-SPOOL = "/run/mmd/spool"
+# Disk, NOT tmpfs. This was /run/mmd/spool - and /run is a 1.6 GiB tmpfs that
+# also holds the provisioner's socket and Incus's config. Staging a customer's
+# download there meant a large transfer consumed host RAM and could fill the
+# filesystem systemd and sshd depend on, taking every tenant down with it. A
+# mistake here should cost disk, which is measurable and recoverable.
+SPOOL = "/var/lib/mmd/spool"
 MAX_EDIT_BYTES = 2 * 1024 * 1024
 MAX_TRANSFER_BYTES = 512 * 1024 * 1024
 
@@ -409,6 +414,27 @@ def _apply_apt_fixups(project: str) -> tuple[bool, str]:
                     "bash", "-lc", "/usr/local/sbin/mmd-apt-fixups 2>&1"],
                    timeout=900)
     return ok, (out or "")[-1000:]
+
+
+def _measure(project: str, path: str) -> tuple[int | None, str]:
+    """How many bytes a path holds, measured INSIDE the workspace.
+
+    The point is that this runs before anything is copied. Both download paths
+    used to pull first and check the size afterwards, which meant the guard fired
+    only once the host had already absorbed the data - and with the spool on
+    tmpfs, "absorbed" meant host RAM. A customer clicking "download zip" on a
+    home directory could fill the filesystem the provisioner's own socket lives
+    in.
+
+    `du -sb` is apparent size and does not follow symlinks, which matches what
+    the archiver actually writes.
+    """
+    rc, out, err = _run_split(["incus", "exec", "ws", "--project", project, "--",
+                               "du", "-sb", "--", path], timeout=300)
+    first = (out or "").strip().split("\t")[0].split()[0] if (out or "").strip() else ""
+    if not first.isdigit():
+        return None, (err or out or "could not measure the path")[-200:]
+    return int(first), ""
 
 
 def _claude_credentials() -> tuple[dict | None, str]:
@@ -868,18 +894,31 @@ def handle(req: dict) -> dict:
                 dest = _spool_path(req.get("token", ""))
             except ValueError as exc:
                 return {"ok": False, "error": str(exc)}
+            # Same order as the archive: ask how big it is before copying it.
+            size, why = _measure(project, path)
+            if size is None:
+                return {"ok": False, "error": why}
+            if size > MAX_TRANSFER_BYTES:
+                return {"ok": False, "error": "file too large",
+                        "code": "too_large", "size": size,
+                        "limit": MAX_TRANSFER_BYTES}
+
             ok, out = _run(["incus", "file", "pull", "--project", project,
                             f"ws{path}", dest], timeout=600)
             if not ok:
                 return {"ok": False, "error": (out or "")[-300:]}
             try:
+                # Re-checked against what actually landed: `du` is a measurement
+                # of the past, and the file could have grown between the two.
                 size = os.path.getsize(dest)
                 os.chmod(dest, 0o660)
             except OSError as exc:
                 return {"ok": False, "error": str(exc)}
             if size > MAX_TRANSFER_BYTES:
                 os.unlink(dest)
-                return {"ok": False, "error": "file too large"}
+                return {"ok": False, "error": "file too large",
+                        "code": "too_large", "size": size,
+                        "limit": MAX_TRANSFER_BYTES}
             return {"ok": True, "size": size}
 
         if verb == "fs_push":
@@ -899,6 +938,16 @@ def handle(req: dict) -> dict:
                 dest = _spool_path(req.get("token", ""))
             except ValueError as exc:
                 return {"ok": False, "error": str(exc)}
+            # Measured inside the workspace FIRST. Refusing here costs one `du`;
+            # refusing after the pull costs however much the customer asked for.
+            size, why = _measure(project, path)
+            if size is None:
+                return {"ok": False, "error": why}
+            if size > MAX_TRANSFER_BYTES:
+                return {"ok": False, "error": "archive too large",
+                        "code": "too_large", "size": size,
+                        "limit": MAX_TRANSFER_BYTES}
+
             # Pulled recursively to the host and zipped there, so the workspace
             # needs no archiver installed and the customer's disk quota is not
             # spent building their own download.

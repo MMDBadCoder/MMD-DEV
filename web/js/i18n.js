@@ -663,6 +663,10 @@ const FA = {
   "err.reset_confirm_mismatch": "نشانی ایمیلی که تایپ کردید با حساب شما یکی نیست.",
   "err.bad_password": "رمز عبور درست نیست.",
   "err.reset_failed": "بازنشانی ماشین انجام نشد. می‌توانید دوباره تلاش کنید.",
+  // Carries the measured size and the limit, so the message can be specific
+  // about how far over the folder is rather than just refusing.
+  "err.download_too_large": (d) =>
+    `حجم این پوشه ${fmtFa((d.size || 0) / 1048576, 0)} مگابایت است و از حد مجاز دانلود (${fmtFa((d.limit || 0) / 1048576, 0)} مگابایت) بیشتر است. پوشهٔ کوچک‌تری را انتخاب کنید یا فایل‌ها را جداگانه دانلود کنید.`,
   "err.no_such_ticket": "چنین تیکتی پیدا نشد.",
   "err.too_many_tickets": "تعداد تیکت‌های باز شما به حداکثر رسیده است. ابتدا تیکت‌های قبلی را ببندید.",
   "err.no_such_workspace": "چنین ماشینی پیدا نشد.",
@@ -676,7 +680,6 @@ const FA = {
   "err.fs_failed": "عملیات روی فایل انجام نشد.",
   "err.file_too_large": "این فایل بزرگ‌تر از حد مجاز است.",
   "err.not_text": "این فایل متنی نیست.",
-  "err.archive_too_large": "این پوشه برای دریافت به‌صورت ZIP بزرگ است.",
   "err.protected_path": "این مسیر قابل حذف نیست.",
   "err.bad_name": "نام فایل نامعتبر است.",
   "err.bad_ssh_key": "کلید واردشده معتبر نیست. باید یک کلید عمومی SSH استاندارد باشد.",

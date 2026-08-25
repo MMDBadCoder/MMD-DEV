@@ -1125,7 +1125,12 @@ def workspace_metrics(minutes: int = 5, user: User = Depends(current_user),
 # denied the file API outright (403). Content moves via a spool directory
 # rather than through the socket, so a large file is streamed rather than held
 # in memory twice.
-SPOOL = "/run/mmd/spool"
+# Disk, NOT tmpfs. This was /run/mmd/spool - and /run is a 1.6 GiB tmpfs that
+# also holds the provisioner's socket and Incus's config. Staging a customer's
+# download there meant a large transfer consumed host RAM and could fill the
+# filesystem systemd and sshd depend on, taking every tenant down with it. A
+# mistake here should cost disk, which is measurable and recoverable.
+SPOOL = "/var/lib/mmd/spool"
 MAX_EDIT_BYTES = 2 * 1024 * 1024
 
 TEXT_SUFFIXES = {
@@ -1261,6 +1266,18 @@ def save_file(body: SaveBody, user: User = Depends(current_user),
     return {"ok": True, "size": len(data)}
 
 
+def _refuse_if_too_large(resp: dict) -> None:
+    """Turn the provisioner's size refusal into something the page can explain.
+
+    Without this the customer gets "that file could not be downloaded" for a
+    folder that is simply too big, which reads as a fault rather than a limit.
+    """
+    if resp.get("code") == "too_large":
+        fail(413, "download_too_large",
+             "That folder is larger than the download limit.",
+             size=resp.get("size"), limit=resp.get("limit"))
+
+
 def _stream_and_delete(token: str, filename: str, media: str) -> FileResponse:
     spool = _spool(token)
 
@@ -1288,6 +1305,7 @@ def download_file(path: str, user: User = Depends(current_user),
                                  "path": p, "token": token}, timeout=1800)
     if not resp.get("ok"):
         _drop(token)
+        _refuse_if_too_large(resp)
         fail(404, "no_such_path", "That file could not be downloaded.")
     return _stream_and_delete(token, posixpath.basename(p) or "download",
                               "application/octet-stream")
@@ -1309,8 +1327,9 @@ def download_archive(path: str, user: User = Depends(current_user),
                                  "path": p, "token": token}, timeout=1800)
     if not resp.get("ok"):
         _drop(token)
-        if "too large" in str(resp.get("error", "")):
-            fail(413, "archive_too_large", "This folder is too large to download as a zip.")
+        # Carries the measured size and the limit, so the page can say how far
+        # over it is rather than only that it was refused.
+        _refuse_if_too_large(resp)
         fail(500, "fs_failed", "The folder could not be packaged.")
     name = (posixpath.basename(p) or "workspace") + ".zip"
     svc.audit(db, user.id, "folder_downloaded", ws.incus_project, path=p)

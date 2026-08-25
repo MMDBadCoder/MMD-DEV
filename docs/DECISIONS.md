@@ -925,3 +925,47 @@ pointing at a machine that no longer existed sat in the kernel.
 The worker now pushes the full set on every reconciliation pass rather than only
 when it allocated something. Idempotent by construction, and it is the only
 thing that removes rules for a workspace that is gone.
+
+## The zip download staged customer data in host RAM
+
+A customer asked whether the zip download in the file manager checks a limit
+before running, because a 10 GB folder "could damage everything". It did not,
+and they were understating it.
+
+The order of operations was:
+
+1. `incus file pull -r` the entire requested tree to the host
+2. zip it, counting bytes
+3. abort if the total exceeded `MAX_TRANSFER_BYTES`
+
+**The guard was step 3. The damage was step 1.** And the staging directory was
+`SPOOL = /run/mmd/spool` — `/run` is a **1.6 GiB tmpfs**, i.e. RAM, on a host
+with 7.8 GiB total, and it also holds `provisioner.sock` and Incus's config.
+
+So one click on "download zip" over a home directory could consume host memory
+and fill the filesystem systemd, sshd and the provisioner's own socket live in.
+Every tenant, from one customer's UI action. A workspace root is 6 GiB, so
+reaching it required nothing unusual. The single-file path had the same shape —
+`incus file pull`, then `os.path.getsize()`.
+
+Three changes:
+
+- **Measure first.** `_measure()` runs `du -sb` *inside the workspace* before
+  anything is copied. Refusing now costs one `du`; refusing after the pull cost
+  however much was asked for. Applied to both download paths.
+- **The spool moved to `/var/lib/mmd/spool`** — disk, not RAM. A future mistake
+  should cost disk, which is measurable and recoverable, rather than the memory
+  the whole host depends on.
+- The refusal carries the measured size and the limit, so the page can say how
+  far over the folder is instead of reporting a generic failure.
+
+`du -sb` is apparent size and does not follow symlinks, which matches what the
+archiver actually writes. It is re-checked against the file that lands, because
+a measurement is of the past and a file can grow in between.
+
+Measured on a disposable workspace: a 629 MB folder is refused in **60 ms** with
+nothing written to the spool; a small folder still zips; a 629 MB single file is
+refused and a small one is not.
+
+The limit stays 512 MB. It is now enforced where it can actually prevent
+something.
