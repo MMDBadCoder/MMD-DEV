@@ -43,7 +43,7 @@ test("a number never wraps away from its unit", () => {
 
 // ---- reported: machine state is hard to read in the admin list -----------
 test("the admin list shows machine state as a pill, not bare text", () => {
-  const admin = read("web/js/pages/admin.js");
+  const admin = read("web/js/pages/adminusers.js");
   assert.match(admin, /statePill\(u\.workspace\.state\)/);
   assert.doesNotMatch(admin, /t\("machine\.state\." \+ u\.workspace\.state\)/);
 });

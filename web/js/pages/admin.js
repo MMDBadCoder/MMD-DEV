@@ -1,18 +1,25 @@
-/* Administration: people, capacity, pricing, default toolsets. */
+/* Administration overview.
+ *
+ * This used to be everything: approvals, capacity, host charts, presets, the
+ * rate card and a link to AI pricing, stacked in one column. Each is a
+ * different job done at a different time, so the page is now a short landing
+ * screen - what needs attention, and where the sections are - with the work
+ * itself on real routes under /console/admin/*.
+ *
+ * What stays here is what is genuinely "the host as a whole": how much capacity
+ * is committed, what a workspace is charged, and which toolsets new accounts
+ * are built with. */
 import { get, post, put, del } from "../api.js";
-import { $, $$, icon, esc, fmtMoney, fmtNum, fmtFa, note, toast, stamp,
-         confirmDialog, statePill } from "../ui.js";
-import { t, CURRENCY } from "../i18n.js";
-import { render, state } from "../main.js";
-import { usageChart, windowPicker, wireWindowPicker,
-         savedWindow, saveWindow } from "../usagechart.js";
+import { $, $$, icon, esc, fmtMoney, fmtNum, fmtFa, note, toast,
+         confirmDialog } from "../ui.js";
+import { t } from "../i18n.js";
+import { render } from "../main.js";
+import { adminHead } from "./adminnav.js";
 
 export async function adminPage() {
-  const [users, cap, settings, presets, tickets, hostMetrics] = await Promise.all([
+  const [users, cap, settings, presets, tickets] = await Promise.all([
     get("/api/admin/users"), get("/api/admin/capacity"),
     get("/api/admin/settings"), get("/api/presets"), get("/api/admin/tickets"),
-    get(`/api/admin/metrics?minutes=${savedWindow()}`)
-      .catch(() => ({ cpu: [], memory: [], cpu_cores: 0, memory_gb: 0 })),
   ]);
 
   const pct = (a, b) => Math.min(100, Math.round(100 * a / Math.max(b, 0.001)));
@@ -20,57 +27,26 @@ export async function adminPage() {
   const memPct = pct(cap.used_mem_gib, cap.schedulable_mem_gib);
   const cls = (p) => (p > 90 ? "bad" : p > 70 ? "warn" : "");
   const pending = users.filter((u) => u.status === "pending");
-
-  const statusLabel = { approved: "تأیید شده", pending: "در انتظار تأیید",
-                        rejected: "رد شده", suspended: "معلق" };
-
-  const row = (u) => `<tr>
-    <td><div class="ltr mono" style="font-size:13px">${esc(u.email)}</div>
-      <div class="tiny dim">${u.is_admin ? t("sec.role.admin") + " · " : ""}${t("adm.joined")} ${stamp(u.created_at)}</div></td>
-    <td><span class="pill"><span class="dot ${u.status === "approved" ? "on"
-        : u.status === "pending" ? "busy" : "bad"}"></span>${statusLabel[u.status] || u.status}</span></td>
-    <td class="small nowrap">${u.workspace
-      // The same pill the customer sees, so this column can be read down rather
-      // than word by word - it was the one place the state was bare text, next
-      // to an account-status column that already had the treatment.
-      ? `${statePill(u.workspace.state)}
-         <div class="tiny dim ltr" style="margin-top:3px">${
-           fmtNum(u.workspace.cpu_cores, 1)} vCPU · ${
-           fmtNum(u.workspace.memory_mb / 1024, 1)} GB</div>`
-      : `<span class="dim">${t("adm.none")}</span>`}</td>
-    <td class="num">${fmtMoney(u.credits)}</td>
-    <td class="num nowrap">
-      ${u.status === "pending"
-        ? `<button class="btn sm primary" data-approve="${u.id}">${t("adm.approve")}</button>
-           <button class="btn sm danger" data-reject="${u.id}">${t("adm.reject")}</button>` : ""}
-      <button class="btn sm" data-credit="${u.id}">${t("adm.addcredit")}</button>
-      <button class="btn sm ghost" data-admin="${u.id}" data-is="${u.is_admin}">
-        ${u.is_admin ? t("adm.demote") : t("adm.makeadmin")}</button>
-      ${u.id === state.me?.id ? "" : `<button class="btn sm danger" data-del="${u.id}"
-        data-email="${esc(u.email)}">${icon.trash}</button>`}
-    </td></tr>`;
+  const waiting = (tickets.counts.open || 0) + (tickets.counts.in_progress || 0);
 
   render(`
-    <div class="page-head"><h1>${t("adm.title")}</h1>
-      <p class="muted small" style="margin:0">${t("adm.sub")}</p></div>
+    ${adminHead("", t("adm.title"), t("adm.sub"))}
 
-    ${pending.length ? note("warn", t("adm.pending", fmtNum(pending.length))) : ""}
+    ${pending.length
+      ? `<a class="card between attn" href="/console/admin/users">
+           <div><h3 style="margin:0">${t("adm.pending.title")}</h3>
+             <p class="muted small" style="margin:4px 0 0">${
+               t("adm.pending", fmtFa(pending.length))}</p></div>
+           <span class="btn primary">${t("adm.users.review")}</span></a>`
+      : ""}
 
-    <div class="card between">
-      <div><h3 style="margin:0">${t("tk.admin.title")}</h3>
-        <p class="muted small" style="margin:4px 0 0">${
-          tickets.counts.open || tickets.counts.in_progress
-            ? t("adm.tickets.waiting", fmtNum((tickets.counts.open || 0)
-                                            + (tickets.counts.in_progress || 0)))
-            : t("adm.tickets.clear")}</p></div>
-      <a class="btn primary" href="/console/admin/tickets">${icon.chat}${t("adm.tickets.open")}</a>
-    </div>
-
-    <div class="card between">
-      <div><h3 style="margin:0">${t("adm.ai.title")}</h3>
-        <p class="muted small" style="margin:4px 0 0;max-width:60ch">${t("adm.ai.sub")}</p></div>
-      <a class="btn" href="/console/admin/ai-pricing">${icon.sparkle}${t("adm.ai.title")}</a>
-    </div>
+    ${waiting
+      ? `<a class="card between attn" href="/console/admin/tickets">
+           <div><h3 style="margin:0">${t("tk.admin.title")}</h3>
+             <p class="muted small" style="margin:4px 0 0">${
+               t("adm.tickets.waiting", fmtFa(waiting))}</p></div>
+           <span class="btn primary">${t("adm.tickets.open")}</span></a>`
+      : ""}
 
     <div class="card">
       <h3>${t("adm.resources")}</h3>
@@ -79,38 +55,20 @@ export async function adminPage() {
         <div class="stat"><div class="k">${t("adm.running")}</div>
           <div class="v">${fmtFa(cap.running)}</div></div>
         <div class="stat"><div class="k">${t("adm.cpualloc")}</div>
-          <div class="v ltr">${fmtNum(cap.used_cores, 1)}<small>/ ${fmtNum(cap.schedulable_cores, 1)}</small></div>
+          <div class="v ltr">${fmtNum(cap.used_cores, 1)}<small>/ ${
+            fmtNum(cap.schedulable_cores, 1)}</small></div>
           <div class="bar"><i class="${cls(cpuPct)}" style="width:${cpuPct}%"></i></div></div>
         <div class="stat"><div class="k">${t("adm.memalloc")}</div>
-          <div class="v ltr">${fmtNum(cap.used_mem_gib, 1)}<small>/ ${fmtNum(cap.schedulable_mem_gib, 1)} GB</small></div>
+          <div class="v ltr">${fmtNum(cap.used_mem_gib, 1)}<small>/ ${
+            fmtNum(cap.schedulable_mem_gib, 1)} GB</small></div>
           <div class="bar"><i class="${cls(memPct)}" style="width:${memPct}%"></i></div></div>
+        <div class="stat"><div class="k">${t("adm.people")}</div>
+          <div class="v">${fmtFa(users.length)}</div></div>
       </div>
       <p class="tiny dim" style="margin:14px 0 0">${t("adm.capacity.note")}</p>
-    </div>
-
-    <div class="card">
-      <div class="between" style="margin-bottom:12px">
-        <div>
-          <h3 style="margin:0">${t("adm.hostuse")}</h3>
-          <p class="tiny dim" style="margin:4px 0 0">${
-            t("adm.hostuse.sub", hostMetrics.workspaces || 0)}</p>
-        </div>
-        ${windowPicker(savedWindow(), "adminwin")}
+      <div class="btn-row" style="margin-top:14px">
+        <a class="btn" href="/console/admin/monitoring">${icon.chart}${t("adm.mon.title")}</a>
       </div>
-      <div class="row" id="hostcharts">
-        <div style="flex:1 1 240px">
-          <label>${t("ov.usage.cpu")}</label>
-          <div id="hchart-cpu">${usageChart(hostMetrics.cpu, hostMetrics.cpu_cores,
-                                            "var(--brand)", t("unit.cores"))}</div>
-        </div>
-        <div style="flex:1 1 240px">
-          <label>${t("ov.usage.mem")}</label>
-          <div id="hchart-mem">${usageChart(hostMetrics.memory, hostMetrics.memory_gb,
-                                            "var(--ok)", t("unit.gb"))}</div>
-        </div>
-      </div>
-      <p class="tiny dim" style="margin:10px 0 0">${
-        t("ov.usage.refresh", hostMetrics.sample_seconds || 20)}</p>
     </div>
 
     <div class="card">
@@ -118,59 +76,27 @@ export async function adminPage() {
       <p class="tiny dim" style="margin:0 0 12px">${t("adm.presets.hint")}</p>
       <div class="opts" style="grid-template-columns:repeat(auto-fit,minmax(190px,1fr))">
         ${presets.presets.map((p) => `
-          <button class="opt" data-defpreset="${esc(p.key)}" style="text-align:start;padding:12px 14px">
-            <div style="font-weight:600;font-size:14px">${t("tools.preset." + p.key) || esc(p.key)}</div>
+          <button class="opt" data-defpreset="${esc(p.key)}"
+            style="text-align:start;padding:12px 14px">
+            <div style="font-weight:600;font-size:14px">${
+              t("tools.preset." + p.key) || esc(p.key)}</div>
             <div class="tiny dim mono ltr">${p.packages.length} pkg</div></button>`).join("")}
       </div>
-    </div>
-
-    <div class="card pad0">
-      <div class="card-head"><h2>${t("adm.people")}</h2>
-        <span class="dim small">${fmtFa(users.length)}</span></div>
-      <div class="table-wrap"><table>
-        <thead><tr><th>${t("adm.account")}</th><th>${t("adm.status")}</th>
-          <th>${t("adm.machine")}</th><th class="num">${t("adm.credit")} <span class="dim">(${CURRENCY})</span></th><th></th></tr></thead>
-        <tbody>${users.map(row).join("")}</tbody></table></div>
     </div>
 
     <div class="card">
       <h3>${t("adm.rates")}</h3>
       <div class="row">
         ${Object.entries(settings).map(([k, v]) => `
-          <div style="min-width:230px"><label for="s-${k}" class="ltr" style="direction:ltr;text-align:start">${esc(k.replace(/_/g, " "))}</label>
+          <div style="min-width:230px">
+            <label for="s-${k}" class="ltr" style="direction:ltr;text-align:start">${
+              esc(k.replace(/_/g, " "))}</label>
             <input id="s-${k}" class="ltr" data-setting="${esc(k)}" value="${esc(v)}"></div>`).join("")}
       </div>
       <div class="btn-row" style="margin-top:16px">
         <button class="btn primary" id="save">${icon.save}${t("adm.save")}</button></div>
     </div>`);
 
-  // Same cadence as the customer overview, and only the two chart bodies are
-  // replaced - re-rendering the admin page every 20 seconds would fight with
-  // whoever is halfway through editing a rate.
-  let hostTimer = null;
-  const refreshHost = async () => {
-    clearTimeout(hostTimer);
-    if (!$("#hostcharts")) return;
-    let m;
-    try { m = await get(`/api/admin/metrics?minutes=${savedWindow()}`); }
-    catch { hostTimer = setTimeout(refreshHost, 30000); return; }
-    if (!$("#hostcharts")) return;
-    $("#hchart-cpu").innerHTML =
-      usageChart(m.cpu, m.cpu_cores, "var(--brand)", t("unit.cores"));
-    $("#hchart-mem").innerHTML =
-      usageChart(m.memory, m.memory_gb, "var(--ok)", t("unit.gb"));
-    hostTimer = setTimeout(refreshHost, (m.sample_seconds || 20) * 1000);
-  };
-  wireWindowPicker($("#adminwin"), (mins) => {
-    saveWindow(mins);
-    $("#adminwin").querySelectorAll("[data-win]").forEach((b) =>
-      b.classList.toggle("active", Number(b.dataset.win) === mins));
-    refreshHost();
-  });
-  hostTimer = setTimeout(refreshHost, (hostMetrics.sample_seconds || 20) * 1000);
-
-
-  // Default toolsets are remembered locally and sent with each approval.
   const defaults = new Set(JSON.parse(localStorage.getItem("mmd-default-presets") || "[]"));
   $$("[data-defpreset]").forEach((b) => {
     b.classList.toggle("sel", defaults.has(b.dataset.defpreset));
@@ -180,50 +106,6 @@ export async function adminPage() {
       b.classList.toggle("sel", defaults.has(k));
       localStorage.setItem("mmd-default-presets", JSON.stringify([...defaults]));
     };
-  });
-
-  $$("[data-approve]").forEach((b) => b.onclick = async () => {
-    b.disabled = true; b.innerHTML = `<span class="spinner"></span>${t("adm.approving")}`;
-    try {
-      await post(`/api/admin/users/${b.dataset.approve}/approve`, { presets: [...defaults] });
-      toast(t("adm.machinecreated"), "ok");
-    } catch (e) { toast(e.message, "bad"); }
-    adminPage();
-  });
-
-  $$("[data-reject]").forEach((b) => b.onclick = async () => {
-    if (!await confirmDialog(t("adm.confirm.reject.title"), t("adm.confirm.reject.body"),
-                             t("adm.reject"))) return;
-    try { await post(`/api/admin/users/${b.dataset.reject}/reject`); }
-    catch (e) { toast(e.message, "bad"); }
-    adminPage();
-  });
-
-  $$("[data-credit]").forEach((b) => b.onclick = async () => {
-    const v = prompt(t("adm.creditprompt"), "500000");
-    if (v === null) return;
-    try {
-      const r = await post(`/api/admin/users/${b.dataset.credit}/credit`,
-                           { credits: Number(v), note: "admin grant" });
-      toast(t("adm.newbalance", fmtMoney(r.balance)), "ok");
-    } catch (e) { toast(e.message, "bad"); }
-    adminPage();
-  });
-
-  $$("[data-admin]").forEach((b) => b.onclick = async () => {
-    const makeAdmin = b.dataset.is !== "true";
-    try { await post(`/api/admin/users/${b.dataset.admin}/admin`, { is_admin: makeAdmin }); }
-    catch (e) { toast(e.message, "bad"); }
-    adminPage();
-  });
-
-  $$("[data-del]").forEach((b) => b.onclick = async () => {
-    if (!await confirmDialog(t("adm.confirm.del.title", b.dataset.email),
-                             t("adm.confirm.del.body"), t("adm.confirm.del.cta"))) return;
-    b.disabled = true;
-    try { await del(`/api/admin/users/${b.dataset.del}`); toast(t("adm.deleted"), "ok"); }
-    catch (e) { toast(e.message, "bad"); }
-    adminPage();
   });
 
   $("#save").onclick = async () => {

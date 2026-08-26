@@ -73,7 +73,7 @@ function renderHermes(head, h) {
                   : waiting ? t("ai.hermes.preparing") : t("ai.state.absent")}</span>
       </div>
 
-      ${h.error ? note("bad", esc(h.error)) : ""}
+      ${h.error ? note("bad", t("ai.hermes.error")) : ""}
       ${waiting ? note("info", t("ai.hermes.preparing.body")) : ""}
 
       ${h.ready ? `

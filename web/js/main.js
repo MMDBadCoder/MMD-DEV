@@ -16,6 +16,10 @@ import { billingPage } from "./pages/billing.js";
 import { activityPage } from "./pages/activity.js";
 import { securityPage } from "./pages/security.js";
 import { adminPage } from "./pages/admin.js";
+import { adminUsersPage } from "./pages/adminusers.js";
+import { adminUserPage } from "./pages/adminuser.js";
+import { adminMonitorPage } from "./pages/adminmonitor.js";
+import { adminHermesPage } from "./pages/adminhermes.js";
 import { aiPage } from "./pages/ai.js";
 import { supportPage } from "./pages/support.js";
 import { adminTicketsPage } from "./pages/admintickets.js";
@@ -128,7 +132,13 @@ route("/console/support", { title: "پشتیبانی", view: supportPage });
 route("/console/support/:id", { title: "پشتیبانی", view: supportPage });
 route("/console/admin", { title: "مدیریت", view: adminPage, admin: true });
 route("/console/admin/tickets", { title: "تیکت‌ها", view: adminTicketsPage, admin: true });
-route("/console/admin/ai-pricing", { title: "قیمت‌گذاری هوش مصنوعی", view: aiPricingPage, admin: true });
+route("/console/admin/users", { title: "کاربران", view: adminUsersPage, admin: true });
+route("/console/admin/users/:id", { title: "کاربر", view: adminUserPage, admin: true });
+route("/console/admin/monitoring", { title: "پایش", view: adminMonitorPage, admin: true });
+route("/console/admin/hermes", { title: "Hermes", view: adminHermesPage, admin: true });
+route("/console/admin/claude", { title: "قیمت‌گذاری Claude", view: aiPricingPage, admin: true });
+// The old address, kept so a bookmark or an open tab does not 404.
+route("/console/admin/ai-pricing", { title: "قیمت‌گذاری Claude", view: aiPricingPage, admin: true });
 route("/console/admin/tickets/:id", { title: "تیکت‌ها", view: adminTicketsPage, admin: true });
 
 setNotFound(() => {

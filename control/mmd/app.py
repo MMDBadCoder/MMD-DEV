@@ -25,6 +25,7 @@ from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import desc, func, or_, select
 from sqlalchemy.orm import Session, aliased
 
+from . import hermes
 from . import ports as portalloc
 from . import sshkeys
 from . import presets as presetlib
@@ -1100,7 +1101,12 @@ def _hermes_state(ws: Workspace) -> dict:
             "host": unames.hermes_host(ws.user.username, CONFIG.domain)
             if ws.user and ws.user.username else None,
             "machine_running": ws.state == WorkspaceState.ON,
-            "error": ws.hermes_error}
+            # A FLAG, not the text. The stored value is whatever OpenRouter or
+            # the provisioner said, in English, with HTTP status codes and JSON
+            # in it - useful to an operator, meaningless and alarming to a
+            # customer reading a Persian page. The interface writes the
+            # sentence; the raw text stays for the admin view.
+            "error": bool(ws.hermes_error)}
 
 
 @app.get("/api/workspace/ai")
@@ -2154,6 +2160,166 @@ def admin_metrics(minutes: int = 5, _: User = Depends(require_admin),
             "memory_gb": round(cap.schedulable_mem_gib, 2),
             "sample_seconds": SAMPLE_SECONDS,
             "workspaces": len(by_ws)}
+
+
+@app.get("/api/admin/metrics/per-user")
+def admin_metrics_per_user(minutes: int = 60, _: User = Depends(require_admin),
+                           db: Session = Depends(get_session)) -> dict:
+    """One CPU line and one memory line PER workspace.
+
+    The host-wide chart answers "is the machine in trouble". This answers "who
+    is causing it", which is the question that actually leads to an action -
+    with ten customers the aggregate says a core is busy and nothing about
+    which account to talk to.
+    """
+    minutes = max(1, min(minutes, max(METRIC_WINDOWS)))
+    since = svc.now() - timedelta(minutes=minutes)
+
+    rows = list(db.scalars(
+        select(UsageSample).where(UsageSample.ts >= since)
+        .order_by(UsageSample.workspace_id, UsageSample.ts)))
+
+    by_ws: dict[int, list[UsageSample]] = {}
+    for r in rows:
+        by_ws.setdefault(r.workspace_id, []).append(r)
+
+    names: dict[int, str] = {}
+    for ws in db.scalars(select(Workspace).where(Workspace.id.in_(by_ws.keys() or [0]))):
+        names[ws.id] = (ws.user.username if ws.user and ws.user.username
+                        else f"ws-{ws.idx}")
+
+    out = []
+    for ws_id, series in by_ws.items():
+        cpu, mem = [], []
+        for prev, cur in zip(series, series[1:]):
+            span = (cur.ts - prev.ts).total_seconds()
+            if span <= 0:
+                continue
+            ts = datetime.fromtimestamp(
+                int(cur.ts.timestamp() // SAMPLE_SECONDS) * SAMPLE_SECONDS, UTC).isoformat()
+            delta = cur.cpu_seconds_total - prev.cpu_seconds_total
+            # Negative means the counter reset when the machine restarted; a
+            # restart is not negative CPU use.
+            cpu.append({"ts": ts, "value": round(max(0.0, delta) / span, 3)})
+            mem.append({"ts": ts, "value": round(cur.mem_bytes / 1073741824, 3)})
+        if cpu:
+            out.append({"workspace_id": ws_id, "label": names.get(ws_id, str(ws_id)),
+                        "cpu": cpu, "memory": mem})
+
+    out.sort(key=lambda w: w["label"])
+    return {"minutes": minutes, "windows": list(METRIC_WINDOWS),
+            "sample_seconds": SAMPLE_SECONDS, "series": out}
+
+
+@app.get("/api/admin/users/{user_id}")
+def admin_user_detail(user_id: int, minutes: int = 10080,
+                      _: User = Depends(require_admin),
+                      db: Session = Depends(get_session)) -> dict:
+    """One customer: their balance over time, what they were charged, and what
+    was done to their account.
+
+    The balance series is reconstructed by walking the ledger BACKWARDS from the
+    balance held now, rather than by summing forwards from zero. The ledger is
+    the record of movements; the account row is the authority on the total. If
+    the two ever disagree, walking back means the chart ends at the number the
+    customer actually sees on their dashboard, and the discrepancy shows up as a
+    wrong starting point rather than as a chart that contradicts the header.
+    """
+    u = db.get(User, user_id)
+    if u is None:
+        fail(404, "no_such_user", "No such user.")
+
+    since = svc.now() - timedelta(minutes=max(60, min(minutes, 525600)))
+    txs = list(db.scalars(
+        select(CreditTransaction)
+        .where(CreditTransaction.user_id == user_id,
+               CreditTransaction.created_at >= since)
+        .order_by(CreditTransaction.created_at)))
+
+    balance = svc.balance_micro(db, user_id)
+    running = balance
+    points: list[dict] = []
+    for tx in reversed(txs):
+        points.append({"ts": tx.created_at.isoformat(), "value": running / MICRO})
+        running -= tx.amount_micro
+    points.append({"ts": since.isoformat(), "value": running / MICRO})
+    points.reverse()
+
+    by_kind: dict[str, int] = {}
+    for tx in txs:
+        k = tx.kind.value if hasattr(tx.kind, "value") else str(tx.kind)
+        by_kind[k] = by_kind.get(k, 0) + tx.amount_micro
+
+    audits = list(db.scalars(
+        select(AuditLog).where(AuditLog.actor_id == user_id)
+        .order_by(AuditLog.ts.desc()).limit(100)))
+    ws = u.workspace
+
+    return {
+        "user": {"id": u.id, "email": u.email, "username": u.username,
+                 "status": u.status.value if hasattr(u.status, "value") else str(u.status),
+                 "is_admin": u.is_admin, "created_at": u.created_at.isoformat()},
+        "balance": balance / MICRO,
+        "minutes": minutes,
+        "credit": points,
+        "by_kind": {k: v / MICRO for k, v in by_kind.items()},
+        "transactions": [{"ts": tx.created_at.isoformat(),
+                          "kind": tx.kind.value if hasattr(tx.kind, "value") else str(tx.kind),
+                          "amount": tx.amount_micro / MICRO,
+                          "detail": tx.detail or {}} for tx in reversed(txs)][:200],
+        "audits": [{"ts": a.ts.isoformat(), "action": a.action,
+                    "target": a.target} for a in audits],
+        "workspace": ({"id": ws.id, "idx": ws.idx,
+                       "state": ws.state.value if hasattr(ws.state, "value") else str(ws.state),
+                       "hermes_enabled": bool(ws.hermes_enabled),
+                       "hermes_ready": bool(ws.hermes_key_hash)} if ws else None),
+    }
+
+
+# --- Hermes configuration -------------------------------------------------
+@app.get("/api/admin/hermes")
+def admin_hermes_get(_: User = Depends(require_admin),
+                     db: Session = Depends(get_session)) -> dict:
+    usd_rate, discount = svc.ai_settings(db, hermes.SERVICE)
+    enabled = db.scalar(select(func.count()).select_from(Workspace)
+                        .where(Workspace.hermes_enabled.is_(True))) or 0
+    ready = db.scalar(select(func.count()).select_from(Workspace)
+                      .where(Workspace.hermes_key_hash.isnot(None))) or 0
+    return {"default_model": hermes.default_model(db),
+            "max_output_usd": hermes.max_output_usd(db),
+            "usd_to_toman": usd_rate,
+            "discount_percent": discount,
+            "workspaces_enabled": int(enabled),
+            "workspaces_ready": int(ready),
+            # Whether the worker can reach OpenRouter at all. The API cannot
+            # check directly - it does not hold the management key, by design -
+            # so it reports whether the workspace has ever been discovered.
+            "configured": bool(hermes._get(db, hermes.SETTING_WORKSPACE_ID))}
+
+
+class HermesConfig(BaseModel):
+    default_model: str | None = None
+    max_output_usd: float | None = None
+    discount_percent: float | None = None
+    usd_to_toman: float | None = None
+
+
+@app.put("/api/admin/hermes")
+def admin_hermes_put(body: HermesConfig, admin: User = Depends(require_admin),
+                     db: Session = Depends(get_session)) -> dict:
+    if body.default_model is not None:
+        hermes._set(db, hermes.SETTING_DEFAULT_MODEL, body.default_model.strip())
+    if body.max_output_usd is not None:
+        hermes._set(db, hermes.SETTING_MAX_OUTPUT_USD,
+                    str(max(0.0, float(body.max_output_usd))))
+    if body.discount_percent is not None:
+        hermes._set(db, aipricing.discount_key(hermes.SERVICE),
+                    str(max(0.0, min(100.0, float(body.discount_percent)))))
+    if body.usd_to_toman is not None:
+        hermes._set(db, "usd_to_toman", str(max(0.0, float(body.usd_to_toman))))
+    db.commit()
+    svc.audit(db, admin.id, "admin_hermes_config", None)
+    return admin_hermes_get(admin, db)
 
 
 # --- AI pricing -----------------------------------------------------------

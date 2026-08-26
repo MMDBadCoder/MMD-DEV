@@ -9,6 +9,7 @@ import { get, post, put, del } from "../api.js";
 import { $, $$, icon, esc, fmtMoney, fmtFa, note, toast, confirmDialog } from "../ui.js";
 import { t, CURRENCY } from "../i18n.js";
 import { render } from "../main.js";
+import { adminHead } from "./adminnav.js";
 
 const COLS = [
   ["input_usd", "adm.ai.col.input"],
@@ -34,11 +35,7 @@ export async function aiPricingPage() {
         <button class="btn sm danger ghost" data-del="${p.id}">${icon.trash}</button>
       </td></tr>`).join("");
 
-  render(`<div class="page-head">
-      <a href="/console/admin" class="small">${t("adm.back")}</a>
-      <h1 style="margin:8px 0 0">${t("adm.ai.title")}</h1>
-      <p class="muted small" style="margin:0">${t("adm.ai.sub")}</p>
-    </div>
+  render(`${adminHead("claude", t("adm.ai.title"), t("adm.ai.sub"))}
 
     ${d.unpriced_models.length
       ? note("warn", `${t("adm.ai.unpriced", d.unpriced_models.length)}

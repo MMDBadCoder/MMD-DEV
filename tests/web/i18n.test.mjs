@@ -113,6 +113,8 @@ const LATIN_ALLOWED = new Set([
   "ssh.keys.placeholder",    // a literal example of an SSH key
   "ai.tab.claude",           // "Claude Code" is the product's own name
   "ai.tab.hermes",           // likewise Hermes
+  "adm.nav.claude",          // the admin nav names the two services
+  "adm.nav.hermes",
 ]);
 
 test("customer-facing labels are in Persian", () => {
