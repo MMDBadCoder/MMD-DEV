@@ -27,6 +27,14 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False
 SCHEMA_PATCHES: tuple[str, ...] = (
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS username VARCHAR(32)",
     "CREATE UNIQUE INDEX IF NOT EXISTS ix_users_username ON users (username)",
+    "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS hermes_enabled BOOLEAN DEFAULT FALSE",
+    "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS hermes_installed BOOLEAN DEFAULT FALSE",
+    "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS hermes_key_hash VARCHAR(128)",
+    "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS hermes_key VARCHAR(256)",
+    "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS hermes_usage_usd DOUBLE PRECISION DEFAULT 0",
+    "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS hermes_dash_user VARCHAR(64)",
+    "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS hermes_dash_password VARCHAR(64)",
+    "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS hermes_error TEXT",
 )
 
 

@@ -112,6 +112,7 @@ const LATIN_ALLOWED = new Set([
   "ssh.keygen",              // a literal command the customer types
   "ssh.keys.placeholder",    // a literal example of an SSH key
   "ai.tab.claude",           // "Claude Code" is the product's own name
+  "ai.tab.hermes",           // likewise Hermes
 ]);
 
 test("customer-facing labels are in Persian", () => {
@@ -128,7 +129,7 @@ test("customer-facing labels are in Persian", () => {
       !["Ubuntu", "Docker", "Claude", "Code", "Codex", "systemd", "apt", "root",
         "Vazirmatn", "MMD", "DEV", "TCP", "UDP", "SSH", "vCPU", "API", "http",
         "https", "port", "Remote", "Desktop", "Connection", "PowerShell",
-        "Windows"].includes(w));
+        "Windows", "Hermes", "OpenRouter"].includes(w));
     if (!persian && v.length > 3) offenders.push(`${k} = ${v}`);
     else if (latinWords.length > 2) offenders.push(`${k} has untranslated words: ${latinWords}`);
   }

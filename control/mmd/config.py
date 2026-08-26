@@ -2,11 +2,38 @@
 from __future__ import annotations
 
 import os
+import pathlib
 from dataclasses import dataclass, field
 
 
 def _env(key: str, default: str) -> str:
     return os.environ.get(key, default)
+
+
+def _secret(name: str, env_key: str) -> str:
+    """A secret that must not be readable by every service on the host.
+
+    Read from systemd's credential directory first, falling back to the
+    environment for development.
+
+    The distinction matters here. mmd-api and mmd-worker both run as `mmd`, so
+    file ownership cannot separate them - a mode-0400 file readable by `mmd` is
+    readable by BOTH. systemd's LoadCredential does what file modes cannot: it
+    places the secret in a per-unit tmpfs inside that unit's own mount
+    namespace, so a process in another unit cannot see it even at the same uid.
+
+    That is exactly what the OpenRouter management key needs. It can mint keys
+    that spend real money, and mmd-api is the process facing the internet.
+    Only mmd-worker declares the credential, so an RCE in the web app reaches
+    an environment where the key is not present at all.
+    """
+    directory = os.environ.get("CREDENTIALS_DIRECTORY")
+    if directory:
+        try:
+            return (pathlib.Path(directory) / name).read_text().strip()
+        except OSError:
+            pass
+    return os.environ.get(env_key, "").strip()
 
 
 def _detect_public_ip() -> str:
@@ -63,6 +90,13 @@ class Config:
     # still hands out something that works.
     endpoint_host: str = field(default_factory=lambda: _env("MMD_ENDPOINT_HOST", "")
                                or _detect_public_ip())
+
+    # The OpenRouter *management* key - the one that mints per-workspace keys.
+    # Never in the repository, never in api.env, never sent to a workspace.
+    openrouter_key: str = field(default_factory=lambda: _secret(
+        "openrouter", "MMD_OPENROUTER_KEY"))
+    # The apex the Hermes dashboards hang off: hermes.<username>.<domain>.
+    domain: str = field(default_factory=lambda: _env("MMD_DOMAIN", "mmd-ai.ir"))
 
     archive_retention_days: int = field(default_factory=lambda: int(
         _env("MMD_ARCHIVE_RETENTION_DAYS", "30")))

@@ -24,12 +24,14 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 
+from . import hermes
 from . import ports as portalloc
 from . import service as svc
 from .config import CONFIG
 from .db import SessionLocal, init_db
 from .incus.client import IncusClient, IncusConfig, IncusError
 from .incus.metrics import MetricsClient
+from .openrouter import OpenRouter, OpenRouterError
 from .billing.pricing import MICRO
 from .models import (ExposedPort, PortKind, UsageSample, Workspace,
                      WorkspaceState)
@@ -244,6 +246,104 @@ def meter_ai_once() -> None:
                             "until one is", ws.incus_project, ", ".join(out["unpriced"]))
 
 
+HERMES_EVERY = 15          # 15 x 20s = 5 minutes, same cadence as Claude metering
+POLICY_EVERY = 90          # 90 x 20s = 30 minutes; the catalogue changes slowly
+
+
+def hermes_once(sync_policy: bool = False, meter_usage: bool = True) -> None:
+    """Provision, cap, meter and revoke the OpenRouter side.
+
+    Reconciliation rather than event handling, for the same reason power state
+    is: the customer's toggle records intent in the database, and this closes
+    the gap against OpenRouter. A failed mint is retried next pass instead of
+    leaving a workspace permanently half-enabled because one HTTP call lost a
+    race with a restart.
+
+    Runs ONLY here. mmd-api has no access to the management key.
+    """
+    if not CONFIG.openrouter_key:
+        return
+    with SessionLocal() as db:
+        rows = db.execute(select(Workspace).where(
+            (Workspace.hermes_enabled.is_(True)) |
+            (Workspace.hermes_key_hash.isnot(None)))).scalars().all()
+        if not meter_usage:
+            # Provisioning-only pass: keep just the workspaces with outstanding
+            # work. Enabling is a click, and waiting five minutes for a key to
+            # appear reads as broken - but polling OpenRouter once per workspace
+            # every twenty seconds to discover there is nothing to do would be
+            # rude to the supplier and slow. So the fast pass touches the
+            # network ONLY when a toggle is actually outstanding.
+            rows = [w for w in rows
+                    if (w.hermes_enabled and not w.hermes_key_hash)
+                    or (not w.hermes_enabled and w.hermes_key_hash)]
+        if not rows:
+            return
+        try:
+            with OpenRouter(CONFIG.openrouter_key) as client:
+                platform = hermes.ensure_platform(db, client)
+                if sync_policy:
+                    try:
+                        n = hermes.sync_policy(db, client, platform)
+                        log.info("hermes policy: %s models allowed", n)
+                    except OpenRouterError as e:
+                        log.warning("hermes policy sync failed: %s", e)
+
+                usd_rate, discount = svc.ai_settings(db, hermes.SERVICE)
+                for ws in rows:
+                    try:
+                        _hermes_workspace(db, ws, client, platform, usd_rate,
+                                          discount, meter_usage)
+                    except OpenRouterError as e:
+                        # One customer's failure must not stop the others being
+                        # metered - unbilled spend is the expensive outcome.
+                        ws.hermes_error = str(e)[:500]
+                        db.commit()
+                        log.warning("hermes ws %s: %s", ws.id, e)
+        except OpenRouterError as e:
+            log.warning("hermes unavailable: %s", e)
+
+
+def _hermes_workspace(db, ws: Workspace, client: OpenRouter,
+                      platform, usd_rate: float, discount: float,
+                      meter_usage: bool = True) -> None:
+    if not ws.hermes_enabled:
+        if ws.hermes_key_hash:
+            # Meter the final spend BEFORE revoking. Deleting the key first
+            # would destroy the only record of what was spent since the last
+            # pass, and that spend has already left the operator's account.
+            try:
+                hermes.meter(db, ws, client.get_key(ws.hermes_key_hash), usd_rate, discount)
+            except OpenRouterError as e:
+                log.warning("hermes final meter ws %s: %s", ws.id, e)
+            hermes.revoke_key(db, ws, client)
+            db.commit()
+        return
+
+    balance = svc.balance_micro(db, ws.user_id)
+    cap = hermes.affordable_usd(balance, usd_rate, discount)
+
+    if hermes.ensure_key(db, ws, client, platform, cap):
+        db.commit()
+        return
+
+    if not meter_usage:
+        return
+    info = client.get_key(ws.hermes_key_hash)
+    hermes.meter(db, ws, info, usd_rate, discount)
+
+    # Re-read the cap against the balance AFTER metering, so a customer who has
+    # just spent down is capped at what is actually left.
+    cap = hermes.affordable_usd(svc.balance_micro(db, ws.user_id), usd_rate, discount)
+    if info.limit_usd is None or abs(float(info.limit_usd) - cap) > 0.01:
+        # The cap is the hard stop: OpenRouter refuses the request when the
+        # customer runs out, instead of us noticing minutes later and billing
+        # for spend that has already happened.
+        client.update_key(ws.hermes_key_hash, limit_usd=cap)
+    ws.hermes_error = None
+    db.commit()
+
+
 def prune_samples_once() -> None:
     cutoff = svc.now() - timedelta(days=SAMPLE_RETENTION_DAYS)
     with SessionLocal() as db:
@@ -371,6 +471,12 @@ async def main() -> None:
             await meter_once()
             if tick % AI_EVERY == 0:
                 meter_ai_once()
+            # Provisioning is checked every tick so a toggle takes seconds;
+            # metering stays on the five-minute cadence money moves at.
+            if tick % HERMES_EVERY == 0:
+                hermes_once(sync_policy=(tick % POLICY_EVERY == 0))
+            else:
+                hermes_once(meter_usage=False)
             if tick % SETTLE_EVERY == 0:
                 await settle_once()
                 await lifecycle_once()

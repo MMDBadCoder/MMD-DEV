@@ -46,6 +46,7 @@ export const icon = {
   plus: P('<path d="M12 5v14M5 12h14"/>'),
   trash: P('<path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/>'),
   copy: P('<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>'),
+  eye: P('<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/>'),
   expand: P('<path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>'),
   shrink: P('<path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7"/>'),
   check: P('<path d="M20 6L9 17l-5-5"/>'),
@@ -145,5 +146,56 @@ export function confirmDialog(title, body, confirmLabel = "تأیید") {
     wrap.querySelector("[data-yes]").onclick = () => done(true);
     wrap.onclick = (e) => { if (e.target === wrap) done(false); };
     document.body.append(wrap);
+  });
+}
+
+
+/* A credential the customer is meant to have: shown on demand, copied in one
+   click.
+
+   Hidden by default rather than printed, because these pages get screen-shared
+   and screenshotted when someone is asking for help - the moment a support
+   conversation starts is exactly when a secret is most likely to be captured.
+   Hiding it is not access control (the value is in the DOM either way); it
+   stops the accidental disclosure, which is the realistic threat.
+
+   The value is written with textContent, never interpolated into HTML. */
+export function secretRow({ label, value, hint = "", masked = true }) {
+  const id = "sec-" + Math.random().toString(36).slice(2, 9);
+  return `<div class="stat" style="align-items:stretch">
+    <div class="k">${esc(label)}</div>
+    <div class="between" style="gap:8px;margin-top:4px">
+      <code class="ltr mono secret-v" id="${id}" data-v="${esc(value ?? "")}"
+        data-masked="${masked ? "1" : "0"}"
+        style="flex:1;overflow:auto;white-space:nowrap;font-size:13px"
+        >${masked ? "••••••••••••" : esc(value ?? "")}</code>
+      ${masked ? `<button class="btn ghost small secret-eye" data-for="${id}"
+        title="${esc(label)}">${icon.eye || "👁"}</button>` : ""}
+      <button class="btn ghost small secret-copy" data-for="${id}">${icon.copy || "⧉"}</button>
+    </div>
+    ${hint ? `<p class="muted small" style="margin:6px 0 0">${esc(hint)}</p>` : ""}
+  </div>`;
+}
+
+/* Wire every secretRow under `root`. Call after render. */
+export function wireSecrets(root = document, copiedLabel = "کپی شد") {
+  $$(".secret-eye", root).forEach((b) => {
+    b.onclick = () => {
+      const el = $("#" + b.dataset.for, root);
+      if (!el) return;
+      const shown = el.dataset.masked === "0";
+      el.dataset.masked = shown ? "1" : "0";
+      el.textContent = shown ? "••••••••••••" : (el.dataset.v || "");
+    };
+  });
+  $$(".secret-copy", root).forEach((b) => {
+    b.onclick = async () => {
+      const el = $("#" + b.dataset.for, root);
+      if (!el) return;
+      try {
+        await navigator.clipboard.writeText(el.dataset.v || "");
+        toast(copiedLabel, "ok");
+      } catch { toast(copiedLabel, "bad"); }
+    };
   });
 }

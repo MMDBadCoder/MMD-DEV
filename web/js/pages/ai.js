@@ -9,15 +9,15 @@
  * a file out of our machine into yours" deserves to be legible. */
 import { get, post } from "../api.js";
 import { $, $$, icon, esc, note, toast, stamp, confirmDialog,
-         fmtMoney, fmtFa } from "../ui.js";
+         fmtMoney, fmtFa, secretRow, wireSecrets } from "../ui.js";
 import { t, CURRENCY } from "../i18n.js";
 import { render } from "../main.js";
 
-const TABS = [{ key: "claude", ic: "sparkle" }];
+const TABS = [{ key: "claude", ic: "sparkle" }, { key: "hermes", ic: "shield" }];
 
 function tabBar(active, d) {
   return `<div class="tabs2">${TABS.map((tb) => {
-    const on = tb.key === "claude" ? d.claude.linked : false;
+    const on = tb.key === "claude" ? d.claude.linked : d.hermes.ready;
     return `<a href="/console/ai/${tb.key}"
       class="${tb.key === active ? "active" : ""}">${icon[tb.ic]}
       ${t("ai.tab." + tb.key)}
@@ -45,7 +45,94 @@ export async function aiPage(params) {
     ${tabBar(tab, d)}
     ${d.claude.machine_running ? "" : note("warn", t("ai.machineoff"))}`;
 
-  return renderClaude(head, d.claude, usage);
+  return tab === "hermes"
+    ? renderHermes(head, d.hermes)
+    : renderClaude(head, d.claude, usage);
+}
+
+/* Hermes.
+ *
+ * Unlike Claude, this is not a shared platform sign-in: each workspace gets its
+ * own upstream key, capped at what the customer's credit covers, and spend is
+ * read back from the supplier's own metering rather than from the machine - so
+ * it cannot be under-reported from inside a container the customer has root on.
+ *
+ * The key is shown deliberately. It spends only this customer's capped credit
+ * and is revoked in one call, and the agent has to read it from their own
+ * machine anyway, so hiding it from its owner would protect nothing. */
+function renderHermes(head, h) {
+  const waiting = h.enabled && !h.ready;
+
+  render(`${head}
+    <div class="card">
+      <div class="between" style="margin-bottom:14px">
+        <div><h2>Hermes</h2>
+          <p class="muted small" style="margin:4px 0 0">${t("ai.hermes.desc")}</p></div>
+        <span class="pill"><span class="dot ${h.ready ? "on" : ""}"></span>${
+          h.ready ? t("ai.state.ready")
+                  : waiting ? t("ai.hermes.preparing") : t("ai.state.absent")}</span>
+      </div>
+
+      ${h.error ? note("bad", esc(h.error)) : ""}
+      ${waiting ? note("info", t("ai.hermes.preparing.body")) : ""}
+
+      ${h.ready ? `
+        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(260px,1fr))">
+          ${secretRow({ label: t("ai.hermes.key"), value: h.key,
+                        hint: t("ai.hermes.key.hint") })}
+          ${secretRow({ label: t("ai.hermes.dashuser"), value: h.dashboard_user,
+                        masked: false })}
+          ${secretRow({ label: t("ai.hermes.dashpass"), value: h.dashboard_password })}
+          ${h.host ? secretRow({ label: t("ai.hermes.host"),
+                                 value: "https://" + h.host, masked: false,
+                                 hint: t("ai.hermes.host.hint") }) : ""}
+        </div>` : ""}
+
+      <div class="btn-row" style="margin-top:16px">
+        <button class="btn ${h.enabled ? "danger ghost" : "primary"}" id="hermes-go">
+          ${h.enabled ? icon.trash : icon.shield}
+          ${h.enabled ? t("ai.hermes.disable") : t("ai.hermes.enable")}</button>
+      </div>
+      <div id="hermes-msg"></div>
+    </div>
+
+    <div class="card">
+      <h2>${t("ai.hermes.how.title")}</h2>
+      <p class="muted small">${t("ai.hermes.how.body")}</p>
+      <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(260px,1fr));margin-top:12px">
+        <div class="copybox ok">
+          <div class="copybox-h">${icon.check}${t("ai.hermes.yours")}</div>
+          <ul>${["ai.hermes.yours.1", "ai.hermes.yours.2", "ai.hermes.yours.3"]
+                .map((k) => `<li>${t(k)}</li>`).join("")}</ul>
+        </div>
+        <div class="copybox bad">
+          <div class="copybox-h">${icon.minus}${t("ai.hermes.limits")}</div>
+          <ul>${["ai.hermes.limits.1", "ai.hermes.limits.2"]
+                .map((k) => `<li>${t(k)}</li>`).join("")}</ul>
+        </div>
+      </div>
+    </div>`);
+
+  wireSecrets(document, t("conn.copied"));
+
+  $("#hermes-go").onclick = async () => {
+    const on = h.enabled;
+    if (on && !await confirmDialog(t("ai.hermes.disable"),
+                                   t("ai.hermes.disable.confirm"),
+                                   t("ai.hermes.disable"))) return;
+    const b = $("#hermes-go");
+    b.disabled = true;
+    b.innerHTML = `<span class="spinner"></span>${t("conn.working")}`;
+    try {
+      await post("/api/workspace/ai/hermes", { action: on ? "disable" : "enable" });
+      toast(t("ai.done"), "ok");
+    } catch (err) { $("#hermes-msg").innerHTML = note("bad", esc(err.message)); }
+    aiPage({ tab: "hermes" });
+  };
+
+  // The key is minted by the worker, not by this request, so the page polls
+  // itself into the ready state instead of making the customer reload.
+  if (waiting) setTimeout(() => aiPage({ tab: "hermes" }), 5000);
 }
 
 /* What the tokens have actually cost. Read from the platform's own records, not

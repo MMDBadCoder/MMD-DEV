@@ -12,6 +12,14 @@ Group=mmd
 WorkingDirectory=/opt/mmd/control
 Environment=PYTHONUNBUFFERED=1
 EnvironmentFile=/etc/mmd/api.env
+# The OpenRouter management key, which can mint keys that spend real money.
+#
+# LoadCredential rather than an EnvironmentFile because mmd-api runs as the SAME
+# user: any file mode that lets the worker read it lets the web app read it too.
+# systemd puts this in a per-unit tmpfs inside this unit's mount namespace, so
+# the internet-facing process cannot see it at all - not merely "should not".
+# Missing file = Hermes stays unprovisioned; it is not fatal to billing.
+LoadCredential=openrouter:/etc/mmd/openrouter.key
 ExecStart=/opt/mmd/venv/bin/python -m mmd.worker
 Restart=on-failure
 RestartSec=5

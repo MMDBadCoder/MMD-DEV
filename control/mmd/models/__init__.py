@@ -64,7 +64,13 @@ class TxKind(str, enum.Enum):
     GRANT = "grant"                    # admin adds credit
     CHARGE_HOUR = "charge_hour"        # hourly settlement, in arrears
     CHARGE_PARTIAL = "charge_partial"  # pro-rata on power-off mid-hour
-    CHARGE_AI = "charge_ai"            # AI tokens, pay-as-you-go
+    CHARGE_AI = "charge_ai"            # Claude tokens, pay-as-you-go
+    # Hermes/OpenRouter spend. A SEPARATE kind, not a flag on CHARGE_AI, because
+    # the ledger's idempotency key is (workspace, period, kind): sharing one kind
+    # would make the second service's charge in a five-minute bucket collide
+    # with the first and be silently discarded as a duplicate. The customer
+    # would simply never be billed for it, with nothing in the logs.
+    CHARGE_HERMES = "charge_hermes"
     ADJUSTMENT = "adjustment"
 
 
@@ -132,6 +138,29 @@ class Workspace(Base):
     ssh_keys: Mapped[str | None] = mapped_column(Text)     # authorized_keys body
     rdp_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     rdp_installed: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    # --- Hermes (OpenRouter) ----------------------------------------------
+    # The customer asks for it here; the worker provisions it. mmd-api never
+    # holds the OpenRouter management key, so enabling is recorded as intent
+    # and reconciled, the same way power state is.
+    hermes_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    hermes_installed: Mapped[bool] = mapped_column(Boolean, default=False)
+    # The key's identity upstream, used to read usage, move the cap and revoke.
+    hermes_key_hash: Mapped[str | None] = mapped_column(String(128))
+    # The key itself. Deliberately stored and deliberately shown to its owner:
+    # the agent has to read it from a machine they have root on, so pretending
+    # it is secret from them would be theatre. It spends only their capped
+    # credit and is revoked in one call. The MANAGEMENT key is the secret, and
+    # that never leaves the host.
+    hermes_key: Mapped[str | None] = mapped_column(String(256))
+    # High-water mark of OpenRouter's own metered spend, in USD. Billing charges
+    # the difference, so it is idempotent and survives the workspace being
+    # destroyed - the figure never lived in the machine.
+    hermes_usage_usd: Mapped[float] = mapped_column(Float, default=0.0)
+    # Dashboard credentials, generated at provision time and shown on request.
+    hermes_dash_user: Mapped[str | None] = mapped_column(String(64))
+    hermes_dash_password: Mapped[str | None] = mapped_column(String(64))
+    hermes_error: Mapped[str | None] = mapped_column(Text)
 
     user: Mapped[User] = relationship(back_populates="workspace")
 

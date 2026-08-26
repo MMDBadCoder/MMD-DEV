@@ -108,11 +108,20 @@ class OpenRouter:
             raise OpenRouterError(f"{method} {path}: non-JSON response") from e
 
     # --- keys ------------------------------------------------------------
-    def create_key(self, name: str, limit_usd: float | None) -> tuple[str, KeyInfo]:
-        """Mint a key. Returns (secret, info); the secret is shown ONCE."""
+    def create_key(self, name: str, limit_usd: float | None,
+                   workspace_id: str | None = None) -> tuple[str, KeyInfo]:
+        """Mint a key. Returns (secret, info); the secret is shown ONCE.
+
+        `workspace_id` is what subjects the key to a model policy: the guardrail
+        governs a workspace, and a key inherits it by being minted there. A key
+        created without one lands in the account's Default Workspace and is
+        UNRESTRICTED - so this is a correctness argument, not a filing detail.
+        """
         body: dict = {"name": name}
         if limit_usd is not None:
             body["limit"] = round(max(0.0, limit_usd), 4)
+        if workspace_id:
+            body["workspace_id"] = workspace_id
         data = self._call("POST", "/keys", json=body)
         secret = data.get("key") or (data.get("data") or {}).get("key")
         if not secret:
@@ -150,9 +159,40 @@ class OpenRouter:
             else _num(d.get("limit_remaining")),
         )
 
+    # --- workspaces ------------------------------------------------------
+    # Model policy lives on a workspace's default guardrail, so these are the
+    # mechanism by which "users must not pick expensive models" is enforced.
+    def workspaces(self) -> list[dict]:
+        return list((self._call("GET", "/workspaces") or {}).get("data") or [])
+
+    def create_workspace(self, name: str, slug: str) -> dict:
+        """Create a workspace. It comes with its own default guardrail, whose id
+        is returned on the workspace - there is no way to point an existing
+        workspace at a different guardrail, so that is the one to write policy
+        onto."""
+        data = self._call("POST", "/workspaces", json={"name": name, "slug": slug})
+        return dict(data.get("data") or data)
+
+    # --- guardrails ------------------------------------------------------
+    def update_guardrail(self, guardrail_id: str, *,
+                         allowed_models: list[str] | None = None,
+                         limit_usd: float | None = None) -> dict:
+        body: dict = {}
+        if allowed_models is not None:
+            body["allowed_models"] = allowed_models
+        if limit_usd is not None:
+            body["limit_usd"] = limit_usd
+        if not body:
+            return {}
+        data = self._call("PATCH", f"/guardrails/{guardrail_id}", json=body)
+        return dict(data.get("data") or data)
+
     # --- models ----------------------------------------------------------
     def models(self) -> list[dict]:
         return list((self._call("GET", "/models") or {}).get("data") or [])
+
+    def build_allowlist_from_catalogue(self, *, max_output_usd: float) -> list[str]:
+        return build_allowlist(self.models(), max_output_usd=max_output_usd)
 
 
 def price_per_mtok(model: dict) -> tuple[float, float]:
@@ -186,6 +226,15 @@ def build_allowlist(models: list[dict], *, max_output_usd: float,
     for m in models:
         mid = str(m.get("id") or "")
         if not mid or any(d in mid for d in denies if d):
+            continue
+        # The catalogue carries floating aliases - "~anthropic/claude-opus-latest"
+        # and friends - which a guardrail REFUSES, failing the whole PATCH with
+        # a 400 and leaving the previous allowlist in force. Measured: including
+        # them silently left a stale policy in place, which is the worst outcome
+        # (it looks configured and is not). They are excluded on their own merits
+        # too: an alias that repoints to a costlier model would walk straight
+        # through a price ceiling checked at the moment it was written.
+        if mid.startswith("~"):
             continue
         pin, pout = price_per_mtok(m)
         if pin <= 0 and pout <= 0:

@@ -1079,11 +1079,62 @@ def _ai_state(ws: Workspace) -> dict:
             "expires_at": resp.get("expires_at")}
 
 
+def _hermes_state(ws: Workspace) -> dict:
+    """What the customer may see about their Hermes service.
+
+    The API deliberately cannot mint or revoke keys - the OpenRouter management
+    key is loaded only by mmd-worker. So this reports state and nothing else,
+    and `enabled` without `key` means "the worker has not got to it yet" rather
+    than an error.
+
+    The key itself IS returned. It spends only this customer's capped credit,
+    it is revoked in one call, and the agent reads it from a machine they have
+    root on - so withholding it from its owner would protect nothing while
+    making the product harder to use.
+    """
+    return {"enabled": bool(ws.hermes_enabled),
+            "ready": bool(ws.hermes_key_hash),
+            "key": ws.hermes_key,
+            "dashboard_user": ws.hermes_dash_user,
+            "dashboard_password": ws.hermes_dash_password,
+            "host": unames.hermes_host(ws.user.username, CONFIG.domain)
+            if ws.user and ws.user.username else None,
+            "machine_running": ws.state == WorkspaceState.ON,
+            "error": ws.hermes_error}
+
+
 @app.get("/api/workspace/ai")
 def ai_status(user: User = Depends(current_user),
               db: Session = Depends(get_session)) -> dict:
     ws = my_workspace(db, user)
-    return {"claude": _ai_state(ws)}
+    return {"claude": _ai_state(ws), "hermes": _hermes_state(ws)}
+
+
+@app.post("/api/workspace/ai/hermes")
+def ai_hermes(body: AiAction, user: User = Depends(current_user),
+              db: Session = Depends(get_session)) -> dict:
+    """Record the customer's intent. The worker reconciles it.
+
+    Enabling does not mint the key here, because minting requires the
+    management key and this process faces the internet. The customer sees
+    "preparing" for a few seconds instead - which is also what makes a failed
+    mint self-healing rather than a dead toggle.
+    """
+    ws = my_workspace(db, user)
+    if body.action not in ("enable", "disable"):
+        fail(400, "bad_action", "Unknown action.")
+    if not user.username:
+        fail(409, "no_username", "This account has no username yet.")
+
+    ws.hermes_enabled = (body.action == "enable")
+    if not ws.hermes_enabled:
+        # Cleared here so the interface stops showing a secret the moment the
+        # customer switches it off, rather than until the worker catches up.
+        ws.hermes_key = None
+    ws.hermes_error = None
+    db.commit()
+    svc.audit(db, user.id, f"ai_hermes_{body.action}", ws.incus_project)
+    return {"ok": True, "hermes": _hermes_state(ws)}
 
 
 @app.post("/api/workspace/ai/claude")
