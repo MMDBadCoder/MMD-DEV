@@ -26,6 +26,7 @@ import logging
 import os
 import pwd
 import re
+import shlex
 import socket
 import struct
 import subprocess
@@ -50,9 +51,40 @@ MAX_MEM_MIB = 8192
 MAX_ROOT_GIB = 40
 MAX_DOCKER_GIB = 40
 
+HERMES_UNIT = """[Unit]
+Description=Hermes dashboard
+After=network-online.target
+
+[Service]
+Type=simple
+User=dev
+# --host 0.0.0.0 --insecure, and both halves need justifying.
+#
+# Hermes validates the Host header against the address it bound to, as a
+# DNS-rebinding defence (GHSA-ppp5-vxwm-4cf7). Behind a reverse proxy the header
+# is the customer's public name, so a bind to the workspace address rejects
+# every proxied request with HTTP 400 - measured, not predicted. Binding
+# 0.0.0.0 is the documented mode that accepts any Host.
+#
+# --insecure is required to bind non-loopback, and since the June 2026 hardening
+# it NO LONGER disables the auth gate: Hermes still serves its sign-in page and
+# still checks the password hash configured below. It relaxes the bind
+# restriction only, which is precisely what is needed here.
+#
+# 0.0.0.0 is not an exposure: nothing DNATs port 9119, the isolation table drops
+# bridge-to-bridge traffic, and the host's proxy is the only route in.
+ExecStart=/home/dev/.local/bin/hermes dashboard --host 0.0.0.0 --port 9119 --insecure
+Restart=on-failure
+RestartSec=5
+WorkingDirectory=/home/dev
+
+[Install]
+WantedBy=multi-user.target
+"""
+
 VERBS = {"provision", "archive", "restore", "destroy",
          "expose_port", "unexpose_port", "install_packages",
-         "service_ssh", "service_rdp",
+         "service_ssh", "service_rdp", "service_hermes",
          "fs_list", "fs_pull", "fs_push", "fs_mkdir", "fs_delete",
          "fs_archive", "apt_repair", "ai_claude", "ai_usage", "reset", "ping"}
 
@@ -750,6 +782,121 @@ def handle(req: dict) -> dict:
                         "ss -tln | grep -q ':22 ' && echo LISTENING"],
                        timeout=180, stdin_text=SSHD_DROPIN)
         return {"ok": ok and "LISTENING" in out, "output": out[-600:]}
+
+    if verb == "service_hermes":
+        action = req.get("action")
+        if action not in ("enable", "disable"):
+            return {"ok": False, "error": "action must be enable or disable"}
+
+        if action == "disable":
+            ok, out = _run(["incus", "exec", "ws", "--project", project, "--",
+                            "bash", "-lc",
+                            "systemctl disable --now hermes-dashboard >/dev/null 2>&1; "
+                            "systemctl reset-failed hermes-dashboard >/dev/null 2>&1; "
+                            # The key is what actually costs money, so removing
+                            # it matters more than stopping the listener.
+                            "rm -f /home/dev/.hermes/.env; "
+                            "sleep 1; "
+                            "ss -tln | grep -c ':9119 ' | sed 's/^/listeners=/'"],
+                           timeout=120)
+            return {"ok": "listeners=0" in (out or ""), "output": (out or "")[-300:]}
+
+        key = req.get("api_key") or ""
+        model = req.get("model") or ""
+        ip = req.get("ip") or ""
+        dash_user = req.get("dash_user") or ""
+        dash_password = req.get("dash_password") or ""
+        if not key or not ip:
+            return {"ok": False, "error": "api_key and ip are required"}
+        if not dash_user or not dash_password:
+            return {"ok": False, "error": "dashboard credentials are required"}
+
+        installed = False
+        if req.get("install"):
+            # uv, not pip: the image already carries it, and installing a tool
+            # into the system python of a machine the customer also uses is how
+            # an unrelated `pip install` later breaks their agent.
+            ok, out = _run(["incus", "exec", "ws", "--project", project, "--",
+                            "bash", "-lc",
+                            "su - dev -c 'uv tool install --force "
+                            "\"hermes-agent[web,cli]\" 2>&1 | tail -5'"],
+                           timeout=1800)
+            if not ok:
+                return {"ok": False, "error": "install failed", "output": (out or "")[-600:]}
+            installed = True
+
+        # Hermes keeps provider keys in its own secrets file and everything else
+        # in config.yaml, so both go where it already looks rather than into an
+        # environment this build may or may not read.
+        #
+        # `cat >`, not `install /dev/stdin`: incus exec hands the process a pipe
+        # whose /dev/stdin cannot be opened by path, so `install` fails with a
+        # permission error while redirecting the inherited descriptor works.
+        # Same pattern as the sshd drop-in above.
+        rc, out, err = _run_split(["incus", "exec", "ws", "--project", project, "--",
+                                   "bash", "-lc",
+                                   "install -d -m 0700 -o dev -g dev /home/dev/.hermes && "
+                                   "umask 077 && cat > /home/dev/.hermes/.env && "
+                                   "chown dev:dev /home/dev/.hermes/.env && "
+                                   "chmod 0600 /home/dev/.hermes/.env"],
+                                  timeout=60, stdin_text=f"OPENROUTER_API_KEY={key}\n")
+        if rc != 0:
+            return {"ok": False, "error": "could not write key",
+                    "output": (out + err)[-300:]}
+
+        # The dashboard REFUSES to bind a non-loopback address without an auth
+        # provider - there is no unauthenticated public-bind option, and
+        # --insecure does not grant one. So its own basic auth is configured
+        # with the same credentials the reverse proxy checks: the browser sends
+        # one Authorization header, nginx validates it, forwards it, and Hermes
+        # validates it again. One prompt, two independent gates.
+        hash_cmd = (
+            "su - dev -c '"
+            "~/.local/share/uv/tools/hermes-agent/bin/python -c \""
+            "import sys;"
+            "from plugins.dashboard_auth.basic import hash_password;"
+            "print(hash_password(sys.stdin.read().strip()))\"'")
+        rc, out, err = _run_split(["incus", "exec", "ws", "--project", project, "--",
+                                   "bash", "-lc", hash_cmd],
+                                  timeout=120, stdin_text=dash_password)
+        pw_hash = (out or "").strip().splitlines()[-1] if (out or "").strip() else ""
+        if rc != 0 or not pw_hash:
+            return {"ok": False, "error": "could not hash the dashboard password",
+                    "output": (out + err)[-300:]}
+
+        sets = [("dashboard.basic_auth.username", dash_user),
+                ("dashboard.basic_auth.password_hash", pw_hash)]
+        if model:
+            sets.append(("model", model))
+        for ckey, cval in sets:
+            inner = f"hermes config set {shlex.quote(ckey)} {shlex.quote(cval)}"
+            ok, output = _run(["incus", "exec", "ws", "--project", project, "--",
+                               "bash", "-lc",
+                               f"su - dev -c {shlex.quote(inner)} 2>&1 | tail -3"],
+                              timeout=120)
+            if not ok:
+                # Named, so a failure says which setting broke rather than
+                # reporting a bare False for the whole step.
+                return {"ok": False, "error": f"could not set {ckey}",
+                        "output": (output or "")[-300:]}
+
+        unit_text = HERMES_UNIT.format(ip=ip)
+
+        rc, out, err = _run_split(
+            ["incus", "exec", "ws", "--project", project, "--", "bash", "-lc",
+             "cat > /etc/systemd/system/hermes-dashboard.service && "
+             "chmod 0644 /etc/systemd/system/hermes-dashboard.service && "
+             "systemctl daemon-reload && "
+             "systemctl enable hermes-dashboard >/dev/null 2>&1; "
+             "systemctl restart hermes-dashboard; "
+             "sleep 5; "
+             "ss -tln | grep -c ':9119 ' | sed 's/^/listeners=/'; "
+             "systemctl is-active hermes-dashboard; "
+             "journalctl -u hermes-dashboard -n 15 --no-pager 2>/dev/null | tail -15"],
+            timeout=180, stdin_text=unit_text)
+        out = out + err
+        listening = "listeners=" in out and "listeners=0" not in out
+        return {"ok": listening, "installed": installed, "output": (out or "")[-900:]}
 
     if verb == "service_rdp":
         action = req.get("action")

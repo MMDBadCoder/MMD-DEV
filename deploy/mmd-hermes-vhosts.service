@@ -1,0 +1,24 @@
+[Unit]
+Description=Publish Hermes dashboards at hermes.<username>.<domain>
+After=network-online.target nginx.service postgresql.service
+Wants=nginx.service
+
+[Service]
+Type=oneshot
+# Root, because it writes nginx configuration and runs certbot. It is a third
+# component rather than part of an existing one for a specific reason: the root
+# provisioner runs with IPAddressDeny=any so a compromise cannot phone home, and
+# ACME needs the internet - putting issuance there would mean deleting the one
+# control that makes a root daemon acceptable. mmd-worker has the internet but
+# runs as `mmd` and cannot write /etc/nginx.
+#
+# It has no listener and takes no customer input beyond a username that was
+# validated as a DNS label before being stored, and is re-validated on read.
+User=root
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-/etc/mmd/api.env
+ExecStart=/opt/mmd/venv/bin/python /opt/mmd/host/mmd-hermes-vhosts.py
+
+NoNewPrivileges=yes
+ProtectHome=yes
+PrivateTmp=yes

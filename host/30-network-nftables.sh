@@ -58,6 +58,37 @@ cat > "$RULES" <<NFT
 table inet mmd_isolation
 delete table inet mmd_isolation
 
+table bridge mmd_bridge_isolation
+delete table bridge mmd_bridge_isolation
+
+# Tenant-to-tenant isolation, in the family that can actually see it.
+#
+# This exists because the equivalent rule in the inet forward chain does NOT
+# work, which was measured rather than assumed: from one workspace, another
+# workspace's sshd on port 22 and its Hermes dashboard on 9119 were both
+# reachable, and ping succeeded, with `oifname incusbr0 drop` sitting right
+# there in the ruleset.
+#
+# The reason is that two workspaces on the same bridge exchange BRIDGED frames.
+# Those never traverse the ip/inet forward hook unless br_netfilter is loaded
+# and bridge-nf-call-iptables is on - and it is not, deliberately: br_netfilter
+# pushes every bridged frame through the IP hooks, which costs throughput and is
+# a well-known source of breakage for Docker running inside the containers. The
+# bridge family is where this traffic is visible, so this is where the rule
+# belongs.
+#
+# Traffic between a workspace and the HOST is delivered locally to the bridge
+# port rather than forwarded across it, so DHCP, DNS and the gateway are
+# untouched by this. Outbound internet is routed, not bridged, so apt and
+# Docker Hub are untouched too.
+table bridge mmd_bridge_isolation {
+    chain forward {
+        type filter hook forward priority filter; policy accept;
+        meta ibrname "${INCUS_BRIDGE}" meta obrname "${INCUS_BRIDGE}" log prefix "mmd-drop-bridge " level info limit rate 5/minute
+        meta ibrname "${INCUS_BRIDGE}" meta obrname "${INCUS_BRIDGE}" counter drop
+    }
+}
+
 table inet mmd_isolation {
     # Everything a workspace must never reach, in one place.
     set blocked_dest {
@@ -114,8 +145,10 @@ table inet mmd_isolation {
         # DNAT'd in from the internet to a published port.
         ct state established,related accept
 
-        # Tenant-to-tenant. Workspaces share a bridge but must not see
-        # each other.
+        # Tenant-to-tenant, for anything that is actually ROUTED through this
+        # hook. Note this rule does NOT cover two workspaces on the same bridge
+        # talking to each other - see the bridge-family table above, which
+        # is what does. Kept because it still catches routed paths.
         oifname "${INCUS_BRIDGE}" log prefix "mmd-drop-tenant " level info limit rate 5/minute
         oifname "${INCUS_BRIDGE}" drop
 
@@ -167,4 +200,5 @@ systemctl enable mmd-isolation.service >/dev/null 2>&1
 
 log "active rules:"
 nft list table inet mmd_isolation | sed 's/^/    /'
+nft list table bridge mmd_bridge_isolation | sed 's/^/    /'
 log "done - next: 40-swap-zram.sh"

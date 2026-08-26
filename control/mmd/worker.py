@@ -316,6 +316,16 @@ def _hermes_workspace(db, ws: Workspace, client: OpenRouter,
                 hermes.meter(db, ws, client.get_key(ws.hermes_key_hash), usd_rate, discount)
             except OpenRouterError as e:
                 log.warning("hermes final meter ws %s: %s", ws.id, e)
+            # Tear the dashboard down inside the machine too. Revoking the
+            # key upstream is what stops the spending, but leaving a dead
+            # dashboard listening - and the key file on disk - is untidy at
+            # best and misleading at worst.
+            if ws.state == WorkspaceState.ON:
+                try:
+                    svc.call_provisioner({"verb": "service_hermes", "idx": ws.idx,
+                                          "action": "disable"}, timeout=180)
+                except Exception as e:  # noqa: BLE001
+                    log.warning("hermes teardown ws %s: %s", ws.id, e)
             hermes.revoke_key(db, ws, client)
             db.commit()
         return
@@ -325,7 +335,14 @@ def _hermes_workspace(db, ws: Workspace, client: OpenRouter,
 
     if hermes.ensure_key(db, ws, client, platform, cap):
         db.commit()
+        _hermes_install(db, ws)
         return
+
+    if not ws.hermes_installed:
+        # Retried on later passes: the usual reason it has not happened yet is
+        # simply that the machine is off, and a customer who enables Hermes then
+        # powers on should not have to toggle it again.
+        _hermes_install(db, ws)
 
     if not meter_usage:
         return
@@ -341,6 +358,38 @@ def _hermes_workspace(db, ws: Workspace, client: OpenRouter,
         # for spend that has already happened.
         client.update_key(ws.hermes_key_hash, limit_usd=cap)
     ws.hermes_error = None
+    db.commit()
+
+
+def _hermes_install(db, ws: Workspace) -> None:
+    """Install the agent and start its dashboard inside the workspace.
+
+    Only when the machine is running - there is nowhere to install to otherwise,
+    and this is retried every pass, so a customer who enables Hermes while
+    powered off gets it the moment they power on.
+    """
+    if ws.state != WorkspaceState.ON or not ws.hermes_key:
+        return
+    try:
+        resp = svc.call_provisioner({
+            "verb": "service_hermes", "idx": ws.idx, "action": "enable",
+            "install": True, "api_key": ws.hermes_key,
+            "model": hermes.default_model(db),
+            "dash_user": ws.hermes_dash_user,
+            "dash_password": ws.hermes_dash_password,
+            "ip": svc.workspace_ip(ws)}, timeout=1800)
+    except Exception as e:  # noqa: BLE001
+        log.warning("hermes install ws %s: %s", ws.id, e)
+        return
+    if resp.get("ok"):
+        ws.hermes_installed = True
+        ws.hermes_error = None
+        log.info("hermes dashboard up for ws %s", ws.id)
+    else:
+        # Surfaced to the customer rather than only logged: "enabled but the
+        # dashboard never appeared" is otherwise indistinguishable from a hang.
+        ws.hermes_error = (resp.get("error") or resp.get("output") or "install failed")[-300:]
+        log.warning("hermes install ws %s failed: %s", ws.id, ws.hermes_error)
     db.commit()
 
 
