@@ -486,3 +486,4 @@ tr.unread:hover td{background:var(--bad-soft);filter:brightness(.98)}
 
 /* Editable price grid: many small numeric inputs in a table. */
 .pricecell{width:92px;padding:5px 8px;font-size:13px;text-align:end}
+.ok-text{color:var(--ok)} .bad-text{color:var(--bad)}

@@ -309,25 +309,25 @@ def test_the_admin_price_table_seeds_itself(db):
 
 def test_the_exchange_rate_and_discount_come_from_settings(db):
     from mmd.models import Setting
-    assert svc.ai_settings(db) == (200_000.0, 90.0)
+    assert svc.ai_settings(db, "claude") == (200_000.0, 90.0)
     db.add(Setting(key="usd_to_toman", value="250000"))
-    db.add(Setting(key="ai_discount_percent", value="50"))
+    db.add(Setting(key="claude_discount_percent", value="50"))
     db.commit()
-    assert svc.ai_settings(db) == (250_000.0, 50.0)
+    assert svc.ai_settings(db, "claude") == (250_000.0, 50.0)
 
 
 def test_a_corrupt_setting_falls_back_rather_than_crashing_billing(db):
     from mmd.models import Setting
     db.add(Setting(key="usd_to_toman", value="not a number"))
     db.commit()
-    assert svc.ai_settings(db)[0] == 200_000.0
+    assert svc.ai_settings(db, 'claude')[0] == 200_000.0
 
 
 def test_changing_the_rate_changes_what_is_charged(db, ws, monkeypatch):
     from mmd.models import Setting
     import datetime as _dt
     a = svc.meter_ai_usage(db, ws, _report(**{"claude-opus-5": _tok(output=1_000_000)}))
-    db.add(Setting(key="ai_discount_percent", value="0"))     # no discount
+    db.add(Setting(key="claude_discount_percent", value="0"))   # no discount
     db.commit()
     monkeypatch.setattr(svc, "_ai_period",
                         lambda ts: _dt.datetime(2031, 1, 1, tzinfo=_dt.timezone.utc))
@@ -341,3 +341,47 @@ def test_the_period_bucket_matches_the_worker_cadence():
     double-charges or silently skips."""
     from mmd import worker
     assert svc.AI_PERIOD_SECONDS == worker.AI_EVERY * worker.TICK_SECONDS
+
+
+# --- the two services are priced apart -------------------------------------
+def test_each_service_has_its_own_discount(db):
+    """Claude is a flat subscription, so a tenth of list is margin. OpenRouter
+    is metered, so the same rate collects ten cents for every dollar spent. One
+    number cannot be right for both, and the failure is silent."""
+    assert svc.ai_settings(db, "claude")[1] == 90.0
+    assert svc.ai_settings(db, "openrouter")[1] == 0.0
+
+
+def test_openrouter_defaults_to_billing_at_cost(db):
+    """At 0% off, $1 of OpenRouter bills exactly what it cost."""
+    usd_rate, discount = svc.ai_settings(db, "openrouter")
+    assert AP.discount_multiplier(discount) == 1.0
+    assert 1.0 * usd_rate * AP.discount_multiplier(discount) == usd_rate
+
+
+def test_changing_one_service_does_not_move_the_other(db):
+    from mmd.models import Setting
+    db.add(Setting(key="openrouter_discount_percent", value="25"))
+    db.commit()
+    assert svc.ai_settings(db, "openrouter")[1] == 25.0
+    assert svc.ai_settings(db, "claude")[1] == 90.0
+
+
+def test_the_old_global_setting_is_honoured_for_claude(db):
+    """An operator who had tuned ai_discount_percent before the split must not
+    silently get 90% back when this deploys."""
+    from mmd.models import Setting
+    db.add(Setting(key="ai_discount_percent", value="70"))
+    db.commit()
+    assert svc.ai_settings(db, "claude")[1] == 70.0
+    # ...and it must NOT leak onto the metered service.
+    assert svc.ai_settings(db, "openrouter")[1] == 0.0
+
+
+def test_the_exchange_rate_is_shared(db):
+    """It converts a currency; a dollar is a dollar whichever supplier it goes to."""
+    from mmd.models import Setting
+    db.add(Setting(key="usd_to_toman", value="180000"))
+    db.commit()
+    assert svc.ai_settings(db, "claude")[0] == 180_000.0
+    assert svc.ai_settings(db, "openrouter")[0] == 180_000.0

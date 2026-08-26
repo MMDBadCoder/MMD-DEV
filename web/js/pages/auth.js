@@ -1,6 +1,6 @@
 /* Sign in and sign up - separate pages, separate URLs. Sign-up confirms the
  * password; signing in does not. */
-import { post } from "../api.js";
+import { get, post } from "../api.js";
 import { $, icon, esc, note } from "../ui.js";
 import { t } from "../i18n.js";
 import { navigate } from "../router.js";
@@ -35,9 +35,33 @@ export function signInPage(_p, msg) {
     fields: `
       <div class="field"><label for="email">${t("auth.email")}</label>
         <input id="email" type="email" autocomplete="username" autofocus></div>
+      <div class="field"><label for="uname">${t("auth.username")}</label>
+        <input id="uname" class="ltr" dir="ltr" autocomplete="username"
+               maxlength="32" placeholder="ali-hosseini">
+        <p class="tiny dim" style="margin:6px 0 0" id="unamehint">${t("auth.username.hint")}</p></div>
       <div class="field"><label for="pw">${t("auth.password")}</label>
         <input id="pw" type="password" autocomplete="current-password"></div>`,
   }));
+
+  // Tells the customer a name is taken before they submit, and shows what the
+  // address will be - the username becomes part of a hostname, which is not
+  // obvious from a field labelled "username".
+  let unameTimer = null;
+  $("#uname").oninput = () => {
+    clearTimeout(unameTimer);
+    const hint = $("#unamehint");
+    const v = $("#uname").value.trim().toLowerCase();
+    if (!v) { hint.textContent = t("auth.username.hint"); hint.className = "tiny dim"; return; }
+    unameTimer = setTimeout(async () => {
+      try {
+        const r = await get(`/api/auth/username-available?name=${encodeURIComponent(v)}`);
+        hint.className = r.available ? "tiny ok-text" : "tiny bad-text";
+        hint.textContent = r.available
+          ? t("auth.username.free", `hermes.${r.username}.mmd-ai.ir`)
+          : (r.reason || t("auth.err.username_taken"));
+      } catch { /* the submit will say */ }
+    }, 350);
+  };
 
   $("#form").onsubmit = async (e) => {
     e.preventDefault();
@@ -63,6 +87,10 @@ export function signUpPage() {
     fields: `
       <div class="field"><label for="email">${t("auth.email")}</label>
         <input id="email" type="email" autocomplete="username" autofocus></div>
+      <div class="field"><label for="uname">${t("auth.username")}</label>
+        <input id="uname" class="ltr" dir="ltr" autocomplete="username"
+               maxlength="32" placeholder="ali-hosseini">
+        <p class="tiny dim" style="margin:6px 0 0" id="unamehint">${t("auth.username.hint")}</p></div>
       <div class="field"><label for="pw">${t("auth.password")}</label>
         <input id="pw" type="password" autocomplete="new-password"
                minlength="${MIN_PW}" placeholder="${t("auth.password.placeholder")}">
@@ -71,21 +99,46 @@ export function signUpPage() {
         <input id="pw2" type="password" autocomplete="new-password"></div>`,
   }));
 
+  // Tells the customer a name is taken before they submit, and shows what the
+  // address will be - the username becomes part of a hostname, which is not
+  // obvious from a field labelled "username".
+  let unameTimer = null;
+  $("#uname").oninput = () => {
+    clearTimeout(unameTimer);
+    const hint = $("#unamehint");
+    const v = $("#uname").value.trim().toLowerCase();
+    if (!v) { hint.textContent = t("auth.username.hint"); hint.className = "tiny dim"; return; }
+    unameTimer = setTimeout(async () => {
+      try {
+        const r = await get(`/api/auth/username-available?name=${encodeURIComponent(v)}`);
+        hint.className = r.available ? "tiny ok-text" : "tiny bad-text";
+        hint.textContent = r.available
+          ? t("auth.username.free", `hermes.${r.username}.mmd-ai.ir`)
+          : (r.reason || t("auth.err.username_taken"));
+      } catch { /* the submit will say */ }
+    }, 350);
+  };
+
   $("#form").onsubmit = async (e) => {
     e.preventDefault();
     const email = $("#email").value.trim(), pw = $("#pw").value, pw2 = $("#pw2").value;
+    const username = $("#uname").value.trim().toLowerCase();
     const fail = (m) => { $("#msg").innerHTML = note("bad", esc(m)); };
 
     // Checked here so the answer is instant and specific, rather than a server
     // round trip returning a validation blob.
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return fail(t("auth.err.email"));
+    // Mirrors mmd/usernames.py. The server checks again - this is only so the
+    // answer is instant.
+    if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(username) || username.length < 3)
+      return fail(t("auth.err.username"));
     if (pw.length < MIN_PW) return fail(t("auth.err.short", pw.length));
     if (pw !== pw2) return fail(t("auth.err.mismatch"));
 
     const btn = $("#form button");
     btn.disabled = true; btn.textContent = t("auth.signup.busy");
     try {
-      const r = await post("/api/auth/register", { email, password: pw });
+      const r = await post("/api/auth/register", { email, username, password: pw });
       $("#form").innerHTML = "";
       // Keyed off the server's CODE. This used to compare the server's English
       // sentence, so any rewording of it would have shown the wrong message.

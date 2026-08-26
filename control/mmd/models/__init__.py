@@ -72,6 +72,11 @@ class User(Base):
     __tablename__ = "users"
     id: Mapped[int] = mapped_column(primary_key=True)
     email: Mapped[str] = mapped_column(String(320), unique=True, index=True)
+    # Also a DNS label: the customer's Hermes dashboard is served at
+    # hermes.<username>.mmd-ai.ir, so this is part of a hostname rather than a
+    # display name. Nullable only so the column can be added to a live table;
+    # every row is backfilled and signup requires it. See mmd/usernames.py.
+    username: Mapped[str | None] = mapped_column(String(32), unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(255))
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
     status: Mapped[UserStatus] = mapped_column(

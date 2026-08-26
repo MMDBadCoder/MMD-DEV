@@ -241,15 +241,32 @@ def ai_prices(db: Session) -> dict[str, aipricing.ModelPrice]:
                                           r.output_usd) for r in rows}
 
 
-def ai_settings(db: Session) -> tuple[float, float]:
-    """(usd_to_toman, discount_percent), from the settings table."""
+def ai_settings(db: Session, service: str = AI_SERVICE) -> tuple[float, float]:
+    """(usd_to_toman, discount_percent) for one service.
+
+    The discount is per service on purpose. Claude is a flat subscription, so a
+    customer's marginal token costs the operator nothing and selling at a tenth
+    of list is margin. OpenRouter is metered, so the same rate would collect ten
+    cents for every dollar spent. One number cannot be right for both, and the
+    failure is silent - it just loses money per token.
+    """
     s = get_settings(db)
-    def g(key: str) -> float:
+
+    def g(key: str, default: float) -> float:
         try:
-            return float(s.get(key, aipricing.DEFAULT_AI_SETTINGS[key]))
+            return float(s.get(key, default))
         except (TypeError, ValueError):
-            return aipricing.DEFAULT_AI_SETTINGS[key]
-    return g("usd_to_toman"), g("ai_discount_percent")
+            return default
+
+    usd = g("usd_to_toman", aipricing.DEFAULT_AI_SETTINGS["usd_to_toman"])
+    key = aipricing.discount_key(service)
+    default = aipricing.DEFAULT_AI_SETTINGS.get(key, 0.0)
+    # `ai_discount_percent` was the single global setting before the split.
+    # Honoured as the Claude default so an operator who had tuned it does not
+    # silently get 90% back when this deploys.
+    if key not in s and service == "claude" and "ai_discount_percent" in s:
+        return usd, g("ai_discount_percent", default)
+    return usd, g(key, default)
 
 
 def meter_ai_usage(db: Session, ws: Workspace, report: dict) -> dict:
@@ -269,7 +286,7 @@ def meter_ai_usage(db: Session, ws: Workspace, report: dict) -> dict:
     silently given away.
     """
     prices = ai_prices(db)
-    usd_rate, discount = ai_settings(db)
+    usd_rate, discount = ai_settings(db, AI_SERVICE)
     period = _ai_period(now())
 
     marks = {(m.session_id, m.model): m for m in db.scalars(

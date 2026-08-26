@@ -32,7 +32,7 @@ from . import service as svc
 from .billing import aipricing, pricing
 from .billing.pricing import MICRO, InvalidTier, Tier
 from .config import CONFIG
-from .db import get_session, init_db
+from .db import SessionLocal, get_session, init_db
 from .incus.client import IncusClient, IncusConfig, IncusError
 from .incus.execws import open_exec
 from .models import (AiModelPrice, AiUsageMark, AuditLog, CreditAccount,
@@ -40,6 +40,7 @@ from .models import (AiModelPrice, AiUsageMark, AuditLog, CreditAccount,
                      Ticket, TicketMessage, TicketStatus, TxKind, UsageSample,
                      User, UserStatus, Workspace, WorkspaceState)
 from .security import hash_password, verify_password
+from . import usernames as unames
 from .tickets import is_unread
 
 log = logging.getLogger("mmd.api")
@@ -102,6 +103,14 @@ def my_workspace(db: Session, user: User) -> Workspace:
 
 
 # --- schemas -------------------------------------------------------------
+class SignUp(BaseModel):
+    email: EmailStr
+    password: str = Field(min_length=8, max_length=256)
+    # Not optional: it becomes part of a hostname, so it has to be chosen rather
+    # than derived from an address the customer may later change.
+    username: str = Field(min_length=1, max_length=64)
+
+
 class Credentials(BaseModel):
     email: EmailStr
     password: str = Field(min_length=10, max_length=200)
@@ -205,6 +214,31 @@ class CreditGrant(BaseModel):
 def _startup() -> None:
     logging.basicConfig(level=logging.INFO)
     init_db()
+    _backfill_usernames()
+
+
+def _backfill_usernames() -> None:
+    """Give every pre-existing account a username.
+
+    The field arrived after these customers signed up, and their Hermes address
+    depends on it. Derived from the email's local part, sanitised into a legal
+    DNS label and de-duplicated. Idempotent: rows that already have one are left
+    alone, so this is safe on every boot.
+    """
+    with SessionLocal() as db:
+        rows = list(db.scalars(select(User)))
+        taken = {u.username for u in rows if u.username}
+        filled = 0
+        for u in rows:
+            if u.username:
+                continue
+            name = unames.make_unique(unames.derive_from_email(u.email), taken)
+            u.username = name
+            taken.add(name)
+            filled += 1
+        if filled:
+            db.commit()
+            log.info("backfilled %d username(s)", filled)
 
 
 @app.get("/api/health")
@@ -214,14 +248,24 @@ def health() -> dict:
 
 # --- auth ----------------------------------------------------------------
 @app.post("/api/auth/register")
-def register(body: Credentials, db: Session = Depends(get_session)) -> dict:
+def register(body: SignUp, db: Session = Depends(get_session)) -> dict:
+    try:
+        username = unames.validate(body.username)
+    except unames.UsernameError as e:
+        fail(400, e.code, str(e))
+    # Checked before the duplicate-email branch so a customer picking a taken
+    # username is told so, rather than being silently absorbed into the
+    # deliberately-identical "awaiting approval" reply.
+    if db.scalar(select(User).where(User.username == username)):
+        fail(409, "username_taken", "That username is already in use.")
     if db.scalar(select(User).where(User.email == body.email.lower())):
         # Identical to the success response on purpose: differing replies would
         # let anyone enumerate which addresses hold accounts.
         return {"status": "pending", "code": "pending_approval"}
     first = db.scalar(select(User).limit(1)) is None
     user = User(
-        email=body.email.lower(), password_hash=hash_password(body.password),
+        email=body.email.lower(), username=username,
+        password_hash=hash_password(body.password),
         is_admin=first,
         status=UserStatus.APPROVED if first else UserStatus.PENDING)
     db.add(user)
@@ -235,6 +279,23 @@ def register(body: Credentials, db: Session = Depends(get_session)) -> dict:
     # second caller, would silently print English at a customer.
     return {"status": user.status.value,
             "code": "admin_created" if first else "pending_approval"}
+
+
+@app.get("/api/auth/username-available")
+def username_available(name: str, db: Session = Depends(get_session)) -> dict:
+    """Lets the sign-up form say so before the customer submits.
+
+    Deliberately reveals only whether a name is free. That is the same thing
+    submitting the form would reveal, so it leaks nothing new - and a username
+    is public anyway once it is in a hostname.
+    """
+    try:
+        candidate = unames.validate(name)
+    except unames.UsernameError as e:
+        return {"available": False, "code": e.code, "reason": str(e)}
+    taken = db.scalar(select(User).where(User.username == candidate)) is not None
+    return {"available": not taken, "username": candidate,
+            "code": "username_taken" if taken else None}
 
 
 @app.post("/api/auth/login")
@@ -274,7 +335,8 @@ def me(user: User = Depends(current_user), db: Session = Depends(get_session)) -
     acct = db.get(CreditAccount, user.id)
     ws = db.scalar(select(Workspace).where(Workspace.user_id == user.id))
     return {
-        "email": user.email, "status": user.status.value, "is_admin": user.is_admin,
+        "email": user.email, "username": user.username,
+        "status": user.status.value, "is_admin": user.is_admin,
         "credits": (acct.balance_micro / MICRO) if acct else 0.0,
         "has_workspace": ws is not None,
         "member_since": user.created_at.isoformat() if user.created_at else None,
@@ -2069,7 +2131,7 @@ def workspace_ai_usage(user: User = Depends(current_user),
         acc["cache_read"] += m.cache_read_tokens or 0
         acc["output"] += m.output_tokens or 0
 
-    usd_rate, discount = svc.ai_settings(db)
+    usd_rate, discount = svc.ai_settings(db, svc.AI_SERVICE)
     models = sorted(by_model.values(), key=lambda m: -m["toman"])
     return {
         "models": models,
@@ -2093,7 +2155,7 @@ def admin_ai_pricing(_: User = Depends(require_admin),
     a deploy to keep up.
     """
     prices = svc.ai_prices(db)
-    usd_rate, discount = svc.ai_settings(db)
+    usd_rate, discount = svc.ai_settings(db, svc.AI_SERVICE)
 
     rows = db.scalars(select(AiModelPrice)
                       .where(AiModelPrice.service == svc.AI_SERVICE)
@@ -2108,6 +2170,11 @@ def admin_ai_pricing(_: User = Depends(require_admin),
         "service": svc.AI_SERVICE,
         "usd_to_toman": usd_rate,
         "discount_percent": discount,
+        # Every service's rate, so the panel can show them apart. One number for
+        # both would lose money on the metered one.
+        "discounts": {sv: {"key": aipricing.discount_key(sv),
+                           "percent": svc.ai_settings(db, sv)[1]}
+                      for sv in aipricing.SERVICES},
         "categories": list(aipricing.CATEGORIES),
         "unpriced_models": unpriced,
         "prices": [{"id": r.id, "model": r.model, "input_usd": r.input_usd,

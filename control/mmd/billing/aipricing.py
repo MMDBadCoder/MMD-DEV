@@ -50,14 +50,33 @@ SEED_PRICES: dict[str, tuple[float, float, float, float, float]] = {
 }
 
 # Admin-set, stored in the settings table.
+#
+# The discount is PER SERVICE, and that is not a nicety - the two services have
+# opposite cost structures and one rate cannot be right for both:
+#
+#   * Claude runs on a flat subscription. A customer's marginal token costs the
+#     operator essentially nothing, so selling at a tenth of Anthropic's list
+#     price is margin, not loss.
+#   * OpenRouter is metered. Every token is real money leaving the account, so
+#     the same 90% off would mean collecting $0.10 for every $1.00 spent -
+#     losing ninety cents on the dollar, quietly, per token.
+#
+# The exchange rate stays shared: it converts a currency, and a dollar is a
+# dollar whichever supplier it goes to.
+SERVICES = ("claude", "openrouter")
+
 DEFAULT_AI_SETTINGS: dict[str, float] = {
     "usd_to_toman": 200_000.0,
-    # A percentage off. 90 means the customer pays a tenth of the real cost.
-    # Stored as the percentage rather than the multiplier because that is what
-    # an operator says out loud, and turning it into 0.10 in one place is safer
-    # than everyone remembering which is which.
-    "ai_discount_percent": 90.0,
+    # Percentages off, stored as the percentage rather than the multiplier
+    # because that is what an operator says out loud, and converting it in one
+    # place is safer than everyone remembering which is which.
+    "claude_discount_percent": 90.0,
+    "openrouter_discount_percent": 0.0,
 }
+
+
+def discount_key(service: str) -> str:
+    return f"{service}_discount_percent"
 
 
 @dataclass(frozen=True)
