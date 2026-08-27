@@ -61,6 +61,7 @@ nginx ──► mmd-api (FastAPI, user `mmd`)
           PostgreSQL                                     ▼
                                               Incus projects ws-1, ws-2, …
 mmd-worker (user `mmd`) ── metering, hourly settlement, reconciliation
+mmd-vhosts (root, timer) ── hermes.<username>.<domain> vhosts + certbot
 ```
 
 **The privilege split is the whole security design.** `mmd-api` is the

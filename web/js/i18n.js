@@ -652,6 +652,37 @@ const FA = {
   "ai.unlink.confirm": "فایل ورود از ماشین شما حذف می‌شود و برای استفادهٔ دوباره باید ورود را تازه‌سازی کنید. خود برنامه حذف نمی‌شود.",
   "ai.unlinked": "دسترسی حذف شد",
   "ai.done": "Claude Code آمادهٔ استفاده است",
+  // A machine can hold valid credentials and still open the first-run wizard,
+  // which customers report as "it is asking me to log in". Distinct state,
+  // distinct label - calling it "ready" is what made the bug hard to see.
+  // --- Telegram channel ---
+  "tg.title": "اتصال Claude Code به تلگرام",
+  "tg.sub": "می‌توانید از داخل تلگرام با Claude Code همین ماشین گفتگو کنید. همهٔ مراحل داخل ماشین شما اجرا می‌شود و چیزی روی سرور پلتفرم تنظیم نمی‌شود.",
+  "tg.prereq": "پیش‌نیاز: ماشین روشن باشد و ورود Claude Code (بخش بالا) کامل شده باشد. دسترسی به سرورهای تلگرام از داخل ماشین بررسی و تأیید شده است.",
+  "tg.s1": "در تلگرام به BotFather@ پیام دهید و با دستور newbot/ یک ربات بسازید. یک توکن به شما داده می‌شود؛ آن را نگه دارید.",
+  "tg.s2": "در ترمینال ماشین، claude را اجرا کنید و این دستور را داخل خود Claude بزنید تا افزونه نصب شود:",
+  "tg.s3": "توکن ربات را ثبت کنید (به‌جای TOKEN توکن خودتان را بگذارید):",
+  "tg.s4": "از Claude خارج شوید و این‌بار آن را با کانال تلگرام اجرا کنید:",
+  "tg.s5": "به ربات خود در تلگرام پیام دهید تا یک کد کوتاه بگیرید، سپس آن کد را داخل Claude وارد کنید:",
+  "tg.s6": "در پایان دسترسی را محدود کنید تا فقط همین حساب بتواند به ربات پیام بدهد. تا وقتی این کار را نکرده‌اید هر کسی که آدرس ربات را بداند می‌تواند جفت شود:",
+  "tg.where": "این‌ها کجا ذخیره می‌شوند",
+  // The paths live in the markup, not here: a translation catalogue is the
+  // wrong home for a filesystem path, and three Latin words in one Persian
+  // sentence is what the language policy exists to catch.
+  "tg.where.1": "توکن ربات، در پروندهٔ پیکربندی کانال:",
+  "tg.where.2": "عکس‌های دریافتی، در پوشهٔ ورودی همان کانال:",
+  "tg.warn": "نکته‌های مهم",
+  "tg.warn.1": "ربات فقط تا وقتی پاسخ می‌دهد که Claude Code با همان دستور در حال اجرا باشد؛ با بستن ترمینال قطع می‌شود. برای ماندگاری آن را داخل tmux اجرا کنید.",
+  "tg.warn.2": "بازنشانی کارخانه‌ای ماشین، توکن و تنظیمات ربات را هم پاک می‌کند و باید دوباره انجام شود.",
+  "tg.docs": "مستندات کامل افزونه:",
+
+  "ai.state.setup": "نیازمند تنظیم اولیه",
+  "ai.state.setup.body": "ورود انجام شده اما پیکربندی اولیهٔ Claude Code کامل نیست و اجرای آن پنجرهٔ راه‌اندازی را باز می‌کند. دکمهٔ «تازه‌سازی ورود» را بزنید تا کامل شود.",
+  // Hermes is a different service with a different lifecycle, so it does not
+  // borrow Claude Code's sentence. Enabling records an intent the worker then
+  // acts on, which is why this says "being prepared" rather than "ready".
+  "ai.hermes.done.enabled": "Hermes فعال شد. کلید شما تا لحظاتی دیگر آماده می‌شود.",
+  "ai.hermes.done.disabled": "Hermes غیرفعال شد و کلید آن باطل شد.",
   "ai.run": "در ترمینال ماشین دستور claude را اجرا کنید تا شروع شود.",
   "ai.privacy.title": "چه چیزی از سرور کپی می‌شود؟",
   "ai.privacy.body": "برای اینکه لازم نباشد دوباره وارد شوید، تنها اطلاعات ورود از سرور به ماشین شما منتقل می‌شود. هیچ چیز دیگری منتقل نمی‌شود.",

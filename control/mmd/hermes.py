@@ -43,6 +43,7 @@ Only mmd-worker runs any of this. mmd-api faces the internet.
 from __future__ import annotations
 
 import logging
+import re
 import secrets
 import string
 from dataclasses import dataclass
@@ -187,15 +188,59 @@ def sync_policy(db, client: OpenRouter, platform: Platform) -> int:
     ceiling = max_output_usd(db)
     allowed = client.build_allowlist_from_catalogue(max_output_usd=ceiling)
 
-    # The configured default must always be reachable, even when it is free and
-    # therefore excluded by the price filter (which drops zero-priced entries so
-    # an unpriced model cannot slip through as "free").
+    # The configured default must always be reachable. This used to be a
+    # workaround for free models being wrongly excluded - the price filter
+    # could not tell a published price of ZERO from no price at all, so every
+    # `:free` model was dropped and only the default was rescued. That bug is
+    # fixed in openrouter.is_priced(), so what remains here is the narrower
+    # rule it was hiding behind: an operator who deliberately configures a
+    # default has chosen it, and a ceiling should not silently make the
+    # product's own default unusable.
+    #
+    # Note this DOES let the default past the ceiling. That is deliberate and
+    # is one model chosen by an admin, not a hole customers can reach through.
     model = default_model(db)
     if model and model not in allowed:
         allowed.append(model)
 
-    client.update_guardrail(platform.guardrail_id, allowed_models=sorted(set(allowed)))
-    return len(allowed)
+    return _push_allowlist(client, platform.guardrail_id, sorted(set(allowed)))
+
+
+# OpenRouter names the offending ids in the body:
+#   {"error":{"message":"Invalid allowed_models: openrouter/auto, openrouter/free"}}
+_INVALID_IDS = re.compile(r"Invalid allowed_models:\s*([^\"}]+)")
+
+
+def _push_allowlist(client: OpenRouter, guardrail_id: str,
+                    allowed: list[str]) -> int:
+    """PATCH the allowlist, retrying once without any ids OpenRouter rejects.
+
+    The whole PATCH fails on a single unacceptable id, and the failure leaves
+    the PREVIOUS allowlist in force - which looks configured and is not. That
+    has now happened twice, both times because the catalogue grew an entry the
+    guardrail will not accept: floating `~` aliases, then the `openrouter/*`
+    routers. Both are excluded up front, but "the catalogue grew something new"
+    is not a problem that stops recurring, and a stale policy is a bad way to
+    find out.
+
+    So the rejected ids are read back out of the error and dropped. A policy
+    missing one model beats a policy that is silently months out of date.
+    """
+    try:
+        client.update_guardrail(guardrail_id, allowed_models=allowed)
+        return len(allowed)
+    except OpenRouterError as exc:
+        m = _INVALID_IDS.search(str(exc))
+        if not m:
+            raise
+        bad = {i.strip() for i in m.group(1).split(",") if i.strip()}
+        keep = [a for a in allowed if a not in bad]
+        if not bad or len(keep) == len(allowed):
+            raise
+        log.warning("guardrail rejected %d model ids, retrying without them: %s",
+                    len(bad), ", ".join(sorted(bad))[:300])
+        client.update_guardrail(guardrail_id, allowed_models=keep)
+        return len(keep)
 
 
 # --- per-workspace keys ---------------------------------------------------

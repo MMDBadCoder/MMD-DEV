@@ -1,5 +1,5 @@
 [Unit]
-Description=Publish Hermes dashboards at hermes.<username>.<domain>
+Description=Publish customer hostnames under <username>.<domain>
 After=network-online.target nginx.service postgresql.service
 Wants=nginx.service
 
@@ -12,12 +12,12 @@ Type=oneshot
 # control that makes a root daemon acceptable. mmd-worker has the internet but
 # runs as `mmd` and cannot write /etc/nginx.
 #
-# It has no listener and takes no customer input beyond a username that was
-# validated as a DNS label before being stored, and is re-validated on read.
+# It has no listener and takes no customer input beyond two DNS labels, both
+# validated before being stored and re-validated on read.
 User=root
 Environment=PYTHONUNBUFFERED=1
 EnvironmentFile=-/etc/mmd/api.env
-ExecStart=/opt/mmd/venv/bin/python /opt/mmd/host/mmd-hermes-vhosts.py
+ExecStart=/opt/mmd/venv/bin/python /opt/mmd/host/mmd-vhosts.py
 
 NoNewPrivileges=yes
 ProtectHome=yes

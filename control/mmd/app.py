@@ -195,7 +195,18 @@ class TicketStatusChange(BaseModel):
 
 
 class AiAction(BaseModel):
+    """Claude Code: the CLI is installed and signed in, or the link is removed.
+    ("Resync" in the interface is an install onto a machine that already has
+    it - the same verb, a different label.)"""
     action: str = Field(pattern="^(install|unlink)$")
+
+
+class HermesAction(BaseModel):
+    """Hermes: a stated intent the worker reconciles, not an act performed here.
+    A separate model from AiAction because the two vocabularies are genuinely
+    different - sharing one rejected every enable with a schema error.
+    """
+    action: str = Field(pattern="^(enable|disable)$")
 
 
 class SshKeyAdd(BaseModel):
@@ -1066,7 +1077,8 @@ def _ai_state(ws: Workspace) -> dict:
         # more useful than reporting "not installed" about a machine that may
         # well have it.
         return {"machine_running": False, "installed": False, "version": None,
-                "linked": False, "available": True, "expires_at": None}
+                "linked": False, "onboarded": False, "available": True,
+                "expires_at": None}
     resp = svc.call_provisioner({"verb": "ai_claude", "idx": ws.idx,
                                  "action": "status"}, timeout=180)
     if not resp.get("ok"):
@@ -1075,7 +1087,11 @@ def _ai_state(ws: Workspace) -> dict:
     return {"machine_running": True,
             "installed": bool(resp.get("installed")),
             "version": resp.get("version"),
+            # Signed in. NOT the same as usable: a machine with credentials but
+            # no onboarding key opens the first-run wizard, which customers
+            # report as being asked to log in.
             "linked": bool(resp.get("linked")),
+            "onboarded": bool(resp.get("onboarded")),
             "available": bool(resp.get("available")),
             "expires_at": resp.get("expires_at")}
 
@@ -1117,7 +1133,7 @@ def ai_status(user: User = Depends(current_user),
 
 
 @app.post("/api/workspace/ai/hermes")
-def ai_hermes(body: AiAction, user: User = Depends(current_user),
+def ai_hermes(body: HermesAction, user: User = Depends(current_user),
               db: Session = Depends(get_session)) -> dict:
     """Record the customer's intent. The worker reconciles it.
 
@@ -1127,8 +1143,6 @@ def ai_hermes(body: AiAction, user: User = Depends(current_user),
     mint self-healing rather than a dead toggle.
     """
     ws = my_workspace(db, user)
-    if body.action not in ("enable", "disable"):
-        fail(400, "bad_action", "Unknown action.")
     if not user.username:
         fail(409, "no_username", "This account has no username yet.")
 

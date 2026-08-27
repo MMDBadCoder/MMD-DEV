@@ -170,13 +170,18 @@ def test_the_token_never_reaches_a_command_line(fake_host, monkeypatch):
     """
     calls = []
 
+    # `onboarded` is part of the status contract: a machine with credentials
+    # but without it opens Claude Code's first-run wizard, so install no longer
+    # reports success on one. See tests/test_claude_config.py.
+    STATUS = "version=1.0.0\nlinked=yes\nonboarded=True\n"
+
     def fake_run(cmd, timeout=None, stdin_text=None, **kw):
         calls.append((cmd, stdin_text))
-        return True, "version=1.0.0\nlinked=yes\n"
+        return True, STATUS
 
     def fake_run_split(cmd, timeout=None, **kw):
         calls.append((cmd, None))
-        return 0, "version=1.0.0\nlinked=yes\n", ""
+        return 0, STATUS, ""
 
     monkeypatch.setattr(prov, "_run", fake_run)
     monkeypatch.setattr(prov, "_run_split", fake_run_split)
@@ -186,7 +191,12 @@ def test_the_token_never_reaches_a_command_line(fake_host, monkeypatch):
     for cmd, _ in calls:
         assert "tok-abc" not in " ".join(cmd)
         assert "ref-xyz" not in " ".join(cmd)
-    # ...and it did travel, on stdin, exactly once.
+    # ...and it did travel, on stdin, exactly once. Other things are piped in
+    # too now - the ~/.claude.json merge - so this counts the payloads carrying
+    # the token rather than the payloads.
     piped = [s for _, s in calls if s and "tok-abc" in s]
     assert len(piped) == 1
     assert set(json.loads(piped[0])) == {"claudeAiOauth"}
+    # Nothing else piped in may carry it either.
+    others = [s for _, s in calls if s and s not in piped]
+    assert all("tok-abc" not in o and "ref-xyz" not in o for o in others), others

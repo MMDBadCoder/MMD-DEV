@@ -17,7 +17,7 @@ claude-sonnet-5. Sixty times.
 import pytest
 
 from mmd.openrouter import (ALWAYS_DENY, KeyInfo, OpenRouter, OpenRouterError,
-                            build_allowlist, price_per_mtok)
+                            build_allowlist, is_priced, price_per_mtok)
 
 
 def m(mid, prompt, completion):
@@ -129,3 +129,108 @@ def test_key_info_reads_usage_and_limit():
 def test_the_deny_list_names_the_families_the_operator_called_out():
     for pattern in ("o1-pro", "-fast"):
         assert pattern in ALWAYS_DENY
+
+
+# --- the bug: every free model was excluded --------------------------------
+FREE = {"id": "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "pricing": {"prompt": "0", "completion": "0"}}
+NO_PRICE_KEYS = {"id": "vendor/no-pricing-object"}
+EMPTY_STRINGS = {"id": "vendor/blank", "pricing": {"prompt": "", "completion": ""}}
+
+
+def test_a_free_model_is_allowed():
+    """Reported as an agent answering
+
+        HTTP 404: No endpoints available matching your guardrail restrictions
+        and data policy
+
+    `build_allowlist` excluded anything whose input AND output price were both
+    zero, a rule written for models whose cost is not published yet. But `_num`
+    turns an ABSENT price into 0.0 as well, so "unknown" and "free" were the
+    same value and all 17 of OpenRouter's `:free` models were refused by the
+    guardrail. They cost the operator nothing; a ceiling meant to keep
+    customers away from expensive models has no business excluding them.
+    """
+    assert FREE["id"] in build_allowlist([FREE], max_output_usd=40)
+
+
+def test_an_unpriced_model_is_still_not_assumed_free():
+    """The rule the above was protecting stays intact."""
+    for entry in (CATALOGUE[-1], NO_PRICE_KEYS, EMPTY_STRINGS):
+        allow = build_allowlist([entry], max_output_usd=40)
+        assert allow == [], entry
+
+
+def test_is_priced_separates_zero_from_absent():
+    assert is_priced(FREE) is True
+    assert is_priced({"id": "x", "pricing": {"prompt": "0"}}) is True
+    assert is_priced(NO_PRICE_KEYS) is False
+    assert is_priced(EMPTY_STRINGS) is False
+    assert is_priced({"id": "x", "pricing": {"prompt": None}}) is False
+
+
+def test_a_free_model_still_obeys_the_deny_list():
+    """Free does not mean exempt: a denied family stays denied at any price."""
+    denied = {"id": "openai/o1-pro:free", "pricing": {"prompt": "0", "completion": "0"}}
+    assert build_allowlist([denied], max_output_usd=40, deny=("o1-pro",)) == []
+
+
+# --- and the bug the fix for it caused -------------------------------------
+ROUTER = {"id": "openrouter/auto", "pricing": {"prompt": "-1", "completion": "-1"}}
+FREE_ROUTER = {"id": "openrouter/free", "pricing": {"prompt": "0", "completion": "0"}}
+
+
+def test_a_variable_price_router_is_not_allowed():
+    """`-1` means the model is chosen at request time, so a ceiling checked
+    when the list was written means nothing. It also made the guardrail reject
+    the whole PATCH with a 400, leaving the previous allowlist in force."""
+    assert is_priced(ROUTER) is False
+    assert build_allowlist([ROUTER], max_output_usd=40) == []
+
+
+def test_the_openrouter_namespace_is_denied_even_when_it_is_free():
+    """openrouter/free is priced 0/0 and would otherwise pass, but the
+    guardrail refuses the whole namespace by name."""
+    assert build_allowlist([FREE_ROUTER], max_output_usd=40) == []
+
+
+def test_one_bad_id_does_not_take_the_whole_allowlist_with_it():
+    """A rejected PATCH leaves the PREVIOUS policy in force - which looks
+    configured and is not. This has happened twice as the catalogue grew ids
+    the guardrail will not take, so the rejected ones are read back out of the
+    error and dropped."""
+    from mmd import hermes
+    from mmd.openrouter import OpenRouterError
+
+    calls = []
+
+    class FakeClient:
+        def update_guardrail(self, gid, *, allowed_models):
+            calls.append(list(allowed_models))
+            if "openrouter/auto" in allowed_models:
+                raise OpenRouterError(
+                    'PATCH /guardrails/x: HTTP 400 {"error":{"message":'
+                    '"Invalid allowed_models: openrouter/auto, openrouter/free","code":400}}')
+
+    n = hermes._push_allowlist(FakeClient(), "x",
+                               ["a/good", "openrouter/auto", "openrouter/free", "b/good"])
+    assert n == 2
+    assert calls[-1] == ["a/good", "b/good"]
+    assert len(calls) == 2          # tried, then retried without the bad ids
+
+
+def test_an_unrecognisable_failure_is_still_raised():
+    """Only the "invalid ids" case is recoverable. A 500, or an auth failure,
+    must not be swallowed into a half-applied policy."""
+    from mmd import hermes
+    from mmd.openrouter import OpenRouterError
+
+    class Boom:
+        def update_guardrail(self, gid, *, allowed_models):
+            raise OpenRouterError("HTTP 500 upstream exploded")
+
+    try:
+        hermes._push_allowlist(Boom(), "x", ["a/good"])
+    except OpenRouterError:
+        return
+    raise AssertionError("should have propagated")

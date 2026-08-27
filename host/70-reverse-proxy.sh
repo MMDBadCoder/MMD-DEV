@@ -32,6 +32,22 @@ apt-get install -y -qq nginx >/dev/null 2>&1
 install -d -m 0750 "$CERT_DIR"
 install -d -m 0755 "$WEBROOT"
 
+# --- room for two-label customer names -------------------------------------
+# nginx hashes server_name into fixed-size buckets, and refuses to START when a
+# name does not fit - "could not build server_names_hash". The default bucket is
+# 64 bytes on most builds, and a customer hostname is
+# <app>.<username>.<domain>: 32 + 1 + 32 + 1 + len(domain), which passes 64 well
+# before either label reaches the length the validators actually allow.
+#
+# So this is not tuning, it is a precondition for the vhost reconciler: without
+# it the first customer with a long name takes nginx down for everyone at the
+# next reload, and the error names the directive rather than the customer.
+cat > /etc/nginx/conf.d/mmd-tuning.conf <<'TUNING'
+# Managed by 70-reverse-proxy.sh. Edits are overwritten.
+server_names_hash_bucket_size 128;
+server_names_hash_max_size 4096;
+TUNING
+
 # A self-signed pair always exists. It is what the bootstrap phase serves on
 # 443, and what the IP-only fallback uses.
 if [ ! -f "$CERT_DIR/site.crt" ]; then

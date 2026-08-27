@@ -2,6 +2,96 @@
 
 Notable changes. Dates are the day the work landed on the production host.
 
+## [1.3.0] — 2026-08-26
+
+Live on the production host, except where noted. Almost entirely bug fixes,
+most of them reported by customers — `ping`, the Claude Code sign-in, the AI
+model allowlist, the Hermes toggle. No feature changes: the ports page, and the
+SSH and RDP addresses, are exactly as they were.
+
+Two of these were invisible for a reason worth naming. A deploy never restarted
+anything, and a failed schema patch logged below the level the app prints — so
+both a fix and a migration could be "shipped" and have no effect, with nothing
+saying so.
+
+### Fixed
+
+- **Enabling Hermes was impossible.** The endpoint validated its body with
+  `AiAction`, whose vocabulary belongs to Claude Code, so every `enable` came
+  back as `action String should match pattern '^(install|unlink)$'` — a raw
+  Pydantic error, in English, in front of a Persian interface. Separate models
+  now.
+- **Enabling Hermes then toasted "Claude Code آمادهٔ استفاده است"** — the wrong
+  product. Same root assumption as the above: that two AI features are one
+  feature. Hermes has its own sentences, pinned by a test.
+- **The deploy script never restarted anything.** It ended with
+  `systemctl start`, a no-op on an already-running unit, so a deploy copied new
+  code into `/opt/mmd` and left every service executing the old code from
+  memory. This is why the Hermes fix appeared not to work: the API had been up
+  for eleven hours and had never reloaded. Now `systemctl restart`.
+- **Schema patches shared one transaction.** Postgres aborts a whole
+  transaction after any failed command, so one unsupported patch silently
+  skipped every patch after it — and logged at `debug` while the app logs at
+  `info`, so nothing said so. One transaction per statement now, and skips log
+  at `warning` with the reason.
+- **`30-network-nftables.sh` deleted `docker0` on hosts that legitimately run
+  Docker.** The block exists for the bridge a *purged* Docker leaves behind but
+  fired on the mere existence of the interface. This host runs a StarRocks
+  cluster, Grafana and Prometheus on Docker networks. Now guarded on `dockerd`
+  being absent.
+- **The vhost reconciler was in no provisioning script**, so a rebuilt host
+  would have come up with every Hermes dashboard unpublished. It is installed
+  and enabled by `60-control-plane.sh` now.
+- **A config that failed `nginx -t` stayed on disk**, breaking the next
+  unrelated reload. The reconciler snapshots and rolls back.
+
+- **`ping` did not work inside a workspace.** Both routes to an ICMP socket
+  were closed: a new netns does not inherit the host's
+  `net.ipv4.ping_group_range` (and it cannot be set from inside an isolated
+  idmap), and `iputils-ping`'s `setcap` call fails silently under unprivileged
+  dpkg, so the binary arrived with no `cap_net_raw`. `image/net-fixups.sh` now
+  grants it per workspace — it cannot be baked into the golden image, because a
+  capability xattr embeds the rootid of the namespace it was set in and every
+  workspace has its own uid range.
+- **Every free model was blocked.** `build_allowlist` could not tell a
+  published price of zero from no published price, so all 17 of OpenRouter's
+  `:free` models were excluded from the guardrail and an agent using one got
+  `HTTP 404: No endpoints available matching your guardrail restrictions`.
+  Fixing that admitted the `openrouter/*` routers, which the guardrail rejects
+  by name — failing the whole PATCH and leaving a stale allowlist in force — so
+  they are denied explicitly and the sync now retries once without whatever ids
+  OpenRouter rejects.
+- **"Resync sign-in" reported success and changed nothing.** The config was
+  written only when `~/.claude.json` was absent, and Claude Code creates that
+  file on its first run — so once a customer had typed `claude` once, resync
+  could never set `hasCompletedOnboarding` again and every run opened the
+  first-run wizard, which reads as being asked to log in. It merges now,
+  preserving the customer's own settings. Success was also measured as "the
+  credentials file is non-empty", so the button reported success on exactly the
+  machines that were still broken; status now reports `onboarded` separately and
+  the page has a distinct state for it.
+- **The sign-in page asked for a username.** Copy-pasted from sign-up, never
+  sent to `/api/auth/login`, and it ran the availability check — so a returning
+  customer typing their own username was told it was taken.
+
+### Changed
+
+- Hermes connection details are laid out one value per row at full width. The
+  auto-fit grid packed an API key, a URL and a password into ~260px boxes that
+  each scrolled sideways.
+- `mmd-hermes-vhosts` superseded by **`mmd-vhosts`**: one nginx file per
+  customer instead of one per host, and an optional DNS-01 wildcard per customer
+  (`MMD_ACME_DNS_PLUGIN`) in place of per-host HTTP-01.
+- `server_names_hash_bucket_size` raised to 128.
+
+### Still outstanding
+
+- **Tenant-to-tenant isolation is not deployed.** The bridge-family nftables
+  table that blocks workspace↔workspace traffic is in the repo, but the rules
+  file on the host predates it, so one customer's machine can reach another's —
+  verified by reading a neighbour's SSH banner. Fixed by re-running
+  `30-network-nftables.sh`, which is now safe on this host. See OPERATIONS.
+
 ## [1.1.0] — 2026-08-24
 
 Live on **https://mmd-ai.ir** with a real certificate. Everything in this

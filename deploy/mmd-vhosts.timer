@@ -1,0 +1,14 @@
+[Unit]
+Description=Reconcile customer vhosts
+
+[Timer]
+# Two minutes: a customer naming an app waits for this to write the vhost and,
+# on the HTTP-01 fallback, for a certificate. Slower would read as broken;
+# faster would mean running certbot's retry logic more often than it can make
+# progress.
+OnBootSec=90s
+OnUnitActiveSec=2min
+AccuracySec=15s
+
+[Install]
+WantedBy=timers.target

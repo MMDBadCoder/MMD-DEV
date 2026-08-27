@@ -17,7 +17,13 @@ need_root
 #
 # Only delete them once Docker is genuinely gone and no other firewall manages
 # iptables, or this would tear down rules something else depends on.
-if ip link show docker0 >/dev/null 2>&1; then
+# ...but only when Docker is genuinely GONE. This block exists for the bridge a
+# PURGED Docker leaves behind, and it used to fire on the mere existence of
+# docker0 - which on a host that legitimately runs Docker means tearing the
+# bridge out from under running containers. Measured on this host: a StarRocks
+# cluster, Grafana and Prometheus were up and healthy on Docker networks when
+# this script would have deleted their bridge.
+if ! command -v dockerd >/dev/null 2>&1 && ip link show docker0 >/dev/null 2>&1; then
   log "removing leftover docker0 bridge"
   ip link set docker0 down 2>/dev/null || true
   ip link delete docker0 type bridge 2>/dev/null || true

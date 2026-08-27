@@ -309,3 +309,38 @@ def test_the_hsts_header_does_not_claim_subdomains():
     assert hsts, "no HSTS header configured"
     assert "includeSubDomains" not in hsts.group(0)
     assert "preload" not in hsts.group(0)
+
+
+# --- the bug: enabling Hermes answered with a schema error -----------------
+def test_hermes_accepts_enable_and_disable(env):
+    """Reported as: clicking "enable Hermes" printed
+
+        action String should match pattern '^(install|unlink)$'
+
+    The endpoint validated its body with AiAction, whose vocabulary belongs to
+    Claude Code. Pydantic rejected "enable" before the handler - which asked
+    for exactly that word - ever ran, so the toggle could not be switched on
+    at all.
+    """
+    client, db, ws, _ = env
+    ws.user.username = "ali"
+    db.commit()
+
+    r = client.post("/api/workspace/ai/hermes", json={"action": "enable"})
+    assert r.status_code == 200, r.text
+    assert r.json()["hermes"]["enabled"] is True
+    db.expire_all()
+    assert ws.hermes_enabled is True
+
+    r = client.post("/api/workspace/ai/hermes", json={"action": "disable"})
+    assert r.status_code == 200, r.text
+    assert r.json()["hermes"]["enabled"] is False
+
+
+def test_hermes_still_refuses_claudes_verbs(env):
+    client, db, ws, _ = env
+    ws.user.username = "ali"
+    db.commit()
+    for bad in ("install", "unlink", "delete", ""):
+        assert client.post("/api/workspace/ai/hermes",
+                           json={"action": bad}).status_code == 422

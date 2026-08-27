@@ -44,16 +44,32 @@ def init_db() -> None:
 
 
 def _patch_schema() -> None:
+    """Apply each patch in its OWN transaction.
+
+    This used to share one transaction across every statement, and that is a
+    trap specific to Postgres: once any command in a transaction fails, the
+    server aborts the whole thing and refuses every later command with
+    "current transaction is aborted". The except clause swallowed that, so a
+    single unsupported patch silently skipped EVERY patch after it - and logged
+    at debug, so nothing said so.
+
+    Found when `external_port DROP NOT NULL` never applied on a live host while
+    the same statement ran fine by hand. Per-statement transactions mean one
+    patch that cannot apply costs only itself.
+    """
     from sqlalchemy import text
-    with engine.begin() as conn:
-        for stmt in SCHEMA_PATCHES:
-            try:
+    log = logging.getLogger("mmd.db")
+    for stmt in SCHEMA_PATCHES:
+        try:
+            with engine.begin() as conn:
                 conn.execute(text(stmt))
-            except Exception:  # noqa: BLE001
-                # SQLite (the tests) rejects some of this syntax, and a patch
-                # that cannot apply must not stop the process booting. The
-                # column either exists or the next query says so loudly.
-                logging.getLogger("mmd.db").debug("schema patch skipped: %s", stmt)
+        except Exception as exc:  # noqa: BLE001
+            # SQLite (the tests) rejects some of this syntax, and a patch that
+            # cannot apply must not stop the process booting. Logged at WARNING
+            # with the reason, because "silently skipped" is how the above went
+            # unnoticed.
+            log.warning("schema patch skipped: %s (%s)",
+                        stmt, str(exc).splitlines()[0][:200])
 
 
 def get_session() -> Iterator[Session]:

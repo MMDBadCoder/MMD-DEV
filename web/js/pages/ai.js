@@ -77,7 +77,13 @@ function renderHermes(head, h) {
       ${waiting ? note("info", t("ai.hermes.preparing.body")) : ""}
 
       ${h.ready ? `
-        <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(260px,1fr))">
+        <!-- ONE column, full width. These are an API key, a URL and a password:
+             values that are read character by character or copied whole, not
+             skimmed. The auto-fit grid used elsewhere packed them into ~260px
+             boxes on a wide screen, so every one of them scrolled sideways
+             inside its own box - which is exactly the wrong shape for a value
+             you have to check. -->
+        <div class="grid" style="grid-template-columns:1fr;gap:10px">
           ${secretRow({ label: t("ai.hermes.key"), value: h.key,
                         hint: t("ai.hermes.key.hint") })}
           ${secretRow({ label: t("ai.hermes.dashuser"), value: h.dashboard_user,
@@ -125,7 +131,7 @@ function renderHermes(head, h) {
     b.innerHTML = `<span class="spinner"></span>${t("conn.working")}`;
     try {
       await post("/api/workspace/ai/hermes", { action: on ? "disable" : "enable" });
-      toast(t("ai.done"), "ok");
+      toast(t(on ? "ai.hermes.done.disabled" : "ai.hermes.done.enabled"), "ok");
     } catch (err) { $("#hermes-msg").innerHTML = note("bad", esc(err.message)); }
     aiPage({ tab: "hermes" });
   };
@@ -163,6 +169,67 @@ function usageCard(u) {
   </div>`;
 }
 
+/* Connecting Claude Code to a Telegram bot.
+ *
+ * Documented here rather than linked away because every step runs INSIDE the
+ * customer's machine, and the two things that decide whether it works at all
+ * are properties of this platform rather than of the plugin: the workspace has
+ * to be running, and it has to be able to reach api.telegram.org. Both are
+ * stated up front so nobody works through six steps to find out.
+ *
+ * Measured on this host: api.telegram.org answers from a workspace (HTTP 302,
+ * 24 ms), and `--channels` is accepted by the installed CLI even though it is
+ * absent from `claude --help`.
+ */
+const TG_STEPS = [
+  ["tg.s1", null],
+  ["tg.s2", "/plugin install telegram@claude-plugins-official"],
+  ["tg.s3", "/telegram:configure <TOKEN>"],
+  ["tg.s4", "claude --channels plugin:telegram@claude-plugins-official"],
+  ["tg.s5", "/telegram:access pair <CODE>"],
+  ["tg.s6", "/telegram:access policy allowlist"],
+];
+
+function telegramCard() {
+  const rows = TG_STEPS.map(([key, cmd], i) => `
+    <li style="margin-bottom:${cmd ? "14px" : "10px"}">
+      <span>${t(key)}</span>
+      ${cmd ? `<div class="row" style="gap:8px;align-items:center;flex-wrap:nowrap;margin-top:6px">
+        <input class="mono ltr" dir="ltr" readonly value="${esc(cmd)}" style="flex:1 1 auto">
+        <button class="btn icon ghost" data-copy="${esc(cmd)}" style="flex:0 0 auto">${icon.copy}</button>
+      </div>` : ""}
+    </li>`).join("");
+
+  return `<div class="card">
+    <h2>${t("tg.title")}</h2>
+    <p class="muted small" style="margin:4px 0 14px;max-width:74ch">${t("tg.sub")}</p>
+    ${note("info", t("tg.prereq"))}
+    <ol style="margin:14px 0 0;padding-inline-start:22px;font-size:14px;line-height:1.9">
+      ${rows}
+    </ol>
+    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(260px,1fr));margin-top:16px">
+      <div class="copybox">
+        <div class="copybox-h">${icon.info}${t("tg.where")}</div>
+        <ul>
+          <li>${t("tg.where.1")}<br><code class="ltr mono"
+            style="font-size:12px">~/.claude/channels/telegram/.env</code></li>
+          <li>${t("tg.where.2")}<br><code class="ltr mono"
+            style="font-size:12px">~/.claude/channels/telegram/inbox/</code></li>
+        </ul>
+      </div>
+      <div class="copybox bad">
+        <div class="copybox-h">${icon.alert}${t("tg.warn")}</div>
+        <ul><li>${t("tg.warn.1")}</li><li>${t("tg.warn.2")}</li></ul>
+      </div>
+    </div>
+    <p class="tiny dim" style="margin:14px 0 0">${t("tg.docs")}
+      <a class="ltr" dir="ltr" target="_blank" rel="noopener noreferrer"
+         href="https://github.com/anthropics/claude-plugins-official/blob/main/external_plugins/telegram/README.md"
+        >claude-plugins-official/external_plugins/telegram</a></p>
+  </div>`;
+}
+
+
 function renderClaude(head, c, usage) {
   const busy = !c.machine_running;
   // Three distinct states, three distinct primary actions. Collapsing them into
@@ -174,9 +241,11 @@ function renderClaude(head, c, usage) {
       <div class="between" style="margin-bottom:14px">
         <div><h2>Claude Code</h2>
           <p class="muted small" style="margin:4px 0 0">${t("ai.claude.desc")}</p></div>
-        <span class="pill"><span class="dot ${c.linked ? "on" : ""}"></span>${
-          c.linked ? t("ai.state.ready") : c.installed ? t("ai.state.installed")
-                                                       : t("ai.state.absent")}</span>
+        <span class="pill"><span class="dot ${c.linked && c.onboarded ? "on" : ""}"></span>${
+          c.linked && c.onboarded ? t("ai.state.ready")
+            : c.linked ? t("ai.state.setup")
+            : c.installed ? t("ai.state.installed")
+                          : t("ai.state.absent")}</span>
       </div>
 
       <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">
@@ -201,9 +270,12 @@ function renderClaude(head, c, usage) {
           ${icon.trash}${t("ai.unlink")}</button>` : ""}
       </div>
 
-      ${c.linked ? note("ok", t("ai.run")) : ""}
+      ${c.linked && c.onboarded ? note("ok", t("ai.run"))
+          : c.linked ? note("warn", t("ai.state.setup.body")) : ""}
       <div id="ai-msg"></div>
     </div>
+
+    ${telegramCard()}
 
     ${usageCard(usage)}
 
@@ -235,6 +307,11 @@ function renderClaude(head, c, usage) {
     } catch (err) { $("#ai-msg").innerHTML = note("bad", esc(err.message)); }
     aiPage({ tab: "claude" });
   };
+
+  $$("[data-copy]").forEach((b) => b.onclick = async () => {
+    try { await navigator.clipboard.writeText(b.dataset.copy); toast(t("ports.copied"), "ok"); }
+    catch { toast(t("ports.copyfail"), "bad"); }
+  });
 
   $("#ai-go").onclick = () => go("install",
     "#ai-go", action === "resync" ? t("ai.resyncing") : t("ai.installing"));

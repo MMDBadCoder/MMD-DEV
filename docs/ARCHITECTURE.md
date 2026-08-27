@@ -79,6 +79,15 @@ decorative.
 | `mmd-api` | `mmd` | **restricted** client cert, scoped to `ws-*` | start, stop, exec, resize, read metrics |
 | `mmd-worker` | `mmd` | metrics cert + the restricted client cert | scrape usage, stop on exhaustion |
 | `mmd-provisioner` | `root` | unix socket (full admin) | create, reset, archive, restore, destroy |
+| `mmd-vhosts` | `root` | none — reads the database only | write `/etc/nginx/sites-enabled`, run certbot |
+
+`mmd-vhosts` is a fourth component for one reason: it needs root *and* the
+internet, and neither of the others can give it both. `mmd-provisioner` is root
+but runs with `IPAddressDeny=any`, which is the single control that makes a root
+daemon acceptable — ACME issuance there would mean deleting it. `mmd-worker` has
+the internet but runs as `mmd` and cannot write `/etc/nginx` or run certbot. So
+it is a small reconciler on a two-minute timer with no listener, whose only
+input is a username already validated as a DNS label.
 
 `mmd-api` is the component exposed to the internet, so its authority is capped
 by construction rather than by trust. It **cannot** create a project, set

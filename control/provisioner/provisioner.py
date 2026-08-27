@@ -40,6 +40,7 @@ WS_DESTROY = REPO / "workspace" / "ws-destroy.sh"
 WS_RESET = REPO / "workspace" / "ws-reset.sh"
 AI_USAGE_SCAN = Path(__file__).resolve().parent / "scan_ai_usage.py"
 APT_FIXUPS = REPO / "image" / "apt-fixups.sh"
+NET_FIXUPS = REPO / "image" / "net-fixups.sh"
 
 SOCKET_PATH = os.environ.get("MMD_PROVISIONER_SOCKET", "/run/mmd/provisioner.sock")
 ALLOWED_GROUP = os.environ.get("MMD_GROUP", "mmd")
@@ -423,35 +424,59 @@ ClientAliveInterval 120
 """
 
 
-def _apply_apt_fixups(project: str) -> tuple[bool, str]:
-    """Install the apt configuration that makes `apt install firefox` work.
+def _apply_fixup_script(project: str, path: Path, slug: str,
+                        timeout: int = 900) -> tuple[bool, str]:
+    """Copy a fixup script into a workspace and run it there.
 
-    Ubuntu ships firefox as a stub that installs a snap, and snaps cannot run in
-    an unprivileged container - the install hook fails and leaves dpkg wedged.
-    image/apt-fixups.sh replaces it with Mozilla's real .deb repository. That
-    script is the single source of truth: the golden image runs it at build
-    time, and this runs the very same file on machines built before it existed.
+    The file in this repository is the single source of truth: the golden image
+    runs it at build time, and this runs the very same file on machines built
+    before it existed. Every fixup is idempotent, so calling them on each
+    provision costs a few seconds and removes any question of which machines
+    have them.
 
-    Idempotent, so calling it on every provision costs a few seconds and removes
-    any question of which machines have it.
+    Piped in on stdin rather than staged on a shared path: the content is the
+    repository's, not the customer's, and it lands somewhere only root inside
+    that workspace can write.
     """
     try:
-        script = APT_FIXUPS.read_text()
+        script = path.read_text()
     except OSError as e:  # noqa: BLE001
-        return False, f"cannot read {APT_FIXUPS}: {e}"
+        return False, f"cannot read {path}: {e}"
 
+    target = f"/usr/local/sbin/mmd-{slug}"
     ok, out = _run(["incus", "exec", "ws", "--project", project, "--", "bash", "-lc",
-                    "cat > /usr/local/sbin/mmd-apt-fixups && "
-                    "chmod 0755 /usr/local/sbin/mmd-apt-fixups"],
+                    f"cat > {target} && chmod 0755 {target}"],
                    timeout=120, stdin_text=script)
     if not ok:
         return False, f"could not install the fixup script: {out[-300:]}"
 
     ok, out = _run(["incus", "exec", "ws", "--project", project,
                     "--env", "DEBIAN_FRONTEND=noninteractive", "--",
-                    "bash", "-lc", "/usr/local/sbin/mmd-apt-fixups 2>&1"],
-                   timeout=900)
+                    "bash", "-lc", f"{target} 2>&1"],
+                   timeout=timeout)
     return ok, (out or "")[-1000:]
+
+
+def _apply_apt_fixups(project: str) -> tuple[bool, str]:
+    """Install the apt configuration that makes `apt install firefox` work.
+
+    Ubuntu ships firefox as a stub that installs a snap, and snaps cannot run in
+    an unprivileged container - the install hook fails and leaves dpkg wedged.
+    image/apt-fixups.sh replaces it with Mozilla's real .deb repository.
+    """
+    return _apply_fixup_script(project, APT_FIXUPS, "apt-fixups")
+
+
+def _apply_net_fixups(project: str) -> tuple[bool, str]:
+    """Grant the file capabilities dpkg could not.
+
+    `ping` arrives with no cap_net_raw because iputils-ping's postinst calls
+    setcap, and that call fails silently under an unprivileged dpkg. It cannot
+    be baked into the golden image either: idmap.isolated gives every workspace
+    its own uid range, and a capability xattr embeds the rootid of the namespace
+    it was set in. See image/net-fixups.sh.
+    """
+    return _apply_fixup_script(project, NET_FIXUPS, "net-fixups", timeout=300)
 
 
 def _measure(project: str, path: str) -> tuple[int | None, str]:
@@ -511,21 +536,97 @@ def _claude_expiry() -> int | None:
 # SYNTHESISED, not copied: the host's own ~/.claude.json is 59 kB of the
 # operator's history - every repository they have opened, their account record,
 # their feature flags - and none of it is needed to be signed in.
+#
+# `hasCompletedOnboarding` is the load-bearing key, and it is easy to
+# under-rate. Without it an interactive `claude` opens the first-run wizard -
+# "Welcome to Claude Code / Let's get started / Choose the text style" - which
+# customers reasonably report as "it is asking me to log in". Measured: two
+# HOMEs identical but for this key, one shows the wizard and the other goes
+# straight to the prompt. Credentials are valid either way; `claude -p` answers
+# normally in both, which is why this was invisible to every non-interactive
+# check.
 CLAUDE_MIN_CONFIG = {"hasCompletedOnboarding": True}
+
+# Merged into whatever ~/.claude.json already holds, rather than written only
+# when the file is absent.
+#
+# THE BUG THIS REPLACES: the old code was `[ -e ~/.claude.json ] && exit 0`.
+# Claude Code writes that file itself on its very FIRST run, before the customer
+# has finished anything - so from the moment they typed `claude` once, the
+# resync button could never set the onboarding key again. It reported success
+# every time and changed nothing, which is exactly what "I clicked resync and it
+# still asks me to log in" looks like from the outside.
+#
+# Merging keeps the instinct the old comment had right - the customer may have
+# their own settings by now and we must not flatten them - while still
+# guaranteeing the handful of keys the platform needs.
+CLAUDE_CONFIG_MERGE = r"""
+import json, os, shutil, sys, tempfile
+
+path = "/home/dev/.claude.json"
+want = json.load(sys.stdin)
+
+current = {}
+if os.path.exists(path):
+    try:
+        with open(path) as fh:
+            current = json.load(fh)
+        if not isinstance(current, dict):
+            raise ValueError("not a JSON object")
+    except (ValueError, OSError):
+        # Never silently destroy it. A corrupt config is still the customer's,
+        # and it is the only copy of whatever they had configured.
+        shutil.move(path, path + ".corrupt")
+        current = {}
+
+merged = dict(current)
+merged.update(want)
+if merged == current and os.path.exists(path):
+    print("claude-config: already correct")
+    raise SystemExit(0)
+
+# Written to a temporary file in the same directory and renamed, so a crash
+# mid-write cannot leave a truncated config behind.
+fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".claude.json.")
+try:
+    with os.fdopen(fd, "w") as fh:
+        json.dump(merged, fh, indent=2)
+    os.chmod(tmp, 0o600)
+    shutil.chown(tmp, "dev", "dev")
+    os.replace(tmp, path)
+finally:
+    if os.path.exists(tmp):
+        os.unlink(tmp)
+print("claude-config: merged %d key(s)" % len(want))
+"""
+
+
+# Reads the one key that decides whether `claude` starts into a prompt or into
+# the first-run wizard. Kept as its own snippet so the status check and the
+# merge cannot drift apart about what "configured" means.
+_ONBOARDED_PROBE = (
+    "import json;"
+    "print(json.load(open('/home/dev/.claude.json')).get('hasCompletedOnboarding') is True)"
+)
 
 
 def _claude_status(project: str) -> dict:
     rc, out, _ = _run_split(
         ["incus", "exec", "ws", "--project", project, "--", "bash", "-lc",
          "v=$(su - dev -c 'claude --version' 2>/dev/null | head -1); "
-         "printf 'version=%s\\nlinked=%s\\n' "
+         f"o=$(python3 -c \"{_ONBOARDED_PROBE}\" 2>/dev/null); "
+         "printf 'version=%s\\nlinked=%s\\nonboarded=%s\\n' "
          "  \"${v:-}\" "
-         "  \"$([ -s /home/dev/.claude/.credentials.json ] && echo yes || echo no)\""],
+         "  \"$([ -s /home/dev/.claude/.credentials.json ] && echo yes || echo no)\" "
+         "  \"${o:-False}\""],
         timeout=120)
     info = dict(ln.split("=", 1) for ln in (out or "").splitlines() if "=" in ln)
     version = (info.get("version") or "").strip()
     return {"installed": bool(version), "version": version or None,
-            "linked": info.get("linked", "no").strip() == "yes"}
+            "linked": info.get("linked", "no").strip() == "yes",
+            # Credentials make you signed in; this makes `claude` usable without
+            # walking a wizard first. The interface needs both to say "ready".
+            "onboarded": info.get("onboarded", "False").strip() == "True"}
 
 
 def _verb_ai_claude(project: str, req: dict) -> dict:
@@ -575,16 +676,19 @@ def _verb_ai_claude(project: str, req: dict) -> dict:
         return {"ok": False, "error": "could not write credentials",
                 "output": (out or "")[-300:]}
 
-    # Only if absent: the customer may have their own settings by now and this
-    # is not important enough to overwrite them.
-    _run(["incus", "exec", "ws", "--project", project, "--", "bash", "-lc",
-          "[ -e /home/dev/.claude.json ] && exit 0; "
-          "install -m 0600 -o dev -g dev /dev/null /home/dev/.claude.json && "
-          "cat > /home/dev/.claude.json"],
-         timeout=120, stdin_text=json.dumps(CLAUDE_MIN_CONFIG))
+    cfg_ok, cfg_out = _run(
+        ["incus", "exec", "ws", "--project", project, "--",
+         "python3", "-c", CLAUDE_CONFIG_MERGE],
+        timeout=120, stdin_text=json.dumps(CLAUDE_MIN_CONFIG))
+    if not cfg_ok:
+        return {"ok": False, "error": "could not write the Claude configuration",
+                "output": (cfg_out or "")[-300:]}
 
     st = _claude_status(project)
-    return {"ok": st["linked"], **st, "available": True,
+    # `linked` alone is not enough to promise a working `claude`. A machine with
+    # valid credentials but no onboarding key opens the first-run wizard, and
+    # reporting that as success is how the resync button came to lie.
+    return {"ok": st["linked"] and st["onboarded"], **st, "available": True,
             "expires_at": _claude_expiry()}
 
 
@@ -616,6 +720,7 @@ def handle(req: dict) -> dict:
             # customer has a working machine, just one where `apt install
             # firefox` still misbehaves, and that is repairable later.
             fx_ok, fx_out = _apply_apt_fixups(f"ws-{idx}")
+            _apply_net_fixups(f"ws-{idx}")
             if not fx_ok:
                 log.warning("apt fixups failed for ws-%s: %s", idx, fx_out[-300:])
             return {"ok": True, "output": out, "tier": t, "apt_fixups": fx_ok}
@@ -663,6 +768,9 @@ def handle(req: dict) -> dict:
         fx_ok, fx_out = _apply_apt_fixups(project)
         if not fx_ok:
             log.warning("apt fixups failed after reset of ws-%s: %s", idx, fx_out[-300:])
+        # A reset rebuilds the filesystem from the golden image, which takes the
+        # ping capability with it - so this is not optional housekeeping here.
+        _apply_net_fixups(project)
         return {"ok": True, "output": out[-2000:], "tier": t, "apt_fixups": fx_ok}
 
     if verb == "ai_usage":
@@ -695,7 +803,13 @@ def handle(req: dict) -> dict:
         return _verb_ai_claude(project, req)
 
     if verb == "apt_repair":
+        # Repairs both families. They share a cause - dpkg cannot do privileged
+        # things inside an unprivileged container - and an operator reaching for
+        # "repair" wants the machine working, not one named subsystem.
+        net_ok, net_out = _apply_net_fixups(project)
         ok, out = _apply_apt_fixups(project)
+        if not net_ok:
+            out = f"{net_out}\n{out}"
         return {"ok": ok, "output": out}
 
     if verb == "install_packages":

@@ -32,6 +32,13 @@ incus file push "$HERE/provision.sh" "$BUILD/root/provision.sh" --mode 0755
 # Shipped to the machine as well as run here, so support can re-run it later on
 # a workspace whose apt configuration has been edited by its owner.
 incus file push "$HERE/apt-fixups.sh" "$BUILD/usr/local/sbin/mmd-apt-fixups" --mode 0755
+# Shipped but deliberately NOT run here. A file capability set in the build
+# container carries that namespace's rootid, and workspaces run with
+# idmap.isolated=true - each with its own uid range - so a capability baked in
+# now would simply not apply once the image is unpacked into a workspace. The
+# provisioner runs it per workspace instead; this copy is so support can re-run
+# it by hand on a machine.
+incus file push "$HERE/net-fixups.sh" "$BUILD/usr/local/sbin/mmd-net-fixups" --mode 0755
 incus exec "$BUILD" --env WORKSPACE_USER="$WORKSPACE_USER" -- /root/provision.sh
 
 log "verifying the image can actually do the job"

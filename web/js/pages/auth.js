@@ -35,33 +35,14 @@ export function signInPage(_p, msg) {
     fields: `
       <div class="field"><label for="email">${t("auth.email")}</label>
         <input id="email" type="email" autocomplete="username" autofocus></div>
-      <div class="field"><label for="uname">${t("auth.username")}</label>
-        <input id="uname" class="ltr" dir="ltr" autocomplete="username"
-               maxlength="32" placeholder="ali-hosseini">
-        <p class="tiny dim" style="margin:6px 0 0" id="unamehint">${t("auth.username.hint")}</p></div>
       <div class="field"><label for="pw">${t("auth.password")}</label>
         <input id="pw" type="password" autocomplete="current-password"></div>`,
   }));
 
-  // Tells the customer a name is taken before they submit, and shows what the
-  // address will be - the username becomes part of a hostname, which is not
-  // obvious from a field labelled "username".
-  let unameTimer = null;
-  $("#uname").oninput = () => {
-    clearTimeout(unameTimer);
-    const hint = $("#unamehint");
-    const v = $("#uname").value.trim().toLowerCase();
-    if (!v) { hint.textContent = t("auth.username.hint"); hint.className = "tiny dim"; return; }
-    unameTimer = setTimeout(async () => {
-      try {
-        const r = await get(`/api/auth/username-available?name=${encodeURIComponent(v)}`);
-        hint.className = r.available ? "tiny ok-text" : "tiny bad-text";
-        hint.textContent = r.available
-          ? t("auth.username.free", `hermes.${r.username}.mmd-ai.ir`)
-          : (r.reason || t("auth.err.username_taken"));
-      } catch { /* the submit will say */ }
-    }, 350);
-  };
+  // No username field here. It is chosen once, at sign-up, and /api/auth/login
+  // takes only an email and a password - so the field that used to sit here was
+  // never sent anywhere. It also ran the availability check, which told a
+  // returning customer that their own username was already taken.
 
   $("#form").onsubmit = async (e) => {
     e.preventDefault();

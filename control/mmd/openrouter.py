@@ -44,7 +44,15 @@ TIMEOUT = 30.0
 # ceiling alone would let a cheap-looking variant of an expensive family
 # through. Matched as substrings against the model id.
 ALWAYS_DENY = ("o1-pro", "-pro:", "gpt-5-pro", "gpt-5.2-pro", "gpt-5.4-pro",
-               "gpt-5.5-pro", "-fast", "opus-4.7-fast")
+               "gpt-5.5-pro", "-fast", "opus-4.7-fast",
+               # OpenRouter's own router pseudo-models. The guardrail REFUSES
+               # these by name - `openrouter/auto`, `openrouter/free` and
+               # friends - and one invalid id fails the entire PATCH, leaving
+               # the previous allowlist silently in force. They are wrong on
+               # their own merits too: each picks a real model at request time,
+               # so a price ceiling checked when the list was written means
+               # nothing. Same reasoning as the `~` aliases below.
+               "openrouter/")
 
 
 class OpenRouterError(RuntimeError):
@@ -205,6 +213,45 @@ def price_per_mtok(model: dict) -> tuple[float, float]:
     return _num(p.get("prompt")) * 1_000_000, _num(p.get("completion")) * 1_000_000
 
 
+def is_priced(model: dict) -> bool:
+    """Has OpenRouter published a FIXED price for this model?
+
+    Three states share one representation in the catalogue, and collapsing them
+    is what caused two separate bugs:
+
+      absent / ""  -> not published yet. Excluded: guessing in the customer's
+                      favour is guessing with the operator's money.
+      "0"          -> published, and free. INCLUDED. Every `:free` variant.
+      "-1"         -> no fixed price at all; a ROUTER that picks a model at
+                      request time. Excluded, because a price ceiling cannot be
+                      enforced on something that decides its own model later.
+
+    The first bug: `_num` turns absent and "0" alike into 0.0, so a rule meant
+    for unpublished models excluded all 17 `:free` models, and an agent asking
+    for `nvidia/nemotron-3-ultra-550b-a55b:free` got
+
+        HTTP 404: No endpoints available matching your guardrail restrictions
+        and data policy
+
+    The second: fixing that admitted the "-1" routers, which the guardrail
+    rejects by name - failing the whole PATCH with a 400 and leaving the
+    previous allowlist in force.
+    """
+    p = model.get("pricing") or {}
+    seen = False
+    for k in ("prompt", "completion"):
+        raw = str(p.get(k) or "").strip()
+        if raw in ("", "None"):
+            continue
+        try:
+            if float(raw) < 0:
+                return False        # a router, not a price
+        except ValueError:
+            return False
+        seen = True
+    return seen
+
+
 def build_allowlist(models: list[dict], *, max_output_usd: float,
                     max_input_usd: float | None = None,
                     deny: tuple[str, ...] = ALWAYS_DENY,
@@ -220,6 +267,11 @@ def build_allowlist(models: list[dict], *, max_output_usd: float,
     Models with no price at all are excluded rather than assumed free: an
     unpriced entry is usually one whose cost is not yet published, and guessing
     in the customer's favour here is guessing with the operator's money.
+
+    Models priced at exactly ZERO - OpenRouter's `:free` variants - are INCLUDED.
+    They cost the operator nothing, so a ceiling meant to keep customers away
+    from expensive models has no reason to exclude the cheapest ones. See
+    is_priced() for the bug that conflated the two.
     """
     allowed: list[str] = []
     denies = tuple(deny) + tuple(extra_deny)
@@ -236,9 +288,13 @@ def build_allowlist(models: list[dict], *, max_output_usd: float,
         # through a price ceiling checked at the moment it was written.
         if mid.startswith("~"):
             continue
-        pin, pout = price_per_mtok(m)
-        if pin <= 0 and pout <= 0:
+        # Unpriced, not free. An entry with no published price is usually one
+        # whose cost is not announced yet, and guessing in the customer's
+        # favour there is guessing with the operator's money. A published price
+        # of ZERO is a different thing entirely and passes any ceiling.
+        if not is_priced(m):
             continue
+        pin, pout = price_per_mtok(m)
         if pout > max_output_usd:
             continue
         if max_input_usd is not None and pin > max_input_usd:

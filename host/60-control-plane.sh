@@ -108,13 +108,34 @@ install -d -m 0700 /var/lib/mmd/host-claude/.claude
 install -m 0644 "$REPO/deploy/mmd-provisioner.service" /etc/systemd/system/
 install -m 0644 "$REPO/deploy/mmd-api.service" /etc/systemd/system/
 install -m 0644 "$REPO/deploy/mmd-worker.service" /etc/systemd/system/
+install -m 0644 "$REPO/deploy/mmd-vhosts.service" /etc/systemd/system/
+install -m 0644 "$REPO/deploy/mmd-vhosts.timer" /etc/systemd/system/
+
+# The vhost reconciler used to be installed by hand, which meant it existed on
+# the one host somebody had run the commands on and nowhere else - a rebuild
+# would have come up with every customer's dashboard and named app silently
+# unpublished. Superseded by mmd-vhosts; the old unit is stopped here so an
+# upgraded host does not keep two reconcilers writing the same directory.
+systemctl disable --now mmd-hermes-vhosts.timer mmd-hermes-vhosts.service 2>/dev/null || true
+rm -f /etc/systemd/system/mmd-hermes-vhosts.service /etc/systemd/system/mmd-hermes-vhosts.timer
+
 systemctl daemon-reload
 # All three must be enabled, not just the provisioner: without this the
 # dashboard and the billing worker simply do not come back after a reboot,
 # and nobody notices until a user tries to sign in.
-systemctl enable --now mmd-provisioner.service
-systemctl enable mmd-api.service mmd-worker.service
-systemctl start mmd-api.service mmd-worker.service || true
+systemctl enable mmd-provisioner.service mmd-api.service mmd-worker.service
+
+# RESTART, not start. `systemctl start` on an already-active unit is a no-op,
+# and these units are normally already running when a deploy happens - so this
+# script copied new code into /opt/mmd and then left every service executing
+# the OLD code from memory. uvicorn runs without --reload, so nothing picked
+# the change up until the next reboot.
+#
+# Found the hard way: a fix for the Hermes toggle was deployed and the bug kept
+# reproducing, because the API had been up for eleven hours and never restarted.
+systemctl restart mmd-provisioner.service
+systemctl restart mmd-api.service mmd-worker.service
+systemctl enable --now mmd-vhosts.timer
 
 log "control plane installed"
 systemctl is-active mmd-provisioner.service

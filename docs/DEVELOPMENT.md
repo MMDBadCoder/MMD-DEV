@@ -25,6 +25,11 @@ Individual suites:
 ```bash
 /opt/mmd/venv/bin/python -m pytest tests/test_billing.py -q
 node --test tests/web/paths.test.mjs
+
+# Against the RUNNING host: ping from inside a workspace, and a real prompt
+# through a real workspace key. Unit tests cover the logic of both; only this
+# can say the machine works.
+sudo bash verify/p7-agent-and-net.sh
 ```
 
 ---
@@ -184,6 +189,12 @@ created after a bug that a three-line test would have caught.
 
 1. Add the name to `VERBS`.
 2. Re-validate every argument. Assume the caller is compromised.
+`60-control-plane.sh` restarts all three itself. It used to end in
+`systemctl start`, which is a no-op on a running unit — so a deploy copied new
+code into `/opt/mmd` and left every service executing the old code from memory.
+If a fix you just deployed does not appear, check the service start time before
+looking anywhere else.
+
 3. Restart `mmd-provisioner` when deploying, or the verb comes back as
    `unknown verb`.
 

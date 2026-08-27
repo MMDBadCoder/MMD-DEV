@@ -75,6 +75,7 @@ Browser ── nginx ──► mmd-api ──► restricted Incus cert ──►
                         │
                      PostgreSQL
    mmd-worker ── metering · hourly settlement · reconciliation
+   mmd-vhosts ── hermes.<username>.mmd-ai.ir vhosts · certificates
 ```
 
 The internet-facing service holds a **restricted** Incus certificate. Incus
@@ -95,7 +96,8 @@ Full detail in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 | `image/` | Golden workspace image, and the apt fixups every workspace needs |
 | `workspace/` | `ws-create` / `ws-reset` / `ws-destroy` — the definition of a workspace |
 | `control/mmd/` | FastAPI control plane: Incus client, billing, admission, API |
-| `control/provisioner/` | The only root component; unix socket, allowlisted verbs |
+| `control/provisioner/` | The only root component with a socket; allowlisted verbs |
+| `host/mmd-vhosts.py` | Root reconciler: per-customer nginx vhosts and certificates |
 | `web/` | Persian RTL single-page app — no build step, no framework |
 | `tests/` | Unit tests: pytest for the backend, `node:test` for the interface |
 | `verify/` | Suites that check the **running host**, not the source |

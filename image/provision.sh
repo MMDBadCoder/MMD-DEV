@@ -12,6 +12,7 @@ apt-get install -y --no-install-recommends \
     python3 python3-pip python3-venv \
     ripgrep fd-find jq tmux vim nano less tree unzip zip \
     htop procps iproute2 iputils-ping dnsutils netcat-openbsd \
+    libcap2-bin \
     openssh-server sudo locales man-db bash-completion rsync file
 
 # Docker CE from Docker's own repo: newer than Ubuntu's docker.io and ships

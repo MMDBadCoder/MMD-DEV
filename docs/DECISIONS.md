@@ -1203,3 +1203,289 @@ reconciles: mint on enable, sync the cap when the balance moves, poll usage,
 revoke on disable. The provisioner cannot hold it either — it runs with
 `IPAddressDeny=any` and has no route to OpenRouter at all, which is exactly the
 property that makes it safe to run as root.
+
+## Enabling Hermes answered with a schema error
+
+Clicking the toggle printed, at the customer:
+
+    action String should match pattern '^(install|unlink)$'
+
+`/api/workspace/ai/hermes` validated its body with `AiAction`, a model written
+for Claude Code, whose verbs are `install` and `unlink`. The handler two lines
+below asked for the opposite vocabulary — `ws.hermes_enabled = (body.action ==
+"enable")` — so Pydantic rejected every request with a 422 before the code that
+wanted the word `enable` ever ran. The feature could not be switched on at all.
+
+Two models now, `AiAction` and `HermesAction`, because the two services really
+do have different verbs: Claude Code is *installed* on a machine, while Hermes
+is *enabled* as an intent the worker reconciles. Sharing one model made a
+sentence about one service into a wall in front of the other. The handler's own
+`if body.action not in (...)` check is gone with it: it was unreachable, and an
+unreachable guard is what let the mismatch look plausible in review.
+
+Worth noting the failure was also a leak of the kind `test_no_english_prose.py`
+exists to catch — a raw Pydantic error reaching a Persian interface. That test
+walks `fail()` and `return`, not FastAPI's own 422 bodies, which is why it did
+not fire.
+
+## A vhost reconciler that cannot leave nginx broken
+
+`mmd-hermes-vhosts.py` wrote its files, ran `nginx -t`, and on failure logged
+and returned — leaving the file that failed to parse exactly where it was. The
+next unrelated reload, a certbot renewal say, would then fail too, long after
+the log explaining why had scrolled past.
+
+`mmd-vhosts.py` replaces it. It snapshots what it is about to change and
+restores it when `nginx -t` fails, writes one file per customer rather than one
+per host (both `nginx -t` and a reload re-read the whole directory), and can
+obtain a DNS-01 wildcard per customer when `MMD_ACME_DNS_PLUGIN` is configured.
+
+### A correction about Let's Encrypt
+
+The wildcard path was initially justified on the grounds that HTTP-01 per host
+could not scale, because Let's Encrypt allows 50 certificates per registered
+domain per week. **That reasoning was wrong**: renewals are exempt from that
+limit — ARI-based renewals are exempt from every limit — so 50/week applies only
+to *genuinely new* names. One name per customer costs one certificate, once,
+and then renews for free. Confirmed in production:
+`hermes.heidary13794.mmd-ai.ir` was issued and served in **12 seconds**.
+
+So the wildcard is an optimisation, not a prerequisite. `ISSUE_BUDGET = 40`
+remains, and it bounds *churn* rather than capacity: exhausting the quota would
+take renewal down for every customer.
+
+## The reconciler was never in a provisioning script
+
+`mmd-hermes-vhosts.service` and its timer existed on the one host somebody had
+run the install commands on, and in no script. A rebuild would have come up with
+every customer's dashboard silently unpublished. `60-control-plane.sh` now
+installs and enables the unit, and disables the superseded one.
+
+
+## Why SSH and RDP cannot be addressed by name
+
+Asked repeatedly, and worth recording with the measurement rather than the
+assertion, because the answer is counter-intuitive: HTTP applications *can* be
+served at `<name>.<username>.<domain>`, so why can't SSH?
+
+Captured from a real OpenSSH client, connecting to two different hostnames:
+
+    you type:      ssh ssh.heidary13794.mmd-ai.ir
+    client sends:  b'SSH-2.0-OpenSSH_10.2p1 Ubuntu-2ubuntu3.5\r\n'
+
+    you type:      ssh ssh.test-1.mmd-ai.ir
+    client sends:  b'SSH-2.0-OpenSSH_10.2p1 Ubuntu-2ubuntu3.5\r\n'
+
+Byte-identical. The same capture for HTTP:
+
+    b'GET / HTTP/1.1\r\nHost: api.heidary13794.mmd-ai.ir:39222\r\n...'
+    b'GET / HTTP/1.1\r\nHost: api.test-1.mmd-ai.ir:39222\r\n...'
+
+HTTP puts the hostname **inside** the connection as text, which is the only
+reason many names can share one IP address. The SSH client resolves the name to
+an address and then discards it; nothing on the wire says which workspace was
+meant. TLS solves this with SNI, but SSH is not TLS, and RDP does not open with
+a TLS ClientHello either — there is an X.224 preamble first, and mstsc only
+sends SNI in some configurations.
+
+So on ONE IPv4 address, `<username>.<domain>:22` cannot be routed per customer.
+Not a missing rule: nftables can match destination address and port, and both
+are identical for every name. **The information a rule would need is not in the
+connection.**
+
+What would work, in order of preference:
+
+1. **IPv6.** A `/64` gives every workspace its own global address; an `AAAA` per
+   name and port 22 works with no proxy at all. This host has no IPv6 — no
+   address, no default route — so it is a question for the provider. Iranian
+   clients without IPv6 would still need the port, so it is an additional path
+   rather than a replacement.
+2. **More IPv4 addresses**, one per workspace. Does not scale past a handful.
+3. **Route on the SSH username** — `ssh <username>@<domain>`, via a bastion such
+   as sshpiper. Works on one address because the username travels inside the
+   protocol, the way `Host:` does. Costs a new privileged daemon on port 22,
+   displacing the host's own sshd, and does nothing for RDP.
+
+None of these is built. SSH and RDP keep `CONFIG.endpoint_host:PORT`.
+
+
+## `ping` did not work in a workspace
+
+Reported from inside a machine:
+
+    dev@ws:~$ ping google.com
+    ping: socktype: SOCK_RAW
+    ping: socket: Operation not permitted
+    ping: => missing cap_net_raw+p capability or setuid?
+
+`ping` needs one of two things, and a fresh workspace had neither. Measured
+rather than guessed:
+
+| | host | workspace |
+|---|---|---|
+| `net.ipv4.ping_group_range` | `0 2147483647` | `65534 65534` |
+| `getcap /bin/ping` | — | *(none)* |
+| `dev` gid | | `1002` |
+
+1. The **unprivileged ICMP datagram** route needs the caller's gid inside
+   `ping_group_range`. A new network namespace does **not** inherit the host's
+   value, and `1002` is outside `65534 65534`. That sysctl also cannot be fixed
+   from inside: `/proc/sys/net` is not writable from the container's user
+   namespace and `sysctl -w` is refused — verified.
+2. The **SOCK_RAW** route needs `cap_net_raw` on the binary. Ubuntu's
+   `iputils-ping` postinst sets exactly that with `setcap`, and **that call
+   fails silently when dpkg runs inside an unprivileged container**, so the file
+   arrives with no capability at all.
+
+`image/net-fixups.sh` sets the capability from inside the workspace. Confirmed:
+`2 packets transmitted, 2 received, 0% packet loss`.
+
+### Why it cannot go in the golden image
+
+Because it would not survive, and the reason is worth writing down. Workspaces
+run with **`security.idmap.isolated=true`**, so every one has its own uid range
+(one measured at `Hostid 1065536`). A v3 `security.capability` xattr embeds the
+**rootid of the namespace it was set in**, so a capability baked into the shared
+image carries the *build* container's rootid and does not apply in a workspace
+mapped anywhere else.
+
+So it is applied per workspace, by the provisioner, at provision, at reset — a
+reset rebuilds the filesystem from the image and takes the capability with it —
+and via the existing repair verb. It must also be re-appliable because
+`apt upgrade` replaces `/bin/ping` and drops the capability again.
+
+`libcap2-bin` became an explicit package rather than a transitive dependency: it
+provides `setcap`, which is the tool the whole fixup is built around.
+
+### One mechanism, not two
+
+`_apply_apt_fixups` grew a sibling, so the plumbing became
+`_apply_fixup_script(project, path, slug)` and both call it. The two families
+share a cause — dpkg cannot do privileged things inside an unprivileged
+container — which is also why `apt_repair` now runs both: an operator reaching
+for "repair" wants the machine working, not one named subsystem.
+
+
+## Every free model was blocked, and the fix blocked the routers
+
+Reported from a customer's agent:
+
+    ❯ tell me scope of this host...
+    ┊ HTTP 404: No endpoints available matching your guardrail restrictions
+      and data policy
+
+on `nvidia/nemotron-3-ultra-550b-a55b:free`. Read as a data-policy problem at
+first glance. It was ours.
+
+`build_allowlist` carried `if pin <= 0 and pout <= 0: continue`, written to
+exclude models whose price OpenRouter has not published — the reasoning being
+that guessing in the customer's favour is guessing with the operator's money.
+But `_num` turns an **absent** price into `0.0` as well, so "unknown" and
+"free" were the same value. Measured against the live catalogue: **17 `:free`
+models, 0 of them in the allowlist.**
+
+Three states share one representation, and collapsing any two of them breaks
+something:
+
+| pricing | meaning | verdict |
+|---|---|---|
+| absent / `""` | not published yet | exclude — could be anything |
+| `"0"` | published, and free | **include** — cheapest thing on the menu |
+| `"-1"` | no fixed price; a router that picks a model at request time | exclude — a ceiling checked now means nothing later |
+
+`is_priced()` now separates them.
+
+### The fix caused a second outage, which is the more interesting half
+
+Admitting zero-priced models also admitted the `"-1"` routers, and the guardrail
+**refuses those by name**:
+
+    HTTP 400 Invalid allowed_models: openrouter/auto, openrouter/auto-beta,
+    openrouter/bodybuilder, openrouter/free, openrouter/fusion, openrouter/pareto-code
+
+They had been excluded by accident — `-1 <= 0` satisfied the old rule — so
+removing the rule removed the accident with it.
+
+A rejected PATCH does not fail loudly: **the previous allowlist stays in force**,
+which looks configured and is not. That is now the second time this has happened
+(floating `~` aliases were the first, and are excluded for the same reason). So
+two changes, not one:
+
+- the whole `openrouter/` namespace joins `ALWAYS_DENY`;
+- `_push_allowlist()` reads the rejected ids back out of the 400 and **retries
+  once without them**. "The catalogue grew something new" is not a problem that
+  stops recurring, and a policy missing one model beats a policy silently months
+  out of date.
+
+Result: 374 models allowed, all 17 free ones among them, no routers, and the
+expensive families still blocked.
+
+### Note on free endpoints and the data policy
+
+The error names the data policy as well as the guardrail, and that half is real:
+OpenRouter's free endpoints are often served by providers that may train on
+inputs, and an account that forbids those sees exactly this 404 with a perfectly
+correct allowlist. Worth deciding deliberately — routing customers' code through
+training-enabled endpoints is a privacy question, not a billing one.
+
+
+## "Resync sign-in" reported success and changed nothing
+
+Reported as: clicking «تازه‌سازی ورود» succeeded, and `claude` in the workspace
+still opened a login flow.
+
+The credentials were never the problem. They were present, valid, and
+`claude -p 'reply ok'` answered normally — which is why nothing non-interactive
+ever caught this. What was missing was one key in `~/.claude.json`:
+
+    hasCompletedOnboarding: true
+
+Measured with two HOMEs identical but for that key:
+
+| | first interactive screen |
+|---|---|
+| without | `Welcome to Claude Code v2.1.240 / Let's get started. / Choose the text style…` |
+| with | straight to the normal trust-folder prompt |
+
+The first is the onboarding wizard, and a customer meeting it reasonably reports
+it as being asked to log in.
+
+### Why the key stayed missing, which is the actual bug
+
+The install path wrote the config like this:
+
+    [ -e /home/dev/.claude.json ] && exit 0
+
+*Write it only when the file is absent.* Claude Code creates that file on its
+very first run, before the customer has finished anything — so from the moment
+they typed `claude` once, resync could never set the key again, while continuing
+to report success on every click.
+
+The evidence was visible across the host:
+
+    ws-1  11 keys  hasCompletedOnboarding absent   <- reported the bug
+    ws-8   1 key   hasCompletedOnboarding true     <- file was absent; ours landed
+    ws-3  44 keys  hasCompletedOnboarding true     <- onboarded by hand
+
+Only the machine where the customer had never run `claude` got the key.
+
+It is a **merge** now, not all-or-nothing. The old comment's instinct — *the
+customer may have their own settings by now* — was right; the implementation was
+what was wrong. Verified on the reporting workspace: 11 keys became 12,
+`oauthAccount`, `userID` and `machineID` all intact, and `claude` goes straight
+to the prompt.
+
+Corrupt configs are moved to `.claude.json.corrupt` rather than overwritten, and
+a JSON array — which `json.load` accepts and `.update()` would choke on — counts
+as corrupt.
+
+### The button lied because success was measured wrong
+
+`_claude_status` derived `linked` from `[ -s .credentials.json ]` — the file is
+non-empty. That is "a file exists", not "this works", and install returned
+`ok: st["linked"]`. So the one machine where the wizard still opened was
+precisely the machine that reported success.
+
+Status now carries `onboarded` separately, install requires both, and the page
+has a third state — «نیازمند تنظیم اولیه» — for signed-in-but-not-configured.
+Calling that "ready" is what made the bug invisible for so long.

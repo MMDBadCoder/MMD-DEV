@@ -167,7 +167,9 @@ export function secretRow({ label, value, hint = "", masked = true }) {
     <div class="between" style="gap:8px;margin-top:4px">
       <code class="ltr mono secret-v" id="${id}" data-v="${esc(value ?? "")}"
         data-masked="${masked ? "1" : "0"}"
-        style="flex:1;overflow:auto;white-space:nowrap;font-size:13px"
+        style="flex:1;min-width:0;overflow-x:auto;white-space:nowrap;font-size:14px;
+               padding:7px 10px;border-radius:8px;background:var(--surface);
+               border:1px solid var(--border)"
         >${masked ? "••••••••••••" : esc(value ?? "")}</code>
       ${masked ? `<button class="btn ghost small secret-eye" data-for="${id}"
         title="${esc(label)}">${icon.eye || "👁"}</button>` : ""}

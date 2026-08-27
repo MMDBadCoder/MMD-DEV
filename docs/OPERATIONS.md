@@ -157,6 +157,46 @@ systemctl is-enabled nftables          # expect: masked
 sudo systemctl restart incus
 ```
 
+### One workspace can reach another
+
+Tenant-to-tenant isolation lives in a **bridge-family** nftables table, because
+two workspaces on the same bridge exchange bridged frames that never traverse
+the ip/inet forward hook. If `table bridge mmd_bridge_isolation` is missing, the
+`inet` rules will look correct and isolation will still be off.
+
+```bash
+nft list tables | grep mmd_bridge_isolation     # expect a match
+# reproduce, from one workspace against another's address:
+incus exec ws --project ws-1 -- timeout 4 bash -c 'exec 3<>/dev/tcp/10.42.0.20/22'
+```
+
+The fix is to re-run the rules generator. Note it also deletes `docker0` when
+Docker is installed on the **host**, which is disruptive if anything is running
+there — check first, and if so apply only the rules file:
+
+```bash
+sudo bash host/30-network-nftables.sh          # full, deletes docker0
+nft -c -f /etc/nftables/mmd-isolation.nft      # dry run before applying
+```
+
+### A Hermes dashboard is not being served
+
+`mmd-vhosts.timer` reconciles the Hermes dashboards every two minutes. It
+writes one file per customer and never reloads a config that does not parse.
+
+```bash
+systemctl list-timers mmd-vhosts.timer
+journalctl -u mmd-vhosts.service -n 50
+ls /etc/nginx/sites-enabled/mmd-vhost-*
+```
+
+A dashboard that stays unreachable is almost always the certificate. On the
+HTTP-01 fallback, check whether the weekly issuance budget is spent —
+`/var/lib/mmd/hermes/issued.json` — and whether a host is in backoff
+(`*.fail` in the same directory). Configuring `MMD_ACME_DNS_PLUGIN` and
+`MMD_ACME_DNS_CREDENTIALS` switches to one wildcard certificate per customer and
+makes the problem go away permanently.
+
 ### The second workspace will not start
 
 `Instance DNS name "ws" already used on network`. The bridge needs

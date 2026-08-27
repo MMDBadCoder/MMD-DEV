@@ -22,6 +22,7 @@ run "P2  privilege escalation"       "$HERE/p2-escalation.sh"
 run "P2  certificate scope"         "$HERE/p2-cert-scope.sh"
 run "P5  reboot readiness"           "$HERE/p5-reboot-readiness.sh"
 run "P6  AI sign-in + packages"      "$HERE/p6-integrations.sh" "$IDX"
+run "P7  workspace net + the agent"  "$HERE/p7-agent-and-net.sh"
 
 echo
 echo "════════════════════════════════════════════════════════════"
