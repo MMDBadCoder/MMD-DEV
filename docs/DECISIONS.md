@@ -1598,6 +1598,20 @@ button does.
 `last_activity` is still recorded and still read by nothing.
 
 
+## Capture DOM event targets before opening an asynchronous dialog
+
+The machine's power-off button worked while power-on appeared dead. Power-on
+first awaited the new cost confirmation and only then read
+`event.currentTarget`; browsers clear that dispatch-only property before the
+promise resolves, so the handler dereferenced `null` and never reached the API.
+Capture the element before any `await`. The regression test asserts this
+ordering because an API test cannot observe browser event lifetime.
+
+A blocked power action is also left clickable. Disabling it gave no response at
+all and looked like the same bug; clicking now renders the structured Persian
+reason supplied by the workspace response.
+
+
 ## Destructive and long operations are durable state, not HTTP requests
 
 Factory reset, package installation and account deletion can take minutes and

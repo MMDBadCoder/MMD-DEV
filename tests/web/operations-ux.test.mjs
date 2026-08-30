@@ -16,6 +16,21 @@ test("power-on confirmation uses authoritative balance and hourly costs", () => 
     assert.match(machine, new RegExp(`w\\.${field}`));
 });
 
+test("power button is captured before awaiting its confirmation dialog", () => {
+  const handler = machine.slice(machine.indexOf('$("#power").onclick'),
+                                machine.indexOf('$("#keep-running")'));
+  assert.ok(handler.indexOf("const b = e.currentTarget") >= 0);
+  assert.ok(handler.indexOf("const b = e.currentTarget") <
+            handler.indexOf("await confirmDialog"));
+});
+
+test("an affordability blocker explains itself instead of disabling the button", () => {
+  const button = machine.slice(machine.indexOf('id="power"') - 180,
+                               machine.indexOf('id="power"') + 180);
+  assert.doesNotMatch(button, /can_power_on/);
+  assert.match(machine, /!w\.can_power_on && w\.blocked[\s\S]*toast/);
+});
+
 test("resize confirmation compares the old and new cost", () => {
   assert.match(resources, /before\.max_per_hour/);
   assert.match(resources, /after\.max_per_hour/);

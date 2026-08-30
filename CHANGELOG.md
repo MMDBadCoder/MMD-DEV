@@ -8,6 +8,11 @@ Live on the production host.
 
 ### Added
 
+- **Fixed the power-on button after its cost confirmation was introduced.** The
+  browser event target is captured before awaiting the dialog, and an
+  insufficient-credit click now explains itself instead of acting like a dead
+  disabled control.
+
 - **OpenRouter keys now close at zero credit and reopen after top-up.** The
   worker uses the supplier's hard disabled flag, meters before closing, and
   restores cumulative spend headroom when credit returns. The AI page explains

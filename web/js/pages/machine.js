@@ -121,7 +121,7 @@ export async function machinePage() {
           <p class="muted small">${on ? t("machine.control.on") : t("machine.control.off")}</p>
         </div>
         <button class="btn ${on ? "danger" : "primary"} machine-power" id="power"
-          ${busy || (!on && !w.can_power_on) ? "disabled" : ""}>
+          ${busy ? "disabled" : ""}>
           ${icon.power}<span>${on ? t("machine.power.off") : t("machine.power.on")}</span></button>
       </div>
       ${w.blocked ? `<div class="machine-blocked">${
@@ -197,6 +197,15 @@ export async function machinePage() {
     </div>`);
 
   $("#power").onclick = async (e) => {
+    // currentTarget belongs to the synchronous event dispatch and browsers
+    // clear it before an awaited dialog resolves. Capture the element first;
+    // otherwise power-off works while power-on dies after confirmation without
+    // ever sending its request.
+    const b = e.currentTarget;
+    if (!on && !w.can_power_on && w.blocked) {
+      toast(t("blocked." + w.blocked.code, w.blocked), "bad");
+      return;
+    }
     if (!on) {
       const preview = `<div class="cost-preview">
         <div><span>${t("machine.preview.balance")}</span><b>${fmtMoney(w.credits)} ${CURRENCY}</b></div>
@@ -207,7 +216,6 @@ export async function machinePage() {
       if (!await confirmDialog(t("machine.preview.title"), preview,
                                t("machine.power.on"), { tone: "primary" })) return;
     }
-    const b = e.currentTarget;
     b.disabled = true;
     b.innerHTML = `<span class="spinner"></span>${
       on ? t("machine.power.turningoff") : t("machine.power.turningon")}`;
