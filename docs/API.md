@@ -155,6 +155,14 @@ is denied the file API. Paths are validated server-side.
 | `POST` | `/api/workspace/ai/claude` | `{action: "install"｜"unlink"}`. Installs the CLI and carries the platform sign-in across |
 | `POST` | `/api/workspace/ai/hermes` | `{enabled, telegram_enabled?, telegram_token?, telegram_users?}`. Enables Hermes and optionally its Telegram gateway. A token and comma-separated numeric sender allowlist are required when first enabling Telegram; the token is never returned |
 
+Administrator AI configuration is separated by responsibility:
+
+| Method | Path | Notes |
+|---|---|---|
+| `GET/PUT` | `/api/admin/openrouter` | USD-to-Toman conversion, OpenRouter workspace/guardrail IDs and model-price ceiling. OpenRouter has no platform discount |
+| `GET/PUT` | `/api/admin/hermes` | Hermes default model and adoption state |
+| `GET/POST/PUT/DELETE` | `/api/admin/ai-pricing` | Claude Code model prices; Claude's discount is stored through the restricted settings endpoint |
+
 The AI state includes `hermes.telegram_enabled`, `telegram_ready`,
 `telegram_users`, and `telegram_error`. The control plane keeps the bot token
 only until the worker has delivered it to the workspace's protected environment

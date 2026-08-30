@@ -1,10 +1,4 @@
-/* Hermes configuration: what it costs and what customers may reach.
- *
- * Separate from the Claude page because the two services have opposite cost
- * structures and share nothing but an exchange rate. Claude is a flat
- * subscription, so a discount is margin; OpenRouter is metered, so the same
- * discount is money leaving the account per token. Putting both discounts on
- * one screen is how someone edits the wrong one. */
+/* Hermes product defaults. Supplier billing and guardrails live in OpenRouter. */
 import { get, put } from "../api.js";
 import { $, esc, fmtNum, note, toast } from "../ui.js";
 import { t } from "../i18n.js";
@@ -36,31 +30,11 @@ export async function adminHermesPage() {
     </div>
 
     <div class="card">
-      <h3>${t("adm.hermes.pricing")}</h3>
-      <p class="tiny dim" style="margin:2px 0 14px;max-width:70ch">${t("adm.hermes.pricing.sub")}</p>
-      <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr))">
-        <label class="field"><span>${t("adm.hermes.discount")}</span>
-          <input id="disc" class="field-input ltr" type="number" min="0" max="100"
-            step="0.1" value="${d.discount_percent}"></label>
-        <label class="field"><span>${t("adm.rate")}</span>
-          <input id="rate" class="field-input ltr" type="number" min="0" step="1000"
-            value="${d.usd_to_toman}"></label>
-      </div>
-      ${note("info", t("adm.hermes.discount.warn"))}
-    </div>
-
-    <div class="card">
       <h3>${t("adm.hermes.models")}</h3>
-      <p class="tiny dim" style="margin:2px 0 14px;max-width:70ch">${t("adm.hermes.models.sub")}</p>
-      <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(220px,1fr))">
-        <label class="field"><span>${t("adm.hermes.default")}</span>
-          <input id="model" class="field-input ltr mono" type="text"
-            value="${esc(d.default_model)}"></label>
-        <label class="field"><span>${t("adm.hermes.ceiling")}</span>
-          <input id="ceil" class="field-input ltr" type="number" min="0" step="1"
-            value="${d.max_output_usd}"></label>
-      </div>
-      ${note("info", t("adm.hermes.ceiling.sub"))}
+      <p class="tiny dim" style="margin:2px 0 14px;max-width:70ch">${t("adm.hermes.default.sub")}</p>
+      <label class="field"><span>${t("adm.hermes.default")}</span>
+        <input id="model" class="field-input ltr mono" type="text"
+          value="${esc(d.default_model)}"></label>
     </div>
 
     <div class="btn-row">
@@ -73,10 +47,7 @@ export async function adminHermesPage() {
     b.disabled = true;
     try {
       await put("/api/admin/hermes", {
-        discount_percent: Number($("#disc").value),
-        usd_to_toman: Number($("#rate").value),
         default_model: $("#model").value.trim(),
-        max_output_usd: Number($("#ceil").value),
       });
       toast(t("common.saved"), "ok");
       adminHermesPage();

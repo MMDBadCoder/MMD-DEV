@@ -1822,3 +1822,28 @@ is enabled if it did not load its environment. Its unit therefore names the
 protected `.env` explicitly, and provisioning rejects the install when the
 gateway journal contains that condition. Saved account credentials are the
 durable source for repair; the workspace delivery token remains one-shot.
+
+
+## OpenRouter has conversion, Claude has discount, Hermes has neither
+
+Three concepts were previously grouped under Hermes because Hermes was the
+first consumer of managed OpenRouter keys. That made supplier configuration
+look like an agent setting and left two screens capable of editing related
+commercial values.
+
+The ownership boundary is now explicit. OpenRouter owns the shared
+USD-to-Toman exchange rate, its customer workspace ID, its default guardrail ID
+and the guardrail price ceiling. Supplier usage is Pay as you go: one dollar of
+reported spend is charged as one dollar converted to Toman. The billing layer
+returns a zero-percent discount for OpenRouter even when a legacy discount row
+exists, so an old database value cannot silently reintroduce loss-making bills.
+
+Claude Code owns model list prices and the only customer discount. Its platform
+subscription makes that a commercial policy rather than supplier cost.
+Hermes owns only its default model, installation state and integrations; it
+uses the customer's managed OpenRouter key by default. The same division is
+visible in separate customer and administrator tabs.
+
+Host resource tariffs, admission ratios and monitoring share a separate
+operations section. The admin overview contains only work requiring attention,
+so changing policy is never mixed into routine account review.

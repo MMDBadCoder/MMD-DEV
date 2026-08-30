@@ -14,7 +14,8 @@ import { t } from "../i18n.js";
 export const SECTIONS = [
   { key: "",            path: "/console/admin",            ic: "sliders" },
   { key: "users",       path: "/console/admin/users",      ic: "users" },
-  { key: "monitoring",  path: "/console/admin/monitoring", ic: "chart" },
+  { key: "policy",      path: "/console/admin/policy",     ic: "chart" },
+  { key: "openrouter",  path: "/console/admin/openrouter", ic: "plug" },
   { key: "claude",      path: "/console/admin/claude",     ic: "sparkle" },
   { key: "hermes",      path: "/console/admin/hermes",     ic: "shield" },
   { key: "tickets",     path: "/console/admin/tickets",    ic: "chat" },

@@ -68,8 +68,10 @@ WORKSPACE_SLUG = "mmd-customers"
 
 # Discovered at runtime and cached in settings, never hardcoded: the ids are
 # per-account, so a compiled-in value would be wrong on any other deployment.
-SETTING_WORKSPACE_ID = "hermes_workspace_id"
-SETTING_GUARDRAIL_ID = "hermes_guardrail_id"
+SETTING_WORKSPACE_ID = "openrouter_workspace_id"
+SETTING_GUARDRAIL_ID = "openrouter_guardrail_id"
+LEGACY_WORKSPACE_ID = "hermes_workspace_id"
+LEGACY_GUARDRAIL_ID = "hermes_guardrail_id"
 
 # Admin-configurable policy.
 SETTING_DEFAULT_MODEL = "hermes_default_model"
@@ -152,9 +154,14 @@ def ensure_platform(db, client: OpenRouter) -> Platform:
     the same account all converge on the same workspace instead of accumulating
     duplicates.
     """
-    wanted_ws = _get(db, SETTING_WORKSPACE_ID)
-    wanted_gr = _get(db, SETTING_GUARDRAIL_ID)
+    wanted_ws = _get(db, SETTING_WORKSPACE_ID) or _get(db, LEGACY_WORKSPACE_ID)
+    wanted_gr = _get(db, SETTING_GUARDRAIL_ID) or _get(db, LEGACY_GUARDRAIL_ID)
     if wanted_ws and wanted_gr:
+        # Rename old settings without forcing a new supplier workspace. The
+        # legacy rows can remain harmlessly for rollback compatibility.
+        _set(db, SETTING_WORKSPACE_ID, wanted_ws)
+        _set(db, SETTING_GUARDRAIL_ID, wanted_gr)
+        db.commit()
         return Platform(wanted_ws, wanted_gr)
 
     found = None

@@ -359,11 +359,11 @@ def test_openrouter_defaults_to_billing_at_cost(db):
     assert 1.0 * usd_rate * AP.discount_multiplier(discount) == usd_rate
 
 
-def test_changing_one_service_does_not_move_the_other(db):
+def test_a_stale_openrouter_discount_setting_is_ignored(db):
     from mmd.models import Setting
     db.add(Setting(key="openrouter_discount_percent", value="25"))
     db.commit()
-    assert svc.ai_settings(db, "openrouter")[1] == 25.0
+    assert svc.ai_settings(db, "openrouter")[1] == 0.0
     assert svc.ai_settings(db, "claude")[1] == 90.0
 
 

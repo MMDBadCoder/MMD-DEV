@@ -299,6 +299,11 @@ def ai_settings(db: Session, service: str = AI_SERVICE) -> tuple[float, float]:
             return default
 
     usd = g("usd_to_toman", aipricing.DEFAULT_AI_SETTINGS["usd_to_toman"])
+    # OpenRouter is pay-as-you-go supplier spend. It is converted at the
+    # configured exchange rate, never discounted. Keeping this invariant here
+    # prevents a stale setting or a second admin form from changing the bill.
+    if service == "openrouter":
+        return usd, 0.0
     key = aipricing.discount_key(service)
     default = aipricing.DEFAULT_AI_SETTINGS.get(key, 0.0)
     # `ai_discount_percent` was the single global setting before the split.

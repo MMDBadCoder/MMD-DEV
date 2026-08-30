@@ -1,7 +1,7 @@
 /* AI model prices, admin side.
  *
  * Three things multiply together to make a customer's token bill: the model's
- * USD rate, the exchange rate, and the discount. All three are editable here,
+ * Anthropic list rates and the Claude-only discount are editable here,
  * because Anthropic changes its prices and this host should not need a deploy
  * to keep up - and because a customer asking "why does this cost that" deserves
  * an answer that can be pointed at. */
@@ -46,11 +46,6 @@ export async function aiPricingPage() {
     <div class="card">
       <div class="row">
         <div style="flex:1 1 200px">
-          <label for="usdrate">${t("adm.ai.usdrate")}</label>
-          <input id="usdrate" class="ltr" dir="ltr" type="number" step="1" min="0"
-                 value="${d.usd_to_toman}">
-        </div>
-        <div style="flex:1 1 200px">
           <label for="discount">${t("adm.ai.discount")}</label>
           <input id="discount" class="ltr" dir="ltr" type="number" step="1"
                  min="0" max="100" value="${d.discount_percent}">
@@ -88,8 +83,7 @@ export async function aiPricingPage() {
   $("#saverates").onclick = async () => {
     try {
       await put("/api/admin/settings", {
-        usd_to_toman: String(Number($("#usdrate").value)),
-        ai_discount_percent: String(Number($("#discount").value)),
+        claude_discount_percent: String(Number($("#discount").value)),
       });
       toast(t("adm.ai.saved"), "ok");
     } catch (e) { $("#ratemsg").innerHTML = note("bad", esc(e.message)); }

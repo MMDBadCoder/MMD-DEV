@@ -21,7 +21,7 @@ from sqlalchemy.pool import StaticPool             # noqa: E402
 from mmd import app as appmod                      # noqa: E402
 from mmd import ports as PORTS                     # noqa: E402
 from mmd import service as svc                     # noqa: E402
-from mmd.models import (Base, CreditAccount, ExposedPort, Notification, PortKind, User,  # noqa: E402
+from mmd.models import (Base, CreditAccount, ExposedPort, Notification, PortKind, Setting, User,  # noqa: E402
                         UserStatus, Workspace, WorkspaceState)
 
 
@@ -92,6 +92,35 @@ def test_admin_can_power_off_a_customer_workspace(env, monkeypatch):
     db.refresh(ws)
     assert ws.state == WorkspaceState.OFF
     assert ws.desired_on is False
+
+
+def test_openrouter_admin_settings_have_no_discount_and_use_supplier_names(env):
+    client, db, ws, _ = env
+    response = client.put("/api/admin/openrouter", json={
+        "usd_to_toman": 175000,
+        "workspace_id": "or-workspace",
+        "guardrail_id": "or-guardrail",
+        "max_output_usd": 30,
+    })
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["usd_to_toman"] == 175000
+    assert data["workspace_id"] == "or-workspace"
+    assert data["guardrail_id"] == "or-guardrail"
+    assert data["discount_percent"] == 0
+
+
+def test_capacity_settings_do_not_repeat_ai_configuration(env):
+    client, db, ws, _ = env
+    db.add_all([Setting(key="usd_to_toman", value="175000"),
+                Setting(key="openrouter_guardrail_id", value="guardrail")])
+    db.commit()
+
+    data = client.get("/api/admin/settings").json()
+
+    assert "usd_to_toman" not in data
+    assert "openrouter_guardrail_id" not in data
+    assert "overcommit_cpu" in data
 
 
 def test_a_brand_new_machine_already_has_both_addresses(env):

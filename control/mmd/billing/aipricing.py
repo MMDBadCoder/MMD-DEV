@@ -51,8 +51,9 @@ SEED_PRICES: dict[str, tuple[float, float, float, float, float]] = {
 
 # Admin-set, stored in the settings table.
 #
-# The discount is PER SERVICE, and that is not a nicety - the two services have
-# opposite cost structures and one rate cannot be right for both:
+# Discount exists only for Claude. The two suppliers have opposite cost
+# structures and pretending both support a commercial discount silently loses
+# money:
 #
 #   * Claude runs on a flat subscription. A customer's marginal token costs the
 #     operator essentially nothing, so selling at a tenth of Anthropic's list
@@ -63,7 +64,7 @@ SEED_PRICES: dict[str, tuple[float, float, float, float, float]] = {
 #
 # The exchange rate stays shared: it converts a currency, and a dollar is a
 # dollar whichever supplier it goes to.
-SERVICES = ("claude", "openrouter")
+SERVICES = ("claude",)
 
 DEFAULT_AI_SETTINGS: dict[str, float] = {
     "usd_to_toman": 200_000.0,
@@ -71,7 +72,6 @@ DEFAULT_AI_SETTINGS: dict[str, float] = {
     # because that is what an operator says out loud, and converting it in one
     # place is safer than everyone remembering which is which.
     "claude_discount_percent": 90.0,
-    "openrouter_discount_percent": 0.0,
 }
 
 

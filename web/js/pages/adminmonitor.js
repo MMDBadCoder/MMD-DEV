@@ -4,8 +4,8 @@
  * say who is causing it - which is the half that leads to an action, because
  * "a core is busy" is not something anyone can act on and "this account is
  * using a core" is. */
-import { get } from "../api.js";
-import { $$, fmtNum, note } from "../ui.js";
+import { get, put } from "../api.js";
+import { $, $$, esc, fmtNum, icon, note, toast } from "../ui.js";
 import { t } from "../i18n.js";
 import { render } from "../main.js";
 import { adminHead } from "./adminnav.js";
@@ -14,10 +14,11 @@ import { usageChart, multiChart, windowPicker, wireWindowPicker,
 
 export async function adminMonitorPage() {
   const minutes = savedWindow();
-  const [host, per, cap] = await Promise.all([
+  const [host, per, cap, settings] = await Promise.all([
     get(`/api/admin/metrics?minutes=${minutes}`).catch(() => null),
     get(`/api/admin/metrics/per-user?minutes=${minutes}`).catch(() => null),
     get("/api/admin/capacity").catch(() => null),
+    get("/api/admin/settings").catch(() => ({})),
   ]);
 
   if (!host) {
@@ -35,7 +36,17 @@ export async function adminMonitorPage() {
   const tierMem = Math.max(...memSeries.flatMap((s) => s.points.map((p) => p.value)), 1);
 
   render(`
-    ${adminHead("monitoring", t("adm.mon.title"), t("adm.mon.sub"))}
+    ${adminHead("policy", t("adm.policy.title"), t("adm.policy.sub"))}
+
+    <div class="card">
+      <h3>${t("adm.rates")}</h3>
+      <div class="row">${Object.entries(settings).map(([k, v]) => `
+        <div style="min-width:230px"><label for="s-${k}" class="ltr">${
+          esc(k.replace(/_/g, " "))}</label>
+          <input id="s-${k}" class="ltr" data-setting="${esc(k)}" value="${esc(v)}"></div>`).join("")}</div>
+      <div class="btn-row" style="margin-top:16px"><button class="btn primary" id="save-policy">${
+        icon.save}${t("adm.save")}</button></div>
+    </div>
 
     <div class="card">
       <div class="between" style="margin-bottom:6px">
@@ -83,4 +94,10 @@ export async function adminMonitorPage() {
     </div>` : ""}`);
 
   wireWindowPicker(document, (m) => { saveWindow(m); adminMonitorPage(); });
+  $("#save-policy").onclick = async () => {
+    const body = {};
+    $$('[data-setting]').forEach((i) => body[i.dataset.setting] = i.value);
+    try { await put("/api/admin/settings", body); toast(t("adm.saved"), "ok"); }
+    catch (e) { toast(e.message, "bad"); }
+  };
 }

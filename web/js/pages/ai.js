@@ -13,7 +13,8 @@ import { $, $$, icon, esc, note, toast, stamp, confirmDialog,
 import { t, CURRENCY } from "../i18n.js";
 import { render } from "../main.js";
 
-const TABS = [{ key: "claude", ic: "sparkle" }, { key: "hermes", ic: "shield" }];
+const TABS = [{ key: "openrouter", ic: "plug" }, { key: "claude", ic: "sparkle" },
+              { key: "hermes", ic: "shield" }];
 
 function tabBar(active, d) {
   return `<div class="tabs2">${TABS.map((tb) => {
@@ -45,9 +46,24 @@ export async function aiPage(params) {
     ${tabBar(tab, d)}
     ${d.claude.machine_running ? "" : note("warn", t("ai.machineoff"))}`;
 
-  return tab === "hermes"
-    ? renderHermes(head, d.hermes)
-    : renderClaude(head, d.claude, usage);
+  if (tab === "openrouter") return renderOpenRouter(head, d.hermes);
+  return tab === "hermes" ? renderHermes(head, d.hermes)
+                          : renderClaude(head, d.claude, usage);
+}
+
+function renderOpenRouter(head, h) {
+  render(`${head}<div class="card">
+    <div class="between"><div><h2>OpenRouter</h2>
+      <p class="muted small">${t("ai.openrouter.desc")}</p></div>
+      <span class="pill"><span class="dot ${h.ready ? "on" : ""}"></span>${
+        h.ready ? t("ai.ready") : t("ai.notready")}</span></div>
+    ${h.credit_blocked ? note("warn", t("ai.hermes.creditblocked")) : ""}
+    ${h.ready ? secretRow({ label: t("ai.openrouter.key"), value: h.key,
+                            hint: t("ai.openrouter.key.hint") })
+              : note("info", t("ai.openrouter.enable.hermes"))}
+    <p class="muted small">${t("ai.openrouter.billing")}</p>
+  </div>`);
+  wireSecrets(document, t("conn.copied"));
 }
 
 /* Hermes.
@@ -91,6 +107,7 @@ function renderHermes(head, h) {
       ${h.error ? note("bad", t("ai.hermes.error")) : ""}
       ${h.credit_blocked ? note("warn", t("ai.hermes.creditblocked")) : ""}
       ${waiting ? note("info", t("ai.hermes.preparing.body")) : ""}
+      ${note("info", t("ai.hermes.openrouter.default"))}
 
       ${h.ready ? `
         <!-- ONE column, full width. These are an API key, a URL and a password:
@@ -100,8 +117,6 @@ function renderHermes(head, h) {
              inside its own box - which is exactly the wrong shape for a value
              you have to check. -->
         <div class="grid" style="grid-template-columns:1fr;gap:10px">
-          ${secretRow({ label: t("ai.hermes.key"), value: h.key,
-                        hint: t("ai.hermes.key.hint") })}
           ${secretRow({ label: t("ai.hermes.dashuser"), value: h.dashboard_user,
                         masked: false })}
           ${secretRow({ label: t("ai.hermes.dashpass"), value: h.dashboard_password })}

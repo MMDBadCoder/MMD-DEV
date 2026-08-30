@@ -2373,13 +2373,21 @@ def admin_get_settings(_: User = Depends(require_admin),
                        db: Session = Depends(get_session)) -> dict:
     from .scheduler.admission import DEFAULTS as CAP_DEFAULTS
     stored = svc.get_settings(db)
+    allowed = set(pricing.DEFAULT_RATES) | set(CAP_DEFAULTS)
     return {**{k: str(v) for k, v in pricing.DEFAULT_RATES.items()},
-            **{k: str(v) for k, v in CAP_DEFAULTS.items()}, **stored}
+            **{k: str(v) for k, v in CAP_DEFAULTS.items()},
+            **{k: str(v) for k, v in stored.items() if k in allowed}}
 
 
 @app.put("/api/admin/settings")
 def admin_put_settings(body: dict[str, str], admin: User = Depends(require_admin),
                        db: Session = Depends(get_session)) -> dict:
+    from .scheduler.admission import DEFAULTS as CAP_DEFAULTS
+    allowed = set(pricing.DEFAULT_RATES) | set(CAP_DEFAULTS) | {
+        aipricing.discount_key(svc.AI_SERVICE)}
+    unknown = sorted(set(body) - allowed)
+    if unknown:
+        fail(400, "invalid_setting", "This setting does not belong to this panel.")
     for k, v in body.items():
         row = db.get(Setting, k)
         if row is None:
@@ -2582,28 +2590,22 @@ def admin_user_detail(user_id: int, minutes: int = 10080,
 @app.get("/api/admin/hermes")
 def admin_hermes_get(_: User = Depends(require_admin),
                      db: Session = Depends(get_session)) -> dict:
-    usd_rate, discount = svc.ai_settings(db, hermes.SERVICE)
     enabled = db.scalar(select(func.count()).select_from(Workspace)
                         .where(Workspace.hermes_enabled.is_(True))) or 0
     ready = db.scalar(select(func.count()).select_from(Workspace)
                       .where(Workspace.hermes_key_hash.isnot(None))) or 0
     return {"default_model": hermes.default_model(db),
-            "max_output_usd": hermes.max_output_usd(db),
-            "usd_to_toman": usd_rate,
-            "discount_percent": discount,
             "workspaces_enabled": int(enabled),
             "workspaces_ready": int(ready),
             # Whether the worker can reach OpenRouter at all. The API cannot
             # check directly - it does not hold the management key, by design -
             # so it reports whether the workspace has ever been discovered.
-            "configured": bool(hermes._get(db, hermes.SETTING_WORKSPACE_ID))}
+            "configured": bool(hermes._get(db, hermes.SETTING_WORKSPACE_ID)
+                               or hermes._get(db, hermes.LEGACY_WORKSPACE_ID))}
 
 
 class HermesConfig(BaseModel):
     default_model: str | None = None
-    max_output_usd: float | None = None
-    discount_percent: float | None = None
-    usd_to_toman: float | None = None
 
 
 @app.put("/api/admin/hermes")
@@ -2611,17 +2613,50 @@ def admin_hermes_put(body: HermesConfig, admin: User = Depends(require_admin),
                      db: Session = Depends(get_session)) -> dict:
     if body.default_model is not None:
         hermes._set(db, hermes.SETTING_DEFAULT_MODEL, body.default_model.strip())
-    if body.max_output_usd is not None:
-        hermes._set(db, hermes.SETTING_MAX_OUTPUT_USD,
-                    str(max(0.0, float(body.max_output_usd))))
-    if body.discount_percent is not None:
-        hermes._set(db, aipricing.discount_key(hermes.SERVICE),
-                    str(max(0.0, min(100.0, float(body.discount_percent)))))
-    if body.usd_to_toman is not None:
-        hermes._set(db, "usd_to_toman", str(max(0.0, float(body.usd_to_toman))))
     db.commit()
     svc.audit(db, admin.id, "admin_hermes_config", None)
     return admin_hermes_get(admin, db)
+
+
+class OpenRouterConfig(BaseModel):
+    usd_to_toman: float | None = None
+    workspace_id: str | None = None
+    guardrail_id: str | None = None
+    max_output_usd: float | None = None
+
+
+@app.get("/api/admin/openrouter")
+def admin_openrouter_get(_: User = Depends(require_admin),
+                         db: Session = Depends(get_session)) -> dict:
+    usd_rate, _ = svc.ai_settings(db, hermes.SERVICE)
+    workspace_id = (hermes._get(db, hermes.SETTING_WORKSPACE_ID)
+                    or hermes._get(db, hermes.LEGACY_WORKSPACE_ID))
+    guardrail_id = (hermes._get(db, hermes.SETTING_GUARDRAIL_ID)
+                    or hermes._get(db, hermes.LEGACY_GUARDRAIL_ID))
+    return {"usd_to_toman": usd_rate,
+            "workspace_id": workspace_id,
+            "guardrail_id": guardrail_id,
+            "max_output_usd": hermes.max_output_usd(db),
+            "configured": bool(workspace_id and guardrail_id),
+            "discount_percent": 0.0}
+
+
+@app.put("/api/admin/openrouter")
+def admin_openrouter_put(body: OpenRouterConfig,
+                         admin: User = Depends(require_admin),
+                         db: Session = Depends(get_session)) -> dict:
+    if body.usd_to_toman is not None:
+        hermes._set(db, "usd_to_toman", str(max(0.0, float(body.usd_to_toman))))
+    if body.workspace_id is not None:
+        hermes._set(db, hermes.SETTING_WORKSPACE_ID, body.workspace_id.strip())
+    if body.guardrail_id is not None:
+        hermes._set(db, hermes.SETTING_GUARDRAIL_ID, body.guardrail_id.strip())
+    if body.max_output_usd is not None:
+        hermes._set(db, hermes.SETTING_MAX_OUTPUT_USD,
+                    str(max(0.0, float(body.max_output_usd))))
+    db.commit()
+    svc.audit(db, admin.id, "admin_openrouter_config", None)
+    return admin_openrouter_get(admin, db)
 
 
 # --- AI pricing -----------------------------------------------------------

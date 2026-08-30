@@ -4,6 +4,16 @@ Notable changes. Dates are the day the work landed on the production host.
 
 ## [1.4.0] — 2026-08-30
 
+- Reorganized AI administration around supplier boundaries: OpenRouter now
+  owns exchange-rate, workspace and guardrail policy; Claude owns the only
+  discount; Hermes owns only its product default and runtime adoption state.
+  OpenRouter billing ignores legacy discount settings and always converts the
+  supplier's Pay-as-you-go cost directly from USD to Toman.
+- Added separate OpenRouter, Claude Code and Hermes customer tabs. Hermes now
+  states explicitly that it uses the customer's managed OpenRouter key by
+  default, while the key itself is presented in the OpenRouter tab.
+- Moved resource tariffs, capacity policy and host monitoring into one dedicated
+  admin section. The overview is now an attention queue without configuration.
 - Renamed the customer Security area to Account because it now owns identity,
   reusable Telegram settings and password management. The previous URL remains
   a compatible alias for saved bookmarks.

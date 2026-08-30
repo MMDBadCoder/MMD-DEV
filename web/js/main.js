@@ -19,6 +19,7 @@ import { adminUsersPage } from "./pages/adminusers.js";
 import { adminUserPage } from "./pages/adminuser.js";
 import { adminMonitorPage } from "./pages/adminmonitor.js";
 import { adminHermesPage } from "./pages/adminhermes.js";
+import { adminOpenRouterPage } from "./pages/adminopenrouter.js";
 import { aiPage } from "./pages/ai.js";
 import { supportPage } from "./pages/support.js";
 import { adminTicketsPage } from "./pages/admintickets.js";
@@ -204,7 +205,9 @@ route("/console/admin", { title: "مدیریت", view: adminPage, admin: true })
 route("/console/admin/tickets", { title: "تیکت‌ها", view: adminTicketsPage, admin: true });
 route("/console/admin/users", { title: "کاربران", view: adminUsersPage, admin: true });
 route("/console/admin/users/:id", { title: "کاربر", view: adminUserPage, admin: true });
-route("/console/admin/monitoring", { title: "پایش", view: adminMonitorPage, admin: true });
+route("/console/admin/policy", { title: "تعرفه‌ها و سیاست ظرفیت", view: adminMonitorPage, admin: true });
+route("/console/admin/monitoring", { title: "تعرفه‌ها و سیاست ظرفیت", view: adminMonitorPage, admin: true });
+route("/console/admin/openrouter", { title: "OpenRouter", view: adminOpenRouterPage, admin: true });
 route("/console/admin/hermes", { title: "Hermes", view: adminHermesPage, admin: true });
 route("/console/admin/claude", { title: "قیمت‌گذاری Claude", view: aiPricingPage, admin: true });
 // The old address, kept so a bookmark or an open tab does not 404.
