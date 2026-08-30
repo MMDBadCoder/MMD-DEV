@@ -2,12 +2,13 @@
 
 Notable changes. Dates are the day the work landed on the production host.
 
-## [1.4.0] — 2026-08-30
+## [1.5.0] — 2026-08-30
 
-- Published applications now have two genuine routes: a managed HTTPS hostname
-  such as `x.mmd-ai.ir:8080`, selected by HTTP Host/TLS SNI, and the existing
+- Published applications now have two routes: a plain HTTP hostname such as
+  `x.mmd-ai.ir:8080`, selected by the HTTP Host header, and the existing
   `ports.mmd-ai.ir:<external>` endpoint for direct TCP and UDP traffic. Web
-  links become clickable only after certificate and nginx reconciliation.
+  links become clickable only after successful nginx reconciliation. HTTPS on
+  arbitrary application ports is intentionally unsupported.
 - Reorganized AI administration around supplier boundaries: OpenRouter now
   owns exchange-rate, workspace and guardrail policy; Claude owns the only
   discount; Hermes owns only its product default and runtime adoption state.
@@ -18,6 +19,9 @@ Notable changes. Dates are the day the work landed on the production host.
   default, while the key itself is presented in the OpenRouter tab.
 - Moved resource tariffs, capacity policy and host monitoring into one dedicated
   admin section. The overview is now an attention queue without configuration.
+
+## [1.4.0] — 2026-08-30
+
 - Renamed the customer Security area to Account because it now owns identity,
   reusable Telegram settings and password management. The previous URL remains
   a compatible alias for saved bookmarks.

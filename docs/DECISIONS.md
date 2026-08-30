@@ -1856,13 +1856,17 @@ It worked, but the hostname was cosmetic: raw TCP and UDP do not carry the DNS
 name, so the external port still selected the workspace.
 
 Each customer-published service now also gets
-`<username>.<domain>:<internal-port>`. An nginx stream listener distinguishes
-plaintext HTTP from a TLS handshake, then the HTTP layer selects the workspace
-using `Host` or SNI and proxies to the same internal port. Different customers
-may therefore both publish port 8080 without sharing an external DNAT port.
+`<username>.<domain>:<internal-port>`. nginx selects the workspace using the
+plain HTTP `Host` header and proxies to the same internal port. Different
+customers may therefore both publish port 8080 without sharing an external
+DNAT port.
 
 This web route does not pretend to solve generic layer-4 routing. The existing
 `ports.<domain>:<external-port>` DNAT remains the TCP/UDP endpoint and is also
 what SSH, RDP and non-HTTP protocols use. A per-port readiness flag prevents the
-UI from linking the HTTPS name until certificate issuance and a successful
-`nginx -t` and reload have published it.
+UI from linking the HTTP name until a successful `nginx -t` and reload have
+published it. HTTPS on arbitrary application ports is intentionally omitted:
+multiplexing plaintext and TLS on every customer-selected port adds a stream
+proxy, dynamic module and certificate lifecycle for little benefit. Customers
+who require end-to-end TLS can still publish their own TLS listener through the
+raw external-port route.

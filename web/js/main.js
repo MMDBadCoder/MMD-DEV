@@ -119,7 +119,7 @@ function chrome(bodyHtml) {
            short of editing the URL, and clicking the logo is what they tried. -->
       <a href="/" class="brand" style="color:inherit;text-decoration:none">
         <span class="logo">${icon.machine}</span><span>${t("brand")}</span>
-        <small class="app-version" dir="ltr">v${me?.version || "1.4.0"}</small></a>
+        <small class="app-version" dir="ltr">v${me?.version || "1.5.0"}</small></a>
       <nav class="nav">${nav}</nav>
       <div class="spacer"></div>
       <div class="header-right">

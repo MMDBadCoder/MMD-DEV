@@ -137,27 +137,22 @@ def test_the_server_block_proxies_to_the_workspace_and_redirects_plain_http(vh):
     assert "add_header Strict-Transport-Security" not in block
 
 
-def test_application_block_accepts_http_and_https_on_the_internal_port(vh):
-    block = vh.server_block("ali.mmd-ai.ir", "wildcard-ali",
-                            "10.42.0.13", 8080, 8080)
-    stream = vh.stream_config({8080})
-    assert "listen unix:/run/mmd-web-http-8080.sock" in block
-    assert "listen unix:/run/mmd-web-https-8080.sock ssl" in block
-    assert "return 301 https://ali.mmd-ai.ir:8080$request_uri" in block
+def test_application_block_accepts_plain_http_on_the_internal_port(vh):
+    block = vh.application_server_block("ali.mmd-ai.ir", "10.42.0.13", 8080)
+    assert "listen 8080" in block
+    assert "server_name ali.mmd-ai.ir" in block
     assert "proxy_pass http://10.42.0.13:8080" in block
-    assert "listen 8080" in stream
-    assert "ssl_preread on" in stream
+    assert " ssl" not in block
 
 
-def test_host_installer_provisions_the_stream_module_and_top_level_include():
-    assert "libnginx-mod-stream" in INSTALLER
-    assert "include /etc/nginx/mmd-stream.conf;" in INSTALLER
+def test_host_installer_does_not_need_the_stream_module():
+    assert "libnginx-mod-stream" not in INSTALLER
+    assert "mmd-stream.conf" not in INSTALLER
 
 
 def test_a_config_that_does_not_parse_is_rolled_back(vh, tmp_path, monkeypatch):
     monkeypatch.setattr(vh, "NGINX_DIR", tmp_path)
     monkeypatch.setattr(vh, "STATE_DIR", tmp_path / "state")
-    monkeypatch.setattr(vh, "STREAM_CONFIG", tmp_path / "stream.conf")
     monkeypatch.setattr(vh, "desired",
                         lambda db, cfg, u: {"ali": [("hermes.ali.x", "10.42.0.13", 9119, None)]})
     monkeypatch.setattr(vh, "obtain_wildcard", lambda *a: "wildcard-ali")
@@ -181,7 +176,6 @@ def test_a_config_that_does_not_parse_is_rolled_back(vh, tmp_path, monkeypatch):
 def test_a_config_that_parses_is_written_and_reloaded(vh, tmp_path, monkeypatch):
     monkeypatch.setattr(vh, "NGINX_DIR", tmp_path)
     monkeypatch.setattr(vh, "STATE_DIR", tmp_path / "state")
-    monkeypatch.setattr(vh, "STREAM_CONFIG", tmp_path / "stream.conf")
     monkeypatch.setattr(vh, "desired",
                         lambda db, cfg, u: {"ali": [("hermes.ali.x", "10.42.0.13", 9119, None)]})
     monkeypatch.setattr(vh, "obtain_wildcard", lambda *a: "wildcard-ali")

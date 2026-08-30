@@ -152,7 +152,7 @@ def test_https_url_appears_only_after_vhost_reconciliation(env):
 
     ready = [p for p in client.get("/api/workspace/ports").json()["ports"]
              if p["id"] == row.id][0]
-    assert ready["host_url"] == f"https://ali.{appmod.CONFIG.domain}:8080"
+    assert ready["host_url"] == f"http://ali.{appmod.CONFIG.domain}:8080"
 
 
 def test_the_reserved_rows_keep_the_single_address_they_always_had(env):

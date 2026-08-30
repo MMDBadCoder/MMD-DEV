@@ -16,7 +16,7 @@ test("profile management is named Account while the old route remains compatible
   assert.doesNotMatch(i18n, /"nav\.security"/);
 });
 
-test("the customer header and API share release 1.4.0", () => {
-  assert.match(read("control/mmd/version.py"), /APP_VERSION = "1\.4\.0"/);
-  assert.match(read("web/js/main.js"), /me\?\.version \|\| "1\.4\.0"/);
+test("the customer header and API share release 1.5.0", () => {
+  assert.match(read("control/mmd/version.py"), /APP_VERSION = "1\.5\.0"/);
+  assert.match(read("web/js/main.js"), /me\?\.version \|\| "1\.5\.0"/);
 });

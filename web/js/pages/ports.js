@@ -16,8 +16,8 @@ export async function portsPage() {
 
   const hasReserved = d.ports.some((p) => !p.removable);
 
-  // The named HTTPS route is protocol-aware and selects the workspace by HTTP
-  // Host/TLS SNI. The external-port route remains the generic TCP/UDP path.
+  // The named HTTP route selects the workspace by its Host header. The
+  // external-port route remains the generic TCP/UDP path.
   //
   // The reserved SSH and RDP rows keep the single address they have always had.
   const line = (label, text, href) => `

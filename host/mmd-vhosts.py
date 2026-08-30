@@ -51,7 +51,6 @@ sys.path.insert(0, "/opt/mmd/control")
 NGINX_DIR = pathlib.Path("/etc/nginx/sites-enabled")
 STATE_DIR = pathlib.Path("/var/lib/mmd/hermes")
 WEBROOT = "/var/www/acme"
-STREAM_CONFIG = pathlib.Path("/etc/nginx/mmd-stream.conf")
 
 # One file per CUSTOMER, not per host. `nginx -t` and a reload re-read every
 # file in this directory, so grouping by customer keeps the cost of a change
@@ -253,29 +252,8 @@ def proxy_location(ip: str, port: int) -> str:
 """
 
 
-def server_block(host: str, cert: str, ip: str, port: int,
-                 public_port: int | None = None) -> str:
+def server_block(host: str, cert: str, ip: str, port: int) -> str:
     full, key = live(cert)
-    if public_port is not None:
-        plain = f"/run/mmd-web-http-{public_port}.sock"
-        tls = f"/run/mmd-web-https-{public_port}.sock"
-        return f"""
-server {{
-    listen unix:{plain};
-    server_name {host};
-    return 301 https://{host}:{public_port}$request_uri;
-}}
-
-server {{
-    listen unix:{tls} ssl;
-    server_name {host};
-    ssl_certificate     {full};
-    ssl_certificate_key {key};
-    add_header X-Content-Type-Options nosniff always;
-    add_header Referrer-Policy no-referrer always;
-{proxy_location(ip, port)}
-}}
-"""
     return f"""
 server {{
     listen 80;
@@ -308,23 +286,17 @@ server {{
 """
 
 
-def stream_config(ports: set[int]) -> str:
-    blocks = []
-    for port in sorted(ports):
-        blocks.append(f"""
-    upstream mmd_web_http_{port} {{ server unix:/run/mmd-web-http-{port}.sock; }}
-    upstream mmd_web_https_{port} {{ server unix:/run/mmd-web-https-{port}.sock; }}
-    map $ssl_preread_protocol $mmd_web_backend_{port} {{
-        "" mmd_web_http_{port};
-        default mmd_web_https_{port};
-    }}
-    server {{
-        listen {port};
-        ssl_preread on;
-        proxy_pass $mmd_web_backend_{port};
-    }}
-""")
-    return "# Managed by mmd-vhosts. Edits are overwritten.\nstream {\n" + "".join(blocks) + "}\n"
+def application_server_block(host: str, ip: str, port: int) -> str:
+    """Plain HTTP by design; raw TCP/UDP stays on the external-port route."""
+    return f"""
+server {{
+    listen {port};
+    server_name {host};
+    add_header X-Content-Type-Options nosniff always;
+    add_header Referrer-Policy no-referrer always;
+{proxy_location(ip, port)}
+}}
+"""
 
 
 def desired(db, CONFIG, usernames) -> dict[str, list[tuple[str, str, int, int | None]]]:
@@ -399,19 +371,21 @@ def main() -> int:
     # --- decide the file contents, obtaining certificates as needed --------
     bodies: dict[pathlib.Path, str] = {}
     published_hosts: set[str] = set()
-    web_ports: set[int] = set()
     for username, hosts in sorted(wanted.items()):
-        wildcard = obtain_wildcard(username, CONFIG.domain, email)
+        wildcard = None
         blocks = []
         for host, ip, port, public_port in sorted(hosts,
                                                   key=lambda h: (h[0], h[2])):
-            cert = wildcard or obtain_single(host, email)
-            if cert is None:
-                continue          # try again next pass; the port still works
-            blocks.append(server_block(host, cert, ip, port, public_port))
-            published_hosts.add(f"{host}:{public_port}" if public_port else host)
             if public_port:
-                web_ports.add(public_port)
+                blocks.append(application_server_block(host, ip, port))
+            else:
+                wildcard = wildcard or obtain_wildcard(
+                    username, CONFIG.domain, email)
+                cert = wildcard or obtain_single(host, email)
+                if cert is None:
+                    continue
+                blocks.append(server_block(host, cert, ip, port))
+            published_hosts.add(f"{host}:{public_port}" if public_port else host)
         if blocks:
             bodies[NGINX_DIR / f"{PREFIX}{username}.conf"] = (
                 "# Managed by mmd-vhosts. Edits are overwritten.\n"
@@ -425,12 +399,6 @@ def main() -> int:
     stale += list(NGINX_DIR.glob(f"{OLD_PREFIX}*"))     # one-time migration
     snapshot: dict[pathlib.Path, str | None] = {}
     changed = False
-    stream_body = stream_config(web_ports)
-    if not STREAM_CONFIG.exists() or STREAM_CONFIG.read_text() != stream_body:
-        snapshot[STREAM_CONFIG] = (STREAM_CONFIG.read_text()
-                                   if STREAM_CONFIG.exists() else None)
-        STREAM_CONFIG.write_text(stream_body)
-        changed = True
 
     for path, body in bodies.items():
         if path.exists() and path.read_text() == body:

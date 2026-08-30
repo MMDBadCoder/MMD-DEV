@@ -817,7 +817,7 @@ def _port_view(p: ExposedPort, username: str | None) -> dict:
         # Offered on the named form too, since that is the one worth reading.
         "url": (f"http://{CONFIG.endpoint_host}:{p.external_port}"
                 if p.kind is PortKind.USER and "tcp" in protos else None),
-        "host_url": (f"https://{host}:{p.internal_port}"
+        "host_url": (f"http://{host}:{p.internal_port}"
                      if host and p.web_ready and "tcp" in protos else None),
         "created_at": p.created_at.isoformat() if p.created_at else None,
     }
