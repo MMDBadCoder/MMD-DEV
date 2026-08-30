@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session            # noqa: E402
 
 from mmd import worker                        # noqa: E402
 from mmd.models import (AiUsageMark, AuditLog, Base, CreditAccount,
-                        CreditTransaction, ExposedPort, Operation, PortKind,
+                        CreditTransaction, ExposedPort, Notification, Operation, PortKind,
                         SshKey, Ticket, TicketMessage, TxKind, User,
                         UserStatus, UsageSample, Workspace, WorkspaceState)
 
@@ -78,7 +78,7 @@ def test_account_deletion_revokes_unpublishes_destroys_then_erases(monkeypatch):
     assert db.get(User, admin.id) is not None
     for model in (Workspace, CreditAccount, CreditTransaction, UsageSample,
                   ExposedPort, SshKey, AiUsageMark, Ticket, TicketMessage,
-                  Operation, AuditLog):
+                  Notification, Operation, AuditLog):
         assert db.scalar(select(model).limit(1)) is None, model.__name__
 
 

@@ -6,6 +6,7 @@ the things a customer would be upset to lose alongside it are kept.
 """
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -200,9 +201,67 @@ def test_the_services_are_switched_back_off(env):
     assert ws.rdp_enabled is False
     assert ws.rdp_installed is False
     assert ws.ssh_keys is None
-    assert ws.hermes_enabled is True
+    assert ws.hermes_enabled is False
     assert ws.hermes_installed is False
     assert ws.auto_stop_at is None
+
+
+def test_reset_revokes_and_forgets_the_old_hermes_identity(env, monkeypatch):
+    client, db, ws, *_ = env
+    ws.hermes_key_hash = "old-hash"
+    ws.hermes_key = "old-secret"
+    ws.hermes_dash_user = "old-user"
+    ws.hermes_dash_password = "old-password"
+    db.commit()
+    deleted = []
+
+    class Router:
+        def __init__(self, key): assert key == "management"
+        def __enter__(self): return self
+        def __exit__(self, *_): pass
+        def get_key(self, key):
+            return SimpleNamespace(usage_usd=0.0)
+        def delete_key(self, key): deleted.append(key)
+
+    monkeypatch.setattr(worker, "CONFIG", SimpleNamespace(openrouter_key="management"))
+    monkeypatch.setattr(worker, "OpenRouter", Router)
+    client.post("/api/workspace/reset", json=_ok_body())
+    _finish_reset(db, ws)
+    db.refresh(ws)
+
+    assert deleted == ["old-hash"]
+    assert ws.hermes_enabled is False
+    assert ws.hermes_installed is False
+    assert ws.hermes_key_hash is None
+    assert ws.hermes_key is None
+    assert ws.hermes_dash_user is None
+    assert ws.hermes_dash_password is None
+
+
+def test_failed_hermes_revocation_leaves_reset_retryable_and_unselected(env, monkeypatch):
+    client, db, ws, *_ = env
+    ws.hermes_key_hash = "live-hash"
+    ws.hermes_key = "live-secret"
+    db.commit()
+
+    class Router:
+        def __init__(self, key): pass
+        def __enter__(self): return self
+        def __exit__(self, *_): pass
+        def get_key(self, key):
+            raise worker.OpenRouterError("supplier unavailable")
+
+    monkeypatch.setattr(worker, "CONFIG", SimpleNamespace(openrouter_key="management"))
+    monkeypatch.setattr(worker, "OpenRouter", Router)
+    client.post("/api/workspace/reset", json=_ok_body())
+    op = _finish_reset(db, ws)
+    db.refresh(ws)
+
+    assert ws.state is WorkspaceState.ERROR
+    assert ws.hermes_enabled is False
+    assert ws.hermes_key_hash == "live-hash"
+    assert op.status == "failed"
+    assert op.error_code == "reset_ai_cleanup_failed"
 
 
 def test_a_running_machine_is_billed_for_the_time_it_ran(env, monkeypatch):

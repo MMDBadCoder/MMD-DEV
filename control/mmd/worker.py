@@ -35,7 +35,7 @@ from .incus.metrics import MetricsClient
 from .openrouter import OpenRouter, OpenRouterError
 from .billing.pricing import MICRO
 from .models import (AiUsageMark, AuditLog, CreditAccount, CreditTransaction,
-                     ExposedPort, Operation, PortKind, SshKey, Ticket,
+                     ExposedPort, Notification, Operation, PortKind, SshKey, Ticket,
                      TicketMessage, UsageSample, User, Workspace,
                      WorkspaceState)
 
@@ -566,6 +566,7 @@ def _purge_account(db, op: Operation) -> None:
             CreditTransaction.workspace_id == ws.id))
     db.execute(delete(CreditTransaction).where(CreditTransaction.user_id == user.id))
     db.execute(delete(CreditAccount).where(CreditAccount.user_id == user.id))
+    db.execute(delete(Notification).where(Notification.user_id == user.id))
 
     targets = [user.email]
     if ws:
@@ -587,6 +588,29 @@ def _purge_account(db, op: Operation) -> None:
 
 
 async def _factory_reset(db, op: Operation, ws: Workspace) -> None:
+    # Reset means optional AI is no longer selected, regardless of whether the
+    # image rebuild later succeeds. Clear intent first so another worker pass
+    # cannot mint a replacement key after this one has been revoked.
+    ws.hermes_enabled = False
+    db.commit()
+    if ws.hermes_key_hash:
+        oplib.progress(db, op, "removing_ai")
+        try:
+            if not CONFIG.openrouter_key:
+                raise OpenRouterError("management key unavailable")
+            with OpenRouter(CONFIG.openrouter_key) as client:
+                info = client.get_key(ws.hermes_key_hash)
+                usd_rate, discount = svc.ai_settings(db, hermes.SERVICE)
+                hermes.meter(db, ws, info, usd_rate, discount)
+                hermes.revoke_key(db, ws, client, strict=True)
+                db.commit()
+        except OpenRouterError:
+            ws.state = WorkspaceState.ERROR
+            ws.error = "reset could not revoke optional AI credentials"
+            oplib.fail(db, op, "reset_ai_cleanup_failed", svc.now())
+            svc.audit(db, op.actor_id, "reset_failed", ws.incus_project,
+                      stage="ai_cleanup")
+            return
     oplib.progress(db, op, "rebuilding_machine")
     detail = op.detail or {}
     resp = svc.call_provisioner({
@@ -624,7 +648,15 @@ async def _factory_reset(db, op: Operation, ws: Workspace) -> None:
     ws.ssh_keys = None
     ws.rdp_enabled = False
     ws.rdp_installed = False
+    # Reset is a new machine, not a request to reinstall optional AI software.
+    # The old key was revoked above; the customer chooses Hermes again later.
     ws.hermes_installed = False
+    ws.hermes_key = None
+    ws.hermes_key_hash = None
+    ws.hermes_credit_blocked = False
+    ws.hermes_dash_user = None
+    ws.hermes_dash_password = None
+    ws.hermes_error = None
     ws.error = None
     db.commit()
     svc.audit(db, op.actor_id, "reset_done", ws.incus_project)

@@ -1,6 +1,7 @@
 /* Published ports: expose a port from inside the machine to the internet. */
 import { get, post, del } from "../api.js";
-import { $, $$, icon, esc, fmtMoney, note, toast, empty, stamp, confirmDialog } from "../ui.js";
+import { $, $$, icon, esc, fmtMoney, note, toast, empty, stamp, confirmDialog,
+         recoveryNote, wireRecovery } from "../ui.js";
 import { t } from "../i18n.js";
 import { render } from "../main.js";
 
@@ -8,7 +9,8 @@ export async function portsPage() {
   let d;
   try { d = await get("/api/workspace/ports"); }
   catch (e) {
-    render(`<div class="page-head"><h1>${t("ports.title")}</h1></div>${note("info", esc(e.message))}`);
+    render(`<div class="page-head"><h1>${t("ports.title")}</h1></div>${recoveryNote(e, { retry: true })}`);
+    wireRecovery(portsPage);
     return;
   }
 
@@ -103,7 +105,8 @@ export async function portsPage() {
       if (r.warning_code) toast(t("ports.warn." + r.warning_code), "bad");
       portsPage();
     } catch (err) {
-      $("#msg").innerHTML = note("bad", esc(err.message));
+      $("#msg").innerHTML = recoveryNote(err, { retry: true });
+      wireRecovery(() => $("#add").click(), $("#msg"));
       btn.disabled = false; btn.innerHTML = `${icon.plus}${t("ports.publish")}`;
     }
   };

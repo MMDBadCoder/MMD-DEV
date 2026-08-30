@@ -8,6 +8,18 @@ Live on the production host.
 
 ### Added
 
+- **Errors now carry recovery actions, Connections has one unified launcher,
+  and the header has durable notifications.** Customers can move directly from
+  common failures to credit, power, SSH keys, resources, retry or support. The
+  launcher presents Terminal, SSH, RDP and published applications with status
+  and prerequisites. Notifications persist operation results, support replies,
+  low balance, automatic-stop, archive and session deadlines with read state.
+
+- **Factory reset now fully deselects Hermes.** It meters and revokes the old
+  OpenRouter key before rebuilding, clears dashboard credentials and every
+  enabled/installed flag, and leaves the customer to opt in again. Supplier
+  failure leaves reset retryable instead of showing stale readiness.
+
 - **Fixed the power-on button after its cost confirmation was introduced.** The
   browser event target is captured before awaiting the dialog, and an
   insufficient-credit click now explains itself instead of acting like a dead

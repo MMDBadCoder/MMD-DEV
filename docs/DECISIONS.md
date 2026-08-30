@@ -1612,6 +1612,37 @@ all and looked like the same bug; clicking now renders the structured Persian
 reason supplied by the workspace response.
 
 
+## Recovery actions, connections and notifications share global primitives
+
+An error sentence without a next action still leaves the customer stranded.
+`recoveryNote()` maps stable API codes to the state that resolves them—billing,
+power, SSH keys, resources, retry or support—and preserves page-owned retry
+logic through an explicit callback. Unknown failures lead to support rather
+than inventing a remedy. High-risk machine, resource, package, port and
+connection journeys use this shared component first.
+
+Connections remains detailed in its Terminal, SSH and RDP tabs, but now begins
+with one launcher showing all four access families, including published
+applications. Each card answers the same questions: is it available, what is
+missing, and what is the next direct action. The API returns published mappings
+with the service state so that overview cannot drift from the Ports page.
+
+Notifications are durable rows, not longer-lived toasts. Operation results and
+support replies are written at the transaction that makes them true. Changing
+conditions—low balance, approaching auto-stop, archive deletion and session
+expiry—are idempotently materialised on read using a per-user dedupe key, then
+resolved when no longer true. Reading is independent of resolution: a critical
+condition remains discoverable after its badge has been cleared.
+
+Factory reset now treats Hermes like the optional software it is. It clears
+intent before revoking the old supplier key, preventing another worker pass
+from minting a replacement if the image rebuild fails. A revocation failure
+stops reset in a retryable ERROR state rather than losing the only key identity
+or claiming a clean machine. On success, installation flags, key, dashboard
+credentials and error state are all cleared; enabling Hermes again is an
+explicit customer choice.
+
+
 ## Destructive and long operations are durable state, not HTTP requests
 
 Factory reset, package installation and account deletion can take minutes and

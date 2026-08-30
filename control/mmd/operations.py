@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .models import Operation
+from . import notifications
 
 ACTIVE = ("queued", "running")
 
@@ -50,6 +51,10 @@ def finish(db: Session, op: Operation, now: datetime) -> None:
     op.progress_code = "done"
     op.finished_at = now
     db.commit()
+    if op.user_id:
+        notifications.emit(db, user_id=op.user_id, kind="operation",
+                           code=f"{op.kind}_succeeded", severity="success",
+                           href="/console", dedupe_key=f"operation:{op.id}")
 
 
 def fail(db: Session, op: Operation, code: str, now: datetime) -> None:
@@ -58,3 +63,8 @@ def fail(db: Session, op: Operation, code: str, now: datetime) -> None:
     op.error_code = code
     op.finished_at = now
     db.commit()
+    if op.user_id:
+        notifications.emit(db, user_id=op.user_id, kind="operation",
+                           code=f"{op.kind}_failed", severity="critical",
+                           detail={"error_code": code}, href="/console/support",
+                           dedupe_key=f"operation:{op.id}")

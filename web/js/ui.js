@@ -71,6 +71,7 @@ export const icon = {
   monitor: P('<rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8M12 17v4"/><path d="M6 8h6M6 11h4"/>'),
   chart: P('<path d="M3 3v18h18"/><path d="M7 15l4-5 3 3 5-7"/>'),
   chat: P('<path d="M21 15a2 2 0 0 1-2 2H8l-5 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>'),
+  bell: P('<path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21h4"/>'),
   link: P('<path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/>'),
 };
 
@@ -110,6 +111,37 @@ export function toast(message, kind = "") {
 export function note(kind, html) {
   const ic = { ok: icon.check, warn: icon.alert, bad: icon.alert, info: icon.info }[kind] || "";
   return `<div class="note ${kind}">${ic}<div>${html}</div></div>`;
+}
+
+const RECOVERY = {
+  insufficient_credit: ["recovery.credit", "/console/billing"],
+  mem_shrink_running: ["recovery.poweroff", "/console"],
+  machine_off: ["recovery.poweron", "/console"],
+  no_ssh_key: ["recovery.sshkey", "/console/connections/ssh"],
+  rdp_needs_memory: ["recovery.resources", "/console/resources"],
+  apt_repair_failed: ["recovery.support", "/console/support"],
+  reset_failed: ["recovery.support", "/console/support"],
+  power_failed: ["recovery.retry", null],
+  resize_failed: ["recovery.retry", null],
+  port_failed: ["recovery.retry", null],
+  fs_failed: ["recovery.retry", null],
+};
+
+/* An error is incomplete until it says what can be done next. Pages may wire
+   data-recovery-retry to repeat their own request; known state changes use a
+   normal link so recovery remains usable with keyboard navigation. */
+export function recoveryNote(err, { retry = false } = {}) {
+  const action = RECOVERY[err?.code] || (retry
+    ? ["recovery.retry", null] : ["recovery.support", "/console/support"]);
+  const control = action[1]
+    ? `<a class="btn sm ghost" href="${action[1]}">${t(action[0])}${icon.arrow}</a>`
+    : `<button class="btn sm ghost" data-recovery-retry>${icon.refresh}${t(action[0])}</button>`;
+  return note("bad", `<div class="recovery-error"><div>${esc(err?.message || t("recovery.unknown"))}</div>${control}</div>`);
+}
+
+export function wireRecovery(retry, root = document) {
+  const button = root.querySelector("[data-recovery-retry]");
+  if (button && retry) button.onclick = retry;
 }
 
 export function empty(text, ico = icon.info) {

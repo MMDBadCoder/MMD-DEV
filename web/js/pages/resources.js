@@ -1,6 +1,7 @@
 /* Size selection - its own page, so nothing stacks onto the machine page. */
 import { get, post } from "../api.js";
-import { $, $$, icon, esc, fmtMoney, fmtNum, note, toast, confirmDialog } from "../ui.js";
+import { $, $$, icon, esc, fmtMoney, fmtNum, note, toast, confirmDialog,
+         recoveryNote, wireRecovery } from "../ui.js";
 import { t, CURRENCY } from "../i18n.js";
 import { render } from "../main.js";
 import { navigate } from "../router.js";
@@ -103,8 +104,9 @@ export async function resourcesPage() {
   $("#reset-btn").onclick = async () => {
     const answer = await dangerDialog({
       title: t("reset.title"),
-      intro: t("reset.intro"),
-      destroys: [t("reset.d.files"), t("reset.d.packages"), t("reset.d.docker")],
+      intro: t("reset.intro", w.label),
+      destroys: [t("reset.d.files"), t("reset.d.packages"), t("reset.d.docker"),
+                 t("reset.d.hermes")],
       keeps: [t("reset.k.ports"), t("reset.k.keys"), t("reset.k.size"), t("reset.k.credit")],
       expect: state.me?.email || "",
       label: t("reset.confirm"),
@@ -119,7 +121,8 @@ export async function resourcesPage() {
       toast(t("reset.queued"), "ok");
       navigate("/console");
     } catch (err) {
-      $("#reset-msg").innerHTML = note("bad", esc(err.message));
+      $("#reset-msg").innerHTML = recoveryNote(err, { retry: true });
+      wireRecovery(() => $("#reset-btn").click(), $("#reset-msg"));
       btn.disabled = false;
       btn.innerHTML = `${icon.refresh}${t("reset.button")}`;
     }
@@ -144,7 +147,8 @@ export async function resourcesPage() {
       toast(r.applied_live ? t("res.applied.live", r.label) : t("res.applied.next", r.label), "ok");
       navigate("/console");
     } catch (err) {
-      toast(err.message, "bad");
+      $("#warn").innerHTML = recoveryNote(err, { retry: true });
+      wireRecovery(() => $("#apply").click(), $("#warn"));
       btn.disabled = false; btn.innerHTML = `${icon.check}${t("res.apply")}`;
     }
   };

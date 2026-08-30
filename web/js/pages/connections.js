@@ -3,7 +3,8 @@
  * Keys and switches stay separate throughout - adding a key never opens a
  * listener, and switching a listener off never discards keys. */
 import { get, post, del } from "../api.js";
-import { $, $$, icon, esc, fmtFa, note, toast, stamp, confirmDialog } from "../ui.js";
+import { $, $$, icon, esc, fmtFa, note, toast, stamp, confirmDialog,
+         recoveryNote, wireRecovery } from "../ui.js";
 import { t } from "../i18n.js";
 import { render } from "../main.js";
 import * as term from "../terminal.js";
@@ -41,6 +42,39 @@ function tabBar(active, d) {
   }).join("")}</div>`;
 }
 
+function launcher(d) {
+  const card = (iconName, title, status, body, action, tone = "") => `
+    <section class="connection-launch ${tone}">
+      <div class="connection-launch-head">${icon[iconName]}<b>${title}</b>${status}</div>
+      <p>${body}</p><div class="connection-launch-action">${action}</div>
+    </section>`;
+  const ready = (yes) => `<span class="pill"><span class="dot ${yes ? "on" : ""}"></span>${
+    yes ? t("conn.available") : t("conn.unavailable")}</span>`;
+  const power = `<a class="btn sm primary" href="/console">${icon.power}${t("conn.launch.power")}</a>`;
+  const terminalAction = d.machine_running
+    ? `<a class="btn sm primary" href="/console/connections/terminal">${icon.machine}${t("conn.launch.open")}</a>` : power;
+  const sshAction = !d.machine_running ? power : d.ssh.key_count === 0
+    ? `<a class="btn sm primary" href="/console/connections/ssh">${icon.plus}${t("conn.launch.addkey")}</a>`
+    : `<a class="btn sm primary" href="/console/connections/ssh">${icon.copy}${t("conn.launch.command")}</a>`;
+  const rdpAction = !d.machine_running ? power
+    : `<a class="btn sm primary" href="/console/connections/rdp">${icon.monitor}${
+        d.rdp.enabled ? t("conn.launch.details") : t("conn.launch.enable")}</a>`;
+  const appAction = d.applications.length
+    ? `<a class="btn sm primary" href="/console/ports">${icon.plug}${t("conn.launch.apps")}</a>`
+    : `<a class="btn sm primary" href="/console/ports">${icon.plus}${t("conn.launch.publish")}</a>`;
+  return `<div class="connection-launcher">
+    ${card("machine", t("conn.tab.terminal"), ready(d.machine_running),
+      d.machine_running ? t("conn.launch.terminal.ready") : t("conn.launch.machineoff"), terminalAction)}
+    ${card("link", "SSH", ready(d.machine_running && d.ssh.enabled),
+      d.ssh.key_count ? (d.ssh.address || "—") : t("conn.launch.ssh.needkey"), sshAction)}
+    ${card("monitor", "RDP", ready(d.machine_running && d.rdp.enabled),
+      d.rdp.memory_ok ? (d.rdp.address || "—") : t("rdp.needmem"), rdpAction)}
+    ${card("plug", t("conn.launch.published"), ready(d.machine_running && d.applications.length > 0),
+      d.applications.length ? t("conn.launch.appcount", fmtFa(d.applications.length))
+                            : t("conn.launch.noapps"), appAction)}
+  </div>`;
+}
+
 export async function connectionsPage(params) {
   const tab = params?.tab && TABS.some((x) => x.key === params.tab) ? params.tab : "terminal";
   if (tab !== "terminal") term.disconnect();
@@ -48,12 +82,14 @@ export async function connectionsPage(params) {
   let d;
   try { d = await get("/api/workspace/services"); }
   catch (e) {
-    render(`<div class="page-head"><h1>${t("conn.title")}</h1></div>${note("info", esc(e.message))}`);
+    render(`<div class="page-head"><h1>${t("conn.title")}</h1></div>${recoveryNote(e, { retry: true })}`);
+    wireRecovery(() => connectionsPage(params));
     return;
   }
 
   const head = `<div class="page-head"><h1>${t("conn.title")}</h1>
       <p class="muted small" style="margin:0">${t("conn.sub")}</p></div>
+    ${launcher(d)}
     ${tabBar(tab, d)}
     ${d.machine_running ? "" : note("warn", t("conn.machineoff"))}`;
 
@@ -150,7 +186,8 @@ function renderSsh(head, d) {
     b.disabled = true; b.innerHTML = `<span class="spinner"></span>${t("ssh.keys.adding")}`;
     try { await post("/api/workspace/ssh/keys", { public_key: value });
           toast(t("ssh.keys.added"), "ok"); connectionsPage({ tab: "ssh" }); }
-    catch (err) { $("#key-msg").innerHTML = note("bad", esc(err.message));
+    catch (err) { $("#key-msg").innerHTML = recoveryNote(err, { retry: true });
+                  wireRecovery(() => $("#addkey").click(), $("#key-msg"));
                   b.disabled = false; b.innerHTML = `${icon.plus}${t("ssh.keys.add")}`; }
   };
   $("#newkey").onkeydown = (e) => { if (e.key === "Enter") $("#addkey").click(); };
@@ -169,7 +206,8 @@ function renderSsh(head, d) {
     b.disabled = true; b.innerHTML = `<span class="spinner"></span>${t("conn.working")}`;
     try { await post("/api/workspace/services/ssh", { enabled: enabling });
           toast(enabling ? t("ssh.enabled") : t("ssh.disabled"), "ok"); }
-    catch (err) { $("#ssh-msg").innerHTML = note("bad", esc(err.message)); }
+    catch (err) { $("#ssh-msg").innerHTML = recoveryNote(err, { retry: true });
+                  wireRecovery(() => $("#ssh-toggle").click(), $("#ssh-msg")); }
     connectionsPage({ tab: "ssh" });
   };
   $$("[data-copy]").forEach(wireCopy);
@@ -229,7 +267,8 @@ function renderRdp(head, d) {
       await post("/api/workspace/services/rdp",
                  enabling ? { enabled: true, password: pw } : { enabled: false });
       toast(enabling ? t("rdp.enabled") : t("rdp.disabled"), "ok");
-    } catch (err) { $("#rdp-msg").innerHTML = note("bad", esc(err.message)); }
+    } catch (err) { $("#rdp-msg").innerHTML = recoveryNote(err, { retry: true });
+                    wireRecovery(() => $("#rdp-toggle").click(), $("#rdp-msg")); }
     connectionsPage({ tab: "rdp" });
   };
   $$("[data-copy]").forEach(wireCopy);

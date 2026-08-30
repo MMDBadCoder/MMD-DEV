@@ -1,6 +1,6 @@
 /* Toolsets: install extra software into the machine. */
 import { get, post } from "../api.js";
-import { $, $$, icon, esc, fmtFa, note, toast } from "../ui.js";
+import { $, $$, icon, esc, fmtFa, note, toast, recoveryNote, wireRecovery } from "../ui.js";
 import { t } from "../i18n.js";
 import { render } from "../main.js";
 
@@ -68,7 +68,8 @@ export async function toolsPage() {
         `${t("tools.queued", fmtFa(r.packages.length))}<br><span class="mono ltr tiny">${esc(r.packages.join(" "))}</span>`);
       toast(t("tools.queued", fmtFa(r.packages.length)), "ok");
     } catch (err) {
-      $("#msg").innerHTML = note("bad", esc(err.message));
+      $("#msg").innerHTML = recoveryNote(err, { retry: true });
+      wireRecovery(() => $("#install").click(), $("#msg"));
     }
     btn.disabled = false; btn.innerHTML = `${icon.box}${t("tools.install")}`;
     refresh();

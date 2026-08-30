@@ -21,7 +21,7 @@ from sqlalchemy.pool import StaticPool             # noqa: E402
 from mmd import app as appmod                      # noqa: E402
 from mmd import ports as PORTS                     # noqa: E402
 from mmd import service as svc                     # noqa: E402
-from mmd.models import (Base, ExposedPort, PortKind, User,  # noqa: E402
+from mmd.models import (Base, CreditAccount, ExposedPort, Notification, PortKind, User,  # noqa: E402
                         UserStatus, Workspace, WorkspaceState)
 
 
@@ -65,6 +65,40 @@ def test_the_ssh_command_is_filled_in_too(env):
     client, db, ws, _ = env
     d = client.get("/api/workspace/services").json()
     assert d["ssh"]["command"] == f"ssh -p {d['ssh']['port']} dev@{d['host']}"
+
+
+def test_connection_launcher_receives_published_applications(env):
+    client, db, ws, _ = env
+    PORTS.allocate(db, ws.id, 8080)
+    db.commit()
+    apps = client.get("/api/workspace/services").json()["applications"]
+    assert len(apps) == 1
+    assert apps[0]["internal_port"] == 8080
+
+
+def test_low_credit_notification_is_deduplicated_and_readable(env):
+    client, db, ws, _ = env
+    first = client.get("/api/notifications").json()
+    second = client.get("/api/notifications").json()
+    assert first["unread"] == second["unread"] == 1
+    assert db.query(Notification).count() == 1
+    notification_id = first["notifications"][0]["id"]
+    assert client.post(f"/api/notifications/{notification_id}/read").status_code == 200
+    assert client.get("/api/notifications").json()["unread"] == 0
+
+
+def test_a_resolved_low_balance_warning_becomes_unread_if_it_returns(env):
+    client, db, ws, _ = env
+    first = client.get("/api/notifications").json()["notifications"][0]
+    client.post(f"/api/notifications/{first['id']}/read")
+    account = CreditAccount(user_id=ws.user_id, balance_micro=2_000 * 1_000_000)
+    db.add(account); db.commit()
+    assert client.get("/api/notifications").json()["notifications"] == []
+    account.balance_micro = 0
+    db.commit()
+    returned = client.get("/api/notifications").json()
+    assert returned["unread"] == 1
+    assert returned["notifications"][0]["id"] == first["id"]
 
 
 def test_the_addresses_do_not_change_between_loads(env):

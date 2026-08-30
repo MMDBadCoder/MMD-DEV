@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session, aliased
 
 from . import hermes
 from . import operations as oplib
+from . import notifications as notifylib
 from . import ports as portalloc
 from . import sshkeys
 from . import presets as presetlib
@@ -38,8 +39,9 @@ from .db import SessionLocal, get_session, init_db
 from .incus.client import IncusClient, IncusConfig, IncusError
 from .incus.execws import open_exec
 from .models import (AiModelPrice, AiUsageMark, AuditLog, CreditAccount,
-                     CreditTransaction, ExposedPort, PortKind, Setting, SshKey,
-                     Operation, Ticket, TicketMessage, TicketStatus, TxKind, UsageSample,
+                     CreditTransaction, ExposedPort, Notification, PortKind,
+                     Setting, SshKey, Operation, Ticket, TicketMessage,
+                     TicketStatus, TxKind, UsageSample,
                      User, UserStatus, Workspace, WorkspaceState)
 from .security import hash_password, verify_password
 from . import usernames as unames
@@ -80,7 +82,10 @@ def current_user(request: Request, db: Session = Depends(get_session)) -> User:
     if not raw:
         fail(401, "not_signed_in", "Not signed in")
     try:
-        uid = _serializer.loads(raw, max_age=CONFIG.session_hours * 3600)
+        uid, signed_at = _serializer.loads(
+            raw, max_age=CONFIG.session_hours * 3600, return_timestamp=True)
+        request.state.session_expires_at = signed_at + timedelta(
+            hours=CONFIG.session_hours)
     except BadSignature:
         fail(401, "session_expired", "Your session has expired.")
     user = db.get(User, int(uid))
@@ -873,6 +878,9 @@ def services(request: Request, user: User = Depends(current_user),
     reserved = _service_ports(db, ws)
     keys = _keys(db, ws)
     running = ws.state == WorkspaceState.ON
+    applications = list(db.scalars(select(ExposedPort).where(
+        ExposedPort.workspace_id == ws.id, ExposedPort.kind == PortKind.USER)
+        .order_by(ExposedPort.created_at)))
 
     return {
         "host": host,
@@ -903,6 +911,7 @@ def services(request: Request, user: User = Depends(current_user),
             "install_mb": 236,
             "user": "dev",
         },
+        "applications": [_port_view(port, user.username) for port in applications],
     }
 
 
@@ -1912,6 +1921,11 @@ def admin_reply_ticket(ticket_id: int, body: TicketReply,
     _mark_read(db, tk, staff=True)
     tk.updated_at = svc.now()
     db.commit()
+    notifylib.emit(db, user_id=tk.user_id, kind="support",
+                   code="support_reply", severity="info",
+                   detail={"ticket_id": tk.id, "subject": tk.subject},
+                   href=f"/console/support/{tk.id}",
+                   dedupe_key=f"ticket:{tk.id}:reply:{tk.messages[-1].id}")
     svc.audit(db, admin.id, "ticket_replied", f"#{tk.id}")
     return {"ok": True, "ticket": _ticket_json(tk, staff=True, messages=True)}
 
@@ -2101,6 +2115,78 @@ def my_operations(user: User = Depends(current_user),
     rows = db.scalars(select(Operation).where(Operation.user_id == user.id)
                       .order_by(Operation.id.desc()).limit(20)).all()
     return {"operations": [oplib.view(o) for o in rows]}
+
+
+def _sync_condition_notifications(db: Session, user: User,
+                                  session_expires_at: datetime | None = None) -> None:
+    """Materialise changing conditions once, without repeating them per poll."""
+    now = svc.now()
+    balance = svc.balance_micro(db, user.id)
+    if balance < 1_000 * MICRO:
+        notifylib.emit(db, user_id=user.id, kind="billing", code="low_balance",
+                       severity="warning", detail={"balance": balance / MICRO},
+                       href="/console/billing", dedupe_key="condition:low_balance")
+    else:
+        notifylib.resolve(db, user.id, "condition:low_balance", now)
+
+    ws = db.scalar(select(Workspace).where(Workspace.user_id == user.id))
+    if ws and ws.auto_stop_at and ws.auto_stop_at <= now + timedelta(hours=1):
+        notifylib.emit(db, user_id=user.id, kind="machine",
+                       code="auto_stop_soon", severity="warning",
+                       detail={"at": ws.auto_stop_at.isoformat()}, href="/console",
+                       dedupe_key="condition:auto_stop")
+    else:
+        notifylib.resolve(db, user.id, "condition:auto_stop", now)
+    if ws and ws.purge_after:
+        notifylib.emit(db, user_id=user.id, kind="machine",
+                       code="archive_deadline", severity="critical",
+                       detail={"at": ws.purge_after.isoformat()},
+                       href="/console/billing", dedupe_key="condition:archive")
+    else:
+        notifylib.resolve(db, user.id, "condition:archive", now)
+    if session_expires_at and session_expires_at <= now + timedelta(hours=1):
+        notifylib.emit(db, user_id=user.id, kind="security",
+                       code="session_expiring", severity="warning",
+                       detail={"at": session_expires_at.isoformat()},
+                       href="/console/security", dedupe_key="condition:session")
+    else:
+        notifylib.resolve(db, user.id, "condition:session", now)
+
+
+@app.get("/api/notifications")
+def my_notifications(request: Request, user: User = Depends(current_user),
+                     db: Session = Depends(get_session)) -> dict:
+    _sync_condition_notifications(
+        db, user, getattr(request.state, "session_expires_at", None))
+    rows = db.scalars(select(Notification).where(
+        Notification.user_id == user.id,
+        Notification.resolved_at.is_(None))
+        .order_by(Notification.created_at.desc()).limit(100)).all()
+    return {"notifications": [notifylib.view(row) for row in rows],
+            "unread": sum(row.read_at is None for row in rows)}
+
+
+@app.post("/api/notifications/{notification_id}/read")
+def read_notification(notification_id: int, user: User = Depends(current_user),
+                      db: Session = Depends(get_session)) -> dict:
+    row = db.get(Notification, notification_id)
+    if row is None or row.user_id != user.id:
+        fail(404, "no_such_notification", "No such notification")
+    row.read_at = svc.now()
+    db.commit()
+    return {"ok": True}
+
+
+@app.post("/api/notifications/read-all")
+def read_all_notifications(user: User = Depends(current_user),
+                           db: Session = Depends(get_session)) -> dict:
+    rows = db.scalars(select(Notification).where(
+        Notification.user_id == user.id, Notification.read_at.is_(None))).all()
+    now = svc.now()
+    for row in rows:
+        row.read_at = now
+    db.commit()
+    return {"ok": True}
 
 
 @app.get("/api/admin/operations")

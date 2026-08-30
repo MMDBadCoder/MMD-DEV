@@ -79,7 +79,9 @@ written to the audit log. Permitted from `on`, `off` and `error` — `error` is
 where starting over is most useful.
 
 Kept: reserved ports, saved public keys, size, credit, ledger. Gone: filesystem,
-packages, all Docker data.
+packages, all Docker data, Hermes installation, its OpenRouter key and dashboard
+credentials. Reset returns Hermes to unselected; the customer may enable it
+again after the rebuilt machine is ready.
 
 ## Operations
 
@@ -94,6 +96,18 @@ holding an HTTP request open. The worker advances `queued` through `running` to
 progress survives navigation and a browser refresh. Account deletion is also a
 durable operation, but its row is deliberately erased with the account after
 all external resources have been removed.
+
+## Notifications
+
+| Method | Path | Notes |
+|---|---|---|
+| `GET` | `/api/notifications` | Up to 100 active customer notifications plus unread count; materialises deduplicated balance, auto-stop, archive and session conditions |
+| `POST` | `/api/notifications/{id}/read` | Mark one owned notification read |
+| `POST` | `/api/notifications/read-all` | Mark all owned notifications read |
+
+Operation completion/failure and staff ticket replies create durable events.
+Read state belongs to the recipient and is separate from whether the underlying
+condition has been resolved.
 
 ## Connections
 

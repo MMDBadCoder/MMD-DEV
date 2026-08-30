@@ -25,7 +25,7 @@ import { supportPage } from "./pages/support.js";
 import { adminTicketsPage } from "./pages/admintickets.js";
 import { aiPricingPage } from "./pages/aipricing.js";
 
-export const state = { me: null, operations: [] };
+export const state = { me: null, operations: [], notifications: [], notificationUnread: 0 };
 
 export async function refreshMe() {
   try {
@@ -40,6 +40,29 @@ async function refreshOperations() {
   if (!state.me) { state.operations = []; return; }
   try { state.operations = (await get("/api/operations")).operations || []; }
   catch { state.operations = []; }
+}
+
+async function refreshNotifications() {
+  if (!state.me) { state.notifications = []; state.notificationUnread = 0; return; }
+  try {
+    const out = await get("/api/notifications");
+    state.notifications = out.notifications || [];
+    state.notificationUnread = out.unread || 0;
+  } catch { state.notifications = []; state.notificationUnread = 0; }
+}
+
+function notificationCenter() {
+  const rows = state.notifications.length ? state.notifications.map((n) => `
+    <a class="notification-item ${n.read ? "" : "unread"} ${n.severity}"
+       href="${n.href || "/console"}" data-notification="${n.id}">
+      <span>${icon[n.severity === "success" ? "check" : n.severity === "info" ? "info" : "alert"]}</span>
+      <div><b>${t("notification." + n.code, n.detail)}</b>
+        <small>${new Date(n.created_at).toLocaleString("fa-IR")}</small></div>
+    </a>`).join("") : `<div class="empty small">${t("notification.empty")}</div>`;
+  return `<aside class="notification-panel" id="notification-panel" hidden>
+    <div class="notification-head"><b>${t("nav.notifications")}</b>
+      ${state.notificationUnread ? `<button class="btn sm ghost" id="notifications-read">${t("notification.readall")}</button>` : ""}
+    </div><div class="notification-list">${rows}</div></aside>`;
 }
 
 function operationStrip() {
@@ -101,12 +124,15 @@ function chrome(bodyHtml) {
       <div class="spacer"></div>
       <div class="header-right">
         <a href="/console/billing" class="credit-chip ${low ? "low" : ""}" title="${t("nav.balance")}">
-          ${icon.card}<span class="lbl">${fmtMoney(me?.credits ?? 0)}</span></a>
+            ${icon.card}<span class="lbl">${fmtMoney(me?.credits ?? 0)}</span></a>
+        <button class="btn icon ghost notification-button" id="notifications" title="${t("nav.notifications")}" aria-label="${t("nav.notifications")}">
+          ${icon.bell}${state.notificationUnread ? `<span class="navbadge">${fmtFa(state.notificationUnread)}</span>` : ""}</button>
         <button class="btn icon ghost" id="theme" title="${t("nav.theme")}"
           aria-label="${t("nav.theme")}">${currentTheme() === "dark" ? icon.sun : icon.moon}</button>
         <button class="btn sm ghost" id="signout" title="${t("nav.signout")}">
           ${icon.logout}<span class="lbl">${t("nav.signout")}</span></button>
       </div>
+      ${notificationCenter()}
     </header>
     <main class="page">${operationStrip()}${bodyHtml}</main>`;
 }
@@ -114,6 +140,7 @@ function chrome(bodyHtml) {
 export function render(bodyHtml) {
   $("#app").innerHTML = chrome(bodyHtml);
   $("#theme").onclick = () => { toggleTheme(); render(bodyHtml); };
+  wireNotificationCenter();
   $("#signout").onclick = async () => {
     teardownTerminal();
     await post("/api/auth/logout").catch(() => {});
@@ -121,6 +148,31 @@ export function render(bodyHtml) {
     navigate("/signin");
     toast(t("auth.signedout"));
   };
+}
+
+function redrawNotificationCenter() {
+  $("#notifications").innerHTML = `${icon.bell}${state.notificationUnread
+    ? `<span class="navbadge">${fmtFa(state.notificationUnread)}</span>` : ""}`;
+  const holder = document.createElement("div");
+  holder.innerHTML = notificationCenter();
+  $("#notification-panel")?.replaceWith(holder.firstElementChild);
+  wireNotificationCenter();
+}
+
+function wireNotificationCenter() {
+  $("#notifications").onclick = () => {
+    const panel = $("#notification-panel");
+    panel.hidden = !panel.hidden;
+  };
+  $("#notifications-read")?.addEventListener("click", async () => {
+    await post("/api/notifications/read-all");
+    await refreshNotifications();
+    redrawNotificationCenter();
+    $("#notification-panel").hidden = false;
+  });
+  document.querySelectorAll("[data-notification]").forEach((row) => row.onclick = () => {
+    post(`/api/notifications/${row.dataset.notification}/read`).catch(() => {});
+  });
 }
 
 export function renderBare(html) {
@@ -175,7 +227,7 @@ setGuard(async (r) => {
   // customer reported exactly that. It is one small local query per page
   // change, and it keeps the balance honest too.
   await refreshMe();
-  await refreshOperations();
+  await Promise.all([refreshOperations(), refreshNotifications()]);
   if (r.public) return null;
   if (r.guest) return state.me ? "/console" : null;
   if (!state.me) return "/signin";
@@ -192,12 +244,17 @@ startRouter();
 setInterval(async () => {
   if (!state.me || !currentPath().startsWith("/console")) return;
   const before = JSON.stringify(state.operations);
+  const notificationsBefore = JSON.stringify(state.notifications);
   await refreshOperations();
+  await refreshNotifications();
   if (before !== JSON.stringify(state.operations)) {
     const old = document.querySelector(".operation-strip");
     const holder = document.createElement("div");
     holder.innerHTML = operationStrip();
     if (old) old.replaceWith(holder.firstElementChild || document.createTextNode(""));
     else if (holder.firstElementChild) document.querySelector("main.page")?.prepend(holder.firstElementChild);
+  }
+  if (notificationsBefore !== JSON.stringify(state.notifications)) {
+    redrawNotificationCenter();
   }
 }, 3000);
