@@ -12,6 +12,7 @@ const openrouter = read("web/js/pages/adminopenrouter.js");
 const claude = read("web/js/pages/aipricing.js");
 const policy = read("web/js/pages/adminmonitor.js");
 const ai = read("web/js/pages/ai.js");
+const ui = read("web/js/ui.js");
 
 test("the admin user list offers power off only for running workspaces", () => {
   assert.match(users, /u\.workspace\?\.state === "on"/);
@@ -72,4 +73,11 @@ test("customers get separate OpenRouter, Claude and Hermes tabs", () => {
   for (const tab of ["openrouter", "claude", "hermes"])
     assert.match(ai, new RegExp(`key: "${tab}"`));
   assert.match(ai, /ai\.hermes\.openrouter\.default/);
+});
+
+test("each customer AI tab uses its own brand-specific icon", () => {
+  for (const brand of ["openrouter", "claude", "hermes"]) {
+    assert.match(ai, new RegExp(`key: "${brand}", ic: "${brand}"`));
+    assert.match(ui, new RegExp(`\\s${brand}: P\\(`));
+  }
 });

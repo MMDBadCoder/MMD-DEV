@@ -13,8 +13,8 @@ import { $, $$, icon, esc, note, toast, stamp, confirmDialog,
 import { t, CURRENCY } from "../i18n.js";
 import { render } from "../main.js";
 
-const TABS = [{ key: "openrouter", ic: "plug" }, { key: "claude", ic: "sparkle" },
-              { key: "hermes", ic: "shield" }];
+const TABS = [{ key: "openrouter", ic: "openrouter" }, { key: "claude", ic: "claude" },
+              { key: "hermes", ic: "hermes" }];
 
 function tabBar(active, d) {
   return `<div class="tabs2">${TABS.map((tb) => {

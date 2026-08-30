@@ -795,7 +795,7 @@ def _port_view(p: ExposedPort, username: str | None) -> dict:
     Only the customer's own published ports get it. The reserved SSH and RDP
     rows keep exactly the address they have always had.
     """
-    host = (f"{username}.{CONFIG.domain}"
+    host = (unames.application_host(username, p.internal_port, CONFIG.domain)
             if username and p.kind is PortKind.USER else None)
     protos = portalloc.expand(p.protocol)
     return {
@@ -809,15 +809,16 @@ def _port_view(p: ExposedPort, username: str | None) -> dict:
         "removable": p.kind is PortKind.USER,
         "note": p.note,
         "address": f"{CONFIG.endpoint_host}:{p.external_port}",
-        "host_address": f"{host}:{p.external_port}" if host else None,
+        "host_address": f"{host}:{p.internal_port}" if host else None,
+        "web_ready": bool(p.web_ready),
         # A ready-to-click URL for the ports a customer publishes, which are
         # almost always HTTP. Not for the reserved SSH and RDP rows - prefixing
         # those with a scheme would be wrong rather than merely unhelpful.
         # Offered on the named form too, since that is the one worth reading.
         "url": (f"http://{CONFIG.endpoint_host}:{p.external_port}"
                 if p.kind is PortKind.USER and "tcp" in protos else None),
-        "host_url": (f"http://{host}:{p.external_port}"
-                     if host and "tcp" in protos else None),
+        "host_url": (f"https://{host}:{p.internal_port}"
+                     if host and p.web_ready and "tcp" in protos else None),
         "created_at": p.created_at.isoformat() if p.created_at else None,
     }
 

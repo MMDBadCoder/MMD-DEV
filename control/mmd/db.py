@@ -49,6 +49,7 @@ SCHEMA_PATCHES: tuple[str, ...] = (
     "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS hermes_telegram_users VARCHAR(256)",
     "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS hermes_telegram_error TEXT",
     "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS auto_stop_at TIMESTAMPTZ",
+    "ALTER TABLE exposed_ports ADD COLUMN IF NOT EXISTS web_ready BOOLEAN NOT NULL DEFAULT FALSE",
     # Published ports now carry both protocols. Customer-published rows written
     # before that are widened; the reserved SSH and RDP rows are left alone,
     # because both are TCP services and a UDP rule there would forward to a port

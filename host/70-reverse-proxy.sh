@@ -26,11 +26,18 @@ CERT_DIR=/etc/mmd/tls
 WEBROOT=/var/www/acme
 LE_DIR="/etc/letsencrypt/live/${DOMAIN}"
 
-apt-get install -y -qq nginx >/dev/null 2>&1
+apt-get install -y -qq nginx libnginx-mod-stream >/dev/null 2>&1
 [ -n "$DOMAIN" ] && apt-get install -y -qq certbot >/dev/null 2>&1
 
 install -d -m 0750 "$CERT_DIR"
 install -d -m 0755 "$WEBROOT"
+
+# Published web applications accept both plaintext HTTP and TLS on their own
+# internal port. The stream layer distinguishes the TLS handshake before the
+# HTTP layer selects the customer hostname.
+grep -qF 'include /etc/nginx/mmd-stream.conf;' /etc/nginx/nginx.conf ||
+  printf '\ninclude /etc/nginx/mmd-stream.conf;\n' >> /etc/nginx/nginx.conf
+[ -f /etc/nginx/mmd-stream.conf ] || printf 'stream {}\n' > /etc/nginx/mmd-stream.conf
 
 # --- room for two-label customer names -------------------------------------
 # nginx hashes server_name into fixed-size buckets, and refuses to START when a

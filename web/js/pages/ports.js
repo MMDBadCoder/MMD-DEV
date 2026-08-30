@@ -16,10 +16,8 @@ export async function portsPage() {
 
   const hasReserved = d.ports.some((p) => !p.removable);
 
-  // Two addresses for a customer's own port, one line each. Both reach the same
-  // place: the named one puts the customer's own name in front of the SAME port
-  // number, because the port is what selects the workspace. It is not a way to
-  // omit the port - nothing in a TCP or UDP packet carries the hostname.
+  // The named HTTPS route is protocol-aware and selects the workspace by HTTP
+  // Host/TLS SNI. The external-port route remains the generic TCP/UDP path.
   //
   // The reserved SSH and RDP rows keep the single address they have always had.
   const line = (label, text, href) => `
@@ -36,6 +34,7 @@ export async function portsPage() {
     const rowsOut = [];
     if (p.host_address) {
       rowsOut.push(line(t("ports.addr.name"), p.host_address, p.host_url));
+      if (!p.web_ready) rowsOut.push(`<span class="tiny dim">${t("ports.web.preparing")}</span>`);
     }
     rowsOut.push(line(p.host_address ? t("ports.addr.ip") : "",
                       p.address, p.url));
@@ -101,7 +100,7 @@ export async function portsPage() {
     try {
       const r = await post("/api/workspace/ports", {
         internal_port: port, note: $("#note").value.trim() || null });
-      toast(r.host_address || r.address, "ok");
+      toast(r.address, "ok");
       if (r.warning_code) toast(t("ports.warn." + r.warning_code), "bad");
       portsPage();
     } catch (err) {

@@ -48,6 +48,11 @@ def normalise(raw: str) -> str:
     return (raw or "").strip().lower()
 
 
+def application_host(username: str, internal_port: int, domain: str) -> str:
+    """The host portion shared by every web port of one workspace."""
+    return f"{username}.{domain}"
+
+
 def validate(raw: str) -> str:
     """Return the normalised username, or raise UsernameError."""
     name = normalise(raw)

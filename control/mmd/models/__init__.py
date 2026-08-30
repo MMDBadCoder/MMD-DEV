@@ -304,6 +304,7 @@ class ExposedPort(Base):
         Enum(PortKind, native_enum=False), default=PortKind.USER, index=True)
     device: Mapped[str] = mapped_column(String(64))     # legacy; DNAT is by rule
     note: Mapped[str | None] = mapped_column(String(120))
+    web_ready: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now())
 

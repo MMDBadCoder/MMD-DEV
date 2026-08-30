@@ -22,10 +22,11 @@ from sqlalchemy import create_engine                 # noqa: E402
 from sqlalchemy.orm import sessionmaker              # noqa: E402
 from sqlalchemy.pool import StaticPool               # noqa: E402
 
-from mmd.models import (Base, User, UserStatus,      # noqa: E402
+from mmd.models import (Base, ExposedPort, PortKind, User, UserStatus,  # noqa: E402
                         Workspace, WorkspaceState)
 
 ROOT = Path(__file__).resolve().parents[1]
+INSTALLER = (ROOT / "host" / "70-reverse-proxy.sh").read_text()
 
 
 @pytest.fixture
@@ -70,7 +71,7 @@ def test_hermes_is_not_published_before_the_worker_has_finished(vh, db):
     wanted = vh.desired(s, _cfg(), usernames)
     # idx 3 -> 10.42.0.13. Publishing the name before the dashboard has
     # credentials would serve a 502 at an address just announced as ready.
-    assert wanted["ali"] == [("hermes.ali.mmd-ai.ir", "10.42.0.13", vh.HERMES_PORT)]
+    assert wanted["ali"] == [("hermes.ali.mmd-ai.ir", "10.42.0.13", vh.HERMES_PORT, None)]
 
 
 def test_a_customer_with_no_username_is_skipped(vh, db):
@@ -81,6 +82,34 @@ def test_a_customer_with_no_username_is_skipped(vh, db):
     u.username = None
     s.commit()
     assert vh.desired(s, _cfg(), usernames) == {}
+
+
+def test_each_published_port_gets_a_distinct_https_hostname(vh, db):
+    from mmd import usernames
+    s, ws, _ = db
+    s.add(ExposedPort(workspace_id=ws.id, internal_port=8080,
+                      external_port=22418, protocol="both", kind=PortKind.USER,
+                      device="", note=None))
+    s.commit()
+
+    wanted = vh.desired(s, _cfg(), usernames)
+
+    assert wanted["ali"] == [("ali.mmd-ai.ir", "10.42.0.13", 8080, 8080)]
+
+
+def test_web_readiness_follows_the_exact_application_hostname(vh, db):
+    from mmd import usernames
+    s, ws, _ = db
+    port = ExposedPort(workspace_id=ws.id, internal_port=8080,
+                       external_port=22418, protocol="both", kind=PortKind.USER,
+                       device="", note=None)
+    s.add(port); s.commit()
+
+    vh.mark_readiness(s, {"ali.mmd-ai.ir:8080"}, _cfg().domain, usernames)
+    assert port.web_ready is True
+
+    vh.mark_readiness(s, set(), _cfg().domain, usernames)
+    assert port.web_ready is False
 
 
 def test_dashboard_readiness_tracks_the_exact_published_hostname(vh, db):
@@ -108,11 +137,29 @@ def test_the_server_block_proxies_to_the_workspace_and_redirects_plain_http(vh):
     assert "add_header Strict-Transport-Security" not in block
 
 
+def test_application_block_accepts_http_and_https_on_the_internal_port(vh):
+    block = vh.server_block("ali.mmd-ai.ir", "wildcard-ali",
+                            "10.42.0.13", 8080, 8080)
+    stream = vh.stream_config({8080})
+    assert "listen unix:/run/mmd-web-http-8080.sock" in block
+    assert "listen unix:/run/mmd-web-https-8080.sock ssl" in block
+    assert "return 301 https://ali.mmd-ai.ir:8080$request_uri" in block
+    assert "proxy_pass http://10.42.0.13:8080" in block
+    assert "listen 8080" in stream
+    assert "ssl_preread on" in stream
+
+
+def test_host_installer_provisions_the_stream_module_and_top_level_include():
+    assert "libnginx-mod-stream" in INSTALLER
+    assert "include /etc/nginx/mmd-stream.conf;" in INSTALLER
+
+
 def test_a_config_that_does_not_parse_is_rolled_back(vh, tmp_path, monkeypatch):
     monkeypatch.setattr(vh, "NGINX_DIR", tmp_path)
     monkeypatch.setattr(vh, "STATE_DIR", tmp_path / "state")
+    monkeypatch.setattr(vh, "STREAM_CONFIG", tmp_path / "stream.conf")
     monkeypatch.setattr(vh, "desired",
-                        lambda db, cfg, u: {"ali": [("hermes.ali.x", "10.42.0.13", 9119)]})
+                        lambda db, cfg, u: {"ali": [("hermes.ali.x", "10.42.0.13", 9119, None)]})
     monkeypatch.setattr(vh, "obtain_wildcard", lambda *a: "wildcard-ali")
     monkeypatch.setattr(vh, "mark_readiness", lambda *a: None)
 
@@ -134,8 +181,9 @@ def test_a_config_that_does_not_parse_is_rolled_back(vh, tmp_path, monkeypatch):
 def test_a_config_that_parses_is_written_and_reloaded(vh, tmp_path, monkeypatch):
     monkeypatch.setattr(vh, "NGINX_DIR", tmp_path)
     monkeypatch.setattr(vh, "STATE_DIR", tmp_path / "state")
+    monkeypatch.setattr(vh, "STREAM_CONFIG", tmp_path / "stream.conf")
     monkeypatch.setattr(vh, "desired",
-                        lambda db, cfg, u: {"ali": [("hermes.ali.x", "10.42.0.13", 9119)]})
+                        lambda db, cfg, u: {"ali": [("hermes.ali.x", "10.42.0.13", 9119, None)]})
     monkeypatch.setattr(vh, "obtain_wildcard", lambda *a: "wildcard-ali")
     monkeypatch.setattr(vh, "mark_readiness", lambda *a: None)
 

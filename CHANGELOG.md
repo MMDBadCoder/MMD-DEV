@@ -4,6 +4,10 @@ Notable changes. Dates are the day the work landed on the production host.
 
 ## [1.4.0] — 2026-08-30
 
+- Published applications now have two genuine routes: a managed HTTPS hostname
+  such as `x.mmd-ai.ir:8080`, selected by HTTP Host/TLS SNI, and the existing
+  `ports.mmd-ai.ir:<external>` endpoint for direct TCP and UDP traffic. Web
+  links become clickable only after certificate and nginx reconciliation.
 - Reorganized AI administration around supplier boundaries: OpenRouter now
   owns exchange-rate, workspace and guardrail policy; Claude owns the only
   discount; Hermes owns only its product default and runtime adoption state.

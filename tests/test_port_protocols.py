@@ -131,15 +131,28 @@ def test_a_published_port_carries_both_addresses(env):
     d = client.post("/api/workspace/ports", json={"internal_port": 8080}).json()
     port = d["external_port"]
     assert d["address"] == f"{appmod.CONFIG.endpoint_host}:{port}"
-    assert d["host_address"] == f"ali.{appmod.CONFIG.domain}:{port}"
+    assert d["host_address"] == f"ali.{appmod.CONFIG.domain}:8080"
+    assert d["web_ready"] is False
+    assert d["host_url"] is None
 
 
-def test_both_addresses_carry_the_same_port(env):
-    """The name is a readable way to write the same address. If the numbers ever
-    diverged, one of them would be wrong."""
+def test_https_uses_the_internal_port_name_while_raw_traffic_uses_external(env):
     client, *_ = env
     d = client.post("/api/workspace/ports", json={"internal_port": 8080}).json()
-    assert d["address"].rsplit(":", 1)[1] == d["host_address"].rsplit(":", 1)[1]
+    assert d["host_address"] == f"ali.{appmod.CONFIG.domain}:8080"
+    assert d["address"].endswith(f":{d['external_port']}")
+
+
+def test_https_url_appears_only_after_vhost_reconciliation(env):
+    client, db, *_ = env
+    created = client.post("/api/workspace/ports", json={"internal_port": 8080}).json()
+    row = db.get(ExposedPort, created["id"])
+    row.web_ready = True
+    db.commit()
+
+    ready = [p for p in client.get("/api/workspace/ports").json()["ports"]
+             if p["id"] == row.id][0]
+    assert ready["host_url"] == f"https://ali.{appmod.CONFIG.domain}:8080"
 
 
 def test_the_reserved_rows_keep_the_single_address_they_always_had(env):

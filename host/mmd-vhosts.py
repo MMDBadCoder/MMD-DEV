@@ -51,6 +51,7 @@ sys.path.insert(0, "/opt/mmd/control")
 NGINX_DIR = pathlib.Path("/etc/nginx/sites-enabled")
 STATE_DIR = pathlib.Path("/var/lib/mmd/hermes")
 WEBROOT = "/var/www/acme"
+STREAM_CONFIG = pathlib.Path("/etc/nginx/mmd-stream.conf")
 
 # One file per CUSTOMER, not per host. `nginx -t` and a reload re-read every
 # file in this directory, so grouping by customer keeps the cost of a change
@@ -233,8 +234,48 @@ def obtain_single(host: str, email: str) -> str | None:
 
 
 # --- nginx -----------------------------------------------------------------
-def server_block(host: str, cert: str, ip: str, port: int) -> str:
+def proxy_location(ip: str, port: int) -> str:
+    return f"""
+    location / {{
+        proxy_pass http://{ip}:{port};
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+        proxy_buffering off;
+        client_max_body_size 0;
+    }}
+"""
+
+
+def server_block(host: str, cert: str, ip: str, port: int,
+                 public_port: int | None = None) -> str:
     full, key = live(cert)
+    if public_port is not None:
+        plain = f"/run/mmd-web-http-{public_port}.sock"
+        tls = f"/run/mmd-web-https-{public_port}.sock"
+        return f"""
+server {{
+    listen unix:{plain};
+    server_name {host};
+    return 301 https://{host}:{public_port}$request_uri;
+}}
+
+server {{
+    listen unix:{tls} ssl;
+    server_name {host};
+    ssl_certificate     {full};
+    ssl_certificate_key {key};
+    add_header X-Content-Type-Options nosniff always;
+    add_header Referrer-Policy no-referrer always;
+{proxy_location(ip, port)}
+}}
+"""
     return f"""
 server {{
     listen 80;
@@ -262,37 +303,37 @@ server {{
     # The workspace is reachable only from this host: nothing DNATs to it on
     # this port and the isolation table drops bridge-to-bridge traffic, so this
     # proxy is the only route in.
-    location / {{
-        proxy_pass http://{ip}:{port};
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto https;
-
-        # The dashboard embeds a terminal over a websocket; without these the
-        # page loads and the shell silently never connects.
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-
-        proxy_read_timeout 3600s;
-        proxy_send_timeout 3600s;
-        proxy_buffering off;
-
-        # A customer's own service, on their own machine, with their own quota.
-        client_max_body_size 0;
-    }}
+{proxy_location(ip, port)}
 }}
 """
 
 
-def desired(db, CONFIG, usernames) -> dict[str, list[tuple[str, str, int]]]:
+def stream_config(ports: set[int]) -> str:
+    blocks = []
+    for port in sorted(ports):
+        blocks.append(f"""
+    upstream mmd_web_http_{port} {{ server unix:/run/mmd-web-http-{port}.sock; }}
+    upstream mmd_web_https_{port} {{ server unix:/run/mmd-web-https-{port}.sock; }}
+    map $ssl_preread_protocol $mmd_web_backend_{port} {{
+        "" mmd_web_http_{port};
+        default mmd_web_https_{port};
+    }}
+    server {{
+        listen {port};
+        ssl_preread on;
+        proxy_pass $mmd_web_backend_{port};
+    }}
+""")
+    return "# Managed by mmd-vhosts. Edits are overwritten.\nstream {\n" + "".join(blocks) + "}\n"
+
+
+def desired(db, CONFIG, usernames) -> dict[str, list[tuple[str, str, int, int | None]]]:
     """Every host that should exist, grouped by the customer who owns it.
 
     Grouped rather than flat because the nginx file is per customer, and
     because the certificate decision is per customer too.
     """
-    from mmd.models import Workspace
+    from mmd.models import ExposedPort, PortKind, Workspace
     from sqlalchemy import select
 
     out: dict[str, list[tuple[str, str, int]]] = {}
@@ -309,14 +350,22 @@ def desired(db, CONFIG, usernames) -> dict[str, list[tuple[str, str, int]]]:
                 and ws.hermes_dash_user and ws.hermes_dash_password):
             host = usernames.hermes_host(user.username, domain)
             out.setdefault(user.username, []).append(
-                (host, f"10.42.0.{ws.idx + 10}", HERMES_PORT))
+                (host, f"10.42.0.{ws.idx + 10}", HERMES_PORT, None))
+        for port in db.execute(select(ExposedPort).where(
+                ExposedPort.workspace_id == ws.id,
+                ExposedPort.kind == PortKind.USER)).scalars():
+            host = usernames.application_host(
+                user.username, port.internal_port, domain)
+            out.setdefault(user.username, []).append(
+                (host, f"10.42.0.{ws.idx + 10}", port.internal_port,
+                 port.internal_port))
 
     return out
 
 
 def mark_readiness(db, published_hosts: set[str], domain: str, usernames) -> None:
     """Expose a dashboard link only after its exact nginx host exists."""
-    from mmd.models import Workspace
+    from mmd.models import ExposedPort, PortKind, Workspace
     from sqlalchemy import select
 
     for ws in db.execute(select(Workspace)).scalars().all():
@@ -324,6 +373,13 @@ def mark_readiness(db, published_hosts: set[str], domain: str, usernames) -> Non
         host = (usernames.hermes_host(user.username, domain)
                 if user and user.username else "")
         ws.hermes_vhost_ready = host in published_hosts
+        if not user or not user.username:
+            continue
+        for port in db.execute(select(ExposedPort).where(
+                ExposedPort.workspace_id == ws.id,
+                ExposedPort.kind == PortKind.USER)).scalars():
+            address = f"{usernames.application_host(user.username, port.internal_port, domain)}:{port.internal_port}"
+            port.web_ready = address in published_hosts
     db.commit()
 
 
@@ -343,15 +399,19 @@ def main() -> int:
     # --- decide the file contents, obtaining certificates as needed --------
     bodies: dict[pathlib.Path, str] = {}
     published_hosts: set[str] = set()
+    web_ports: set[int] = set()
     for username, hosts in sorted(wanted.items()):
         wildcard = obtain_wildcard(username, CONFIG.domain, email)
         blocks = []
-        for host, ip, port in sorted(hosts):
+        for host, ip, port, public_port in sorted(hosts,
+                                                  key=lambda h: (h[0], h[2])):
             cert = wildcard or obtain_single(host, email)
             if cert is None:
                 continue          # try again next pass; the port still works
-            blocks.append(server_block(host, cert, ip, port))
-            published_hosts.add(host)
+            blocks.append(server_block(host, cert, ip, port, public_port))
+            published_hosts.add(f"{host}:{public_port}" if public_port else host)
+            if public_port:
+                web_ports.add(public_port)
         if blocks:
             bodies[NGINX_DIR / f"{PREFIX}{username}.conf"] = (
                 "# Managed by mmd-vhosts. Edits are overwritten.\n"
@@ -365,6 +425,12 @@ def main() -> int:
     stale += list(NGINX_DIR.glob(f"{OLD_PREFIX}*"))     # one-time migration
     snapshot: dict[pathlib.Path, str | None] = {}
     changed = False
+    stream_body = stream_config(web_ports)
+    if not STREAM_CONFIG.exists() or STREAM_CONFIG.read_text() != stream_body:
+        snapshot[STREAM_CONFIG] = (STREAM_CONFIG.read_text()
+                                   if STREAM_CONFIG.exists() else None)
+        STREAM_CONFIG.write_text(stream_body)
+        changed = True
 
     for path, body in bodies.items():
         if path.exists() and path.read_text() == body:

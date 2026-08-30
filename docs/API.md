@@ -144,7 +144,7 @@ is denied the file API. Paths are validated server-side.
 | Method | Path | Notes |
 |---|---|---|
 | `GET` | `/api/workspace/ports` | Published and reserved ports |
-| `POST` | `/api/workspace/ports` | `{internal_port, note?}`. External port allocated from 20000–29999 and forwarded over both TCP and UDP. Free. Returns the ordinary endpoint plus `<username>.<domain>:<external_port>`, and `warning_code: "discouraged_port"` for port 22 |
+| `POST` | `/api/workspace/ports` | `{internal_port, note?}`. External port allocated from 20000–29999 and forwarded over both TCP and UDP. Returns `ports.<domain>:<external>` plus `http(s)://<username>.<domain>:<internal>`; `web_ready` becomes true after certificate/vhost reconciliation |
 | `DELETE` | `/api/workspace/ports/{id}` | Reserved SSH/RDP ports refuse with `port_reserved` |
 
 ## Tools and AI

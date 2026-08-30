@@ -1847,3 +1847,22 @@ visible in separate customer and administrator tabs.
 Host resource tariffs, admission ratios and monitoring share a separate
 operations section. The admin overview contains only work requiring attention,
 so changing policy is never mixed into routine account review.
+
+
+## Published applications have separate web and raw-network routes
+
+The first named-port design displayed `<username>.<domain>:<external-port>`.
+It worked, but the hostname was cosmetic: raw TCP and UDP do not carry the DNS
+name, so the external port still selected the workspace.
+
+Each customer-published service now also gets
+`<username>.<domain>:<internal-port>`. An nginx stream listener distinguishes
+plaintext HTTP from a TLS handshake, then the HTTP layer selects the workspace
+using `Host` or SNI and proxies to the same internal port. Different customers
+may therefore both publish port 8080 without sharing an external DNAT port.
+
+This web route does not pretend to solve generic layer-4 routing. The existing
+`ports.<domain>:<external-port>` DNAT remains the TCP/UDP endpoint and is also
+what SSH, RDP and non-HTTP protocols use. A per-port readiness flag prevents the
+UI from linking the HTTPS name until certificate issuance and a successful
+`nginx -t` and reload have published it.
