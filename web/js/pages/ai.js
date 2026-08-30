@@ -61,7 +61,7 @@ export async function aiPage(params) {
  * and is revoked in one call, and the agent has to read it from their own
  * machine anyway, so hiding it from its owner would protect nothing. */
 function renderHermes(head, h) {
-  const waiting = h.enabled && !h.ready;
+  const waiting = h.enabled && !h.ready && !h.credit_blocked;
 
   render(`${head}
     <div class="card">
@@ -74,6 +74,7 @@ function renderHermes(head, h) {
       </div>
 
       ${h.error ? note("bad", t("ai.hermes.error")) : ""}
+      ${h.credit_blocked ? note("warn", t("ai.hermes.creditblocked")) : ""}
       ${waiting ? note("info", t("ai.hermes.preparing.body")) : ""}
 
       ${h.ready ? `

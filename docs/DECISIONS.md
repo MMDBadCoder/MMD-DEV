@@ -1184,6 +1184,22 @@ o3-pro, opus-4.1 — and leaves 365, including claude-opus-5 at $25 and everythi
 cheaper. Named families are denied outright as well, because a ceiling alone
 would admit a cheap member of an expensive family.
 
+### Zero credit disables the key; credit restoration re-enables it
+
+An OpenRouter limit of zero is not a reliable stop signal, and the earlier
+minimum-cap safeguard meant an empty account retained a small amount of real
+spending power. The worker now meters the final observed usage and sets the
+supplier key's `disabled` flag whenever the Toman balance is zero or negative.
+It records that state locally, allowing the fast worker pass to notice a credit
+transition without polling every upstream key continuously. Adding credit sends
+`disabled=false` with a new cap, so the same customer key works again without
+being exposed or copied a second time.
+
+OpenRouter limits are cumulative over a key's lifetime. A restored cap is
+therefore `usage already reported + affordable new headroom`; using only the
+new balance would leave a topped-up key blocked as soon as its historical usage
+exceeded that number.
+
 Unpriced models are excluded rather than assumed free: an entry with no price is
 usually one whose cost is not published yet, and guessing in the customer's
 favour there is guessing with the operator's money.

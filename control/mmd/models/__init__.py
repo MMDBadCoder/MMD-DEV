@@ -157,6 +157,10 @@ class Workspace(Base):
     # and reconciled, the same way power state is.
     hermes_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     hermes_installed: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Mirrors the upstream key's credit gate. Keeping this locally lets the
+    # fast worker pass notice a balance transition without polling every key at
+    # OpenRouter every twenty seconds.
+    hermes_credit_blocked: Mapped[bool] = mapped_column(Boolean, default=False)
     # The key's identity upstream, used to read usage, move the cap and revoke.
     hermes_key_hash: Mapped[str | None] = mapped_column(String(128))
     # The key itself. Deliberately stored and deliberately shown to its owner:

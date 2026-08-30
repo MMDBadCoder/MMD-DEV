@@ -286,6 +286,7 @@ def ensure_key(db, ws: Workspace, client: OpenRouter, platform: Platform,
     ws.hermes_key = secret
     ws.hermes_key_hash = info.hash
     ws.hermes_usage_usd = float(info.usage_usd or 0.0)
+    ws.hermes_credit_blocked = False
     if not ws.hermes_dash_user:
         ws.hermes_dash_user = getattr(ws.user, "username", None) or f"user{ws.user_id}"
     if not ws.hermes_dash_password:
@@ -318,6 +319,7 @@ def revoke_key(db, ws: Workspace, client: OpenRouter, *, strict: bool = False) -
     ws.hermes_key = None
     ws.hermes_key_hash = None
     ws.hermes_installed = False
+    ws.hermes_credit_blocked = False
     ws.hermes_dash_password = None
 
 

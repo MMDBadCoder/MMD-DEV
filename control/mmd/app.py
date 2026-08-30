@@ -1152,6 +1152,7 @@ def _hermes_state(ws: Workspace) -> dict:
     """
     return {"enabled": bool(ws.hermes_enabled),
             "ready": bool(ws.hermes_key_hash),
+            "credit_blocked": bool(ws.hermes_credit_blocked),
             "key": ws.hermes_key,
             "dashboard_user": ws.hermes_dash_user,
             "dashboard_password": ws.hermes_dash_password,

@@ -8,6 +8,11 @@ Live on the production host.
 
 ### Added
 
+- **OpenRouter keys now close at zero credit and reopen after top-up.** The
+  worker uses the supplier's hard disabled flag, meters before closing, and
+  restores cumulative spend headroom when credit returns. The AI page explains
+  the temporary credit block instead of presenting it as a setup failure.
+
 - **Long-running changes now stay visible across pages and refreshes.** Factory
   reset and tool installation are durable worker operations with a persistent
   progress strip. Account deletion uses the same queue but erases its operation

@@ -326,8 +326,13 @@ def hermes_once(sync_policy: bool = False, meter_usage: bool = True) -> None:
             # rude to the supplier and slow. So the fast pass touches the
             # network ONLY when a toggle is actually outstanding.
             rows = [w for w in rows
-                    if (w.hermes_enabled and not w.hermes_key_hash)
-                    or (not w.hermes_enabled and w.hermes_key_hash)]
+                    if (w.hermes_enabled and not w.hermes_key_hash and
+                        (svc.balance_micro(db, w.user_id) > 0
+                         or not w.hermes_credit_blocked))
+                    or (not w.hermes_enabled and w.hermes_key_hash)
+                    or (w.hermes_enabled and w.hermes_key_hash and
+                        w.hermes_credit_blocked !=
+                        (svc.balance_micro(db, w.user_id) <= 0))]
         if not rows:
             return
         try:
@@ -382,6 +387,14 @@ def _hermes_workspace(db, ws: Workspace, client: OpenRouter,
         return
 
     balance = svc.balance_micro(db, ws.user_id)
+    credit_blocked = balance <= 0
+    if not ws.hermes_key_hash and credit_blocked:
+        # A zero-dollar OpenRouter limit is not a stop signal. Do not mint a
+        # usable key until the account can pay for its first request.
+        ws.hermes_credit_blocked = True
+        ws.hermes_error = None
+        db.commit()
+        return
     cap = hermes.affordable_usd(balance, usd_rate, discount)
 
     if hermes.ensure_key(db, ws, client, platform, cap):
@@ -395,19 +408,29 @@ def _hermes_workspace(db, ws: Workspace, client: OpenRouter,
         # powers on should not have to toggle it again.
         _hermes_install(db, ws)
 
-    if not meter_usage:
+    if not meter_usage and ws.hermes_credit_blocked == credit_blocked:
         return
     info = client.get_key(ws.hermes_key_hash)
     hermes.meter(db, ws, info, usd_rate, discount)
 
     # Re-read the cap against the balance AFTER metering, so a customer who has
     # just spent down is capped at what is actually left.
-    cap = hermes.affordable_usd(svc.balance_micro(db, ws.user_id), usd_rate, discount)
-    if info.limit_usd is None or abs(float(info.limit_usd) - cap) > 0.01:
+    balance = svc.balance_micro(db, ws.user_id)
+    credit_blocked = balance <= 0
+    # OpenRouter limits are cumulative for the lifetime of a key. New headroom
+    # starts after the spend already reported upstream; otherwise a topped-up
+    # key can remain blocked because its historical usage exceeds its new cap.
+    cap = float(info.usage_usd or 0.0) + hermes.affordable_usd(
+        balance, usd_rate, discount)
+    limit_changed = (info.limit_usd is None
+                     or abs(float(info.limit_usd) - cap) > 0.01)
+    if limit_changed or info.disabled != credit_blocked:
         # The cap is the hard stop: OpenRouter refuses the request when the
         # customer runs out, instead of us noticing minutes later and billing
         # for spend that has already happened.
-        client.update_key(ws.hermes_key_hash, limit_usd=cap)
+        client.update_key(ws.hermes_key_hash, limit_usd=cap,
+                          disabled=credit_blocked)
+    ws.hermes_credit_blocked = credit_blocked
     ws.hermes_error = None
     db.commit()
 
