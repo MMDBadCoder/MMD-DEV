@@ -2,6 +2,24 @@
 
 Things that are not obvious from the code, and the failures that shaped them.
 
+## Destructive UI describes impact; onboarding follows observable progress
+
+Account deletion and factory reset are not ordinary confirmation prompts. The
+interface names the affected identity, separates deleted from retained data,
+states recoverability, and requires a typed identifier for account deletion.
+This does not replace server authorization; it prevents acting on an adjacent
+row in a dense administrator list.
+
+First-run progress uses server-observable facts (positive credit, machine
+power, an SSH key, a published port) except opening the browser terminal, which
+has no durable server-side effect and is recorded locally after a running
+terminal is rendered. The checklist disappears only after all steps complete.
+
+Below 720px, primary navigation moves to a horizontally scrollable bottom rail
+and destructive dialogs become bottom sheets. Tables retain their semantic
+structure and scroll horizontally; turning unrelated columns into ad-hoc cards
+would discard headings and make technical values harder to compare.
+
 ## Why containers and not VMs
 
 Not a preference — a constraint. This host reports `systemd-detect-virt = kvm`,

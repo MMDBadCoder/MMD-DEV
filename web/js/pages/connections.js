@@ -100,6 +100,7 @@ export async function connectionsPage(params) {
 
 /* ---- terminal ---- */
 function renderTerminal(head, d) {
+  if (d.machine_running) localStorage.setItem("mmd-onboarding-terminal", "1");
   render(`${head}
     <div class="card">
       <p class="muted small" style="margin:0 0 14px">${t("conn.term.sub")}</p>

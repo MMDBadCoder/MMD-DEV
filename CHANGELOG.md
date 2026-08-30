@@ -2,6 +2,17 @@
 
 Notable changes. Dates are the day the work landed on the production host.
 
+## [1.5.0] — 2026-08-30
+
+- Destructive account deletion separates deleted and retained data, identifies
+  the account, states that recovery is impossible, and requires its email.
+- A five-step first-run journey guides customers from funding through their
+  first published application.
+- Phones use a bottom navigation rail, touch-sized controls, scrollable tables,
+  compact cards, and bottom-sheet destructive confirmations.
+- Empty states, destructive actions, focus styles, spacing and controls now use
+  shared interface primitives.
+
 ## [1.4.0] — 2026-08-30
 
 Live on the production host.

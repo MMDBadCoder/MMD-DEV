@@ -9,7 +9,7 @@
  * account is waiting for approval" gets harder with every signup. */
 import { get, post, del } from "../api.js";
 import { $, $$, icon, esc, fmtMoney, fmtNum, fmtFa, note, toast, stamp,
-         confirmDialog, statePill } from "../ui.js";
+         confirmDialog, destructiveDialog, statePill } from "../ui.js";
 import { t, CURRENCY } from "../i18n.js";
 import { render, state } from "../main.js";
 import { adminHead } from "./adminnav.js";
@@ -143,8 +143,14 @@ export async function adminUsersPage() {
   });
 
   $$("[data-del]").forEach((b) => b.onclick = async () => {
-    if (!await confirmDialog(t("adm.confirm.del.title", b.dataset.email),
-                             t("adm.confirm.del.body"), t("adm.confirm.del.cta"))) return;
+    if (!await destructiveDialog({
+      title: t("adm.confirm.del.title", b.dataset.email),
+      intro: t("adm.confirm.del.body"),
+      destroys: [t("adm.delete.workspace"), t("adm.delete.addresses"),
+                 t("adm.delete.account"), t("adm.delete.history")],
+      keeps: [t("adm.delete.keeps")], expect: b.dataset.email,
+      label: t("adm.confirm.del.cta"),
+    })) return;
     b.disabled = true;
     try { await del(`/api/admin/users/${b.dataset.del}`); toast(t("adm.deletequeued"), "ok"); }
     catch (e) { toast(e.message, "bad"); }

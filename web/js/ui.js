@@ -144,9 +144,11 @@ export function wireRecovery(retry, root = document) {
   if (button && retry) button.onclick = retry;
 }
 
-export function empty(text, ico = icon.info) {
+export function empty(text, ico = icon.info, action = null) {
+  const control = action ? `<a class="btn primary" href="${esc(action.href)}">${
+    action.icon ? icon[action.icon] || "" : ""}${esc(action.label)}</a>` : "";
   return `<div class="empty">${ico.replace('width="16" height="16"', 'width="34" height="34"')}
-    <div>${esc(text)}</div></div>`;
+    <div>${esc(text)}</div>${control}</div>`;
 }
 
 /* ---- theme ---- */
@@ -183,6 +185,42 @@ export function confirmDialog(title, body, confirmLabel = "تأیید", opts = {
     wrap.querySelector("[data-yes]").onclick = () => done(true);
     wrap.onclick = (e) => { if (e.target === wrap) done(false); };
     document.body.append(wrap);
+  });
+}
+
+/* Destructive account-level actions need the same visual accounting as a
+   factory reset, even when the server endpoint does not require a password.
+   Re-typing the affected identity prevents deleting the adjacent table row. */
+export function destructiveDialog({ title, intro, destroys, keeps = [], expect, label }) {
+  return new Promise((resolve) => {
+    const wrap = document.createElement("div");
+    wrap.className = "danger-wrap";
+    wrap.innerHTML = `<div class="card danger-card" role="dialog" aria-modal="true">
+      <h2 class="danger-title">${esc(title)}</h2><p class="muted small">${esc(intro)}</p>
+      <div class="impact-grid">
+        <div class="copybox bad"><div class="copybox-h">${t("danger.deleted")}</div>
+          <ul>${destroys.map((x) => `<li>${esc(x)}</li>`).join("")}</ul></div>
+        <div class="copybox ok"><div class="copybox-h">${t("danger.kept")}</div>
+          <ul>${keeps.map((x) => `<li>${esc(x)}</li>`).join("")}</ul></div>
+      </div>
+      <div class="note bad">${icon.alert}<div>${t("danger.irrecoverable")}</div></div>
+      <label for="destructive-expect">${t("danger.type", expect)}</label>
+      <input id="destructive-expect" class="ltr mono" dir="ltr" autocomplete="off"
+        spellcheck="false" placeholder="${esc(expect)}">
+      <div class="btn-row dialog-actions">
+        <button class="btn ghost" data-no>${t("common.cancel")}</button>
+        <button class="btn danger" data-yes disabled>${esc(label)}</button>
+      </div></div>`;
+    const input = wrap.querySelector("#destructive-expect");
+    const yes = wrap.querySelector("[data-yes]");
+    input.oninput = () => { yes.disabled = input.value.trim().toLowerCase() !== expect.toLowerCase(); };
+    const done = (value) => { wrap.remove(); document.removeEventListener("keydown", escape); resolve(value); };
+    const escape = (e) => { if (e.key === "Escape") done(false); };
+    document.addEventListener("keydown", escape);
+    wrap.querySelector("[data-no]").onclick = () => done(false);
+    yes.onclick = () => done(true);
+    document.body.append(wrap);
+    input.focus();
   });
 }
 

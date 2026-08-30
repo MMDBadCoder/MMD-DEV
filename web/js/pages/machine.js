@@ -7,12 +7,34 @@ import { get, post } from "../api.js";
 import { $, icon, esc, fmtMoney, fmtNum, fmtFa, note, toast, stamp,
          statePill, confirmDialog } from "../ui.js";
 import { t, CURRENCY } from "../i18n.js";
-import { render } from "../main.js";
+import { render, state } from "../main.js";
 import { usageChart, windowPicker, wireWindowPicker,
          savedWindow, saveWindow } from "../usagechart.js";
 
 let poll = null;
 let chartTimer = null;
+
+function onboarding(w, services) {
+  const terminalOpened = localStorage.getItem("mmd-onboarding-terminal") === "1";
+  const steps = [
+    [state.me?.credits > 0, "onboarding.credit", "/console/billing"],
+    [w.powered_on, "onboarding.power", "/console"],
+    [terminalOpened, "onboarding.terminal", "/console/connections/terminal"],
+    [(services?.ssh?.key_count || 0) > 0, "onboarding.ssh", "/console/connections/ssh"],
+    [(services?.applications || []).length > 0, "onboarding.publish", "/console/ports"],
+  ];
+  if (steps.every(([done]) => done)) return "";
+  const next = steps.findIndex(([done]) => !done);
+  return `<section class="card onboarding" aria-labelledby="onboarding-title">
+    <div class="between"><div><h2 id="onboarding-title">${t("onboarding.title")}</h2>
+      <p class="muted small">${t("onboarding.sub")}</p></div>
+      <span class="pill">${fmtFa(steps.filter(([done]) => done).length)} / ${fmtFa(steps.length)}</span></div>
+    <ol>${steps.map(([done, key, href], i) => `<li class="${done ? "done" : i === next ? "current" : ""}">
+      <span class="onboarding-check">${done ? icon.check : fmtFa(i + 1)}</span>
+      <span>${t(key)}</span>${!done && i === next
+        ? `<a class="btn sm primary" href="${href}">${t("onboarding.do")}${icon.arrow}</a>` : ""}</li>`).join("")}</ol>
+  </section>`;
+}
 
 /* Redraw ONLY the two charts, in step with the worker's sampling interval.
    Re-rendering the whole page every 20 seconds would fight with anything the
@@ -111,6 +133,8 @@ export async function machinePage() {
           esc(t("machine.subtitle", { label: w.label, disk: fmtNum(w.disk_gb) }))}</p></div>
       ${statePill(w.status)}
     </div>
+
+    ${onboarding(w, services)}
 
     <div class="card machine-hero ${on ? "is-on" : "is-off"}">
       <div class="machine-control">

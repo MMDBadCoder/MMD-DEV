@@ -36,7 +36,8 @@ export async function activityPage(_p, page = 0) {
       ${d.events.length ? `<div class="table-wrap"><table>
         <thead><tr><th>${t("act.when")}</th><th>${t("act.action")}</th>
           <th>${t("act.detail")}</th></tr></thead>
-        <tbody>${rows}</tbody></table></div>` : empty(t("act.empty"), icon.clock)}
+        <tbody>${rows}</tbody></table></div>` : empty(t("act.empty"), icon.clock,
+          { href: "/console", label: t("empty.machine"), icon: "machine" })}
       ${pages > 1 ? `<div class="card-head" style="border-top:1px solid var(--border);border-bottom:none">
         <span class="dim small">${t("common.page", [page + 1, pages])}</span>
         <div class="btn-row">

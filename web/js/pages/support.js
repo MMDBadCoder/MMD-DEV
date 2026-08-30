@@ -72,9 +72,11 @@ export async function supportPage(params) {
       <thead><tr><th>${t("tk.subject")}</th><th>${t("tk.status")}</th>
         <th>${t("tk.updated")}</th></tr></thead>
       <tbody>${rows}</tbody></table></div></div>`
-      : `<div class="card">${empty(t("tk.none"))}</div>`}`);
+      : `<div class="card">${empty(t("tk.none"), icon.chat,
+          { href: "/console/support?new=1", label: t("tk.new.btn"), icon: "plus" })}</div>`}`);
 
   const form = $("#tk-form");
+  if (new URLSearchParams(location.search).has("new")) form.hidden = false;
   $("#tk-new").onclick = () => { form.hidden = !form.hidden; if (!form.hidden) $("#tk-subj").focus(); };
   $("#tk-cancel").onclick = () => { form.hidden = true; };
   $("#tk-send").onclick = async () => {
