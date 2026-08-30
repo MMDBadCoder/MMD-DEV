@@ -4,6 +4,12 @@ Notable changes. Dates are the day the work landed on the production host.
 
 ## [1.5.0] — 2026-08-30
 
+- Every credit grant now schedules an OpenRouter key-cap refresh within about
+  five seconds, including top-ups made while the balance is already positive.
+- Administrators can stop a running customer workspace from the user list;
+  elapsed usage is settled and customer files are retained.
+- Claude Pay-as-you-go commercial settings are surfaced on the admin overview,
+  and the Hermes page links customers to OpenRouter's discounted-model view.
 - Destructive account deletion separates deleted and retained data, identifies
   the account, states that recovery is impossible, and requires its email.
 - A five-step first-run journey guides customers from funding through their

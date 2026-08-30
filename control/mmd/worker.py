@@ -243,13 +243,15 @@ async def lifecycle_once() -> None:
         await client.aclose()
 
 
-# How often a metrics sample is taken. Was 60s, which gave a five-minute chart
-# only five points - too coarse to read. The multipliers below are set so that
-# settlement, lifecycle and reconciliation keep the cadence they have always
-# had (5 and 15 minutes) rather than silently running three times as often.
-TICK_SECONDS = 20
-SETTLE_EVERY = 15          # 15 x 20s = 5 minutes
-RECONCILE_EVERY = 45       # 45 x 20s = 15 minutes
+# The cheap intent pass runs every five seconds so a paid OpenRouter key gains
+# headroom before the customer can reasonably return to their external client.
+# Metrics retain their measured 20-second resolution; coupling these clocks
+# would quadruple the sample table merely to make one supplier update faster.
+LOOP_SECONDS = 5
+METRICS_EVERY = 4          # 4 x 5s = 20 seconds
+TICK_SECONDS = 20          # public metrics cadence, imported conceptually by API
+SETTLE_EVERY = 60          # 60 x 5s = 5 minutes
+RECONCILE_EVERY = 180      # 180 x 5s = 15 minutes
 
 # Samples are only used for drawing charts and for settling the CURRENT hour;
 # once an hour is settled its charge is in the ledger and the raw samples are
@@ -260,7 +262,7 @@ SAMPLE_RETENTION_DAYS = 7
 # AI tokens are pay-as-you-go and bill against the platform's own Claude
 # subscription, so the gap between usage and payment is real exposure. Five
 # minutes, matching the charge bucket in service.AI_PERIOD_SECONDS.
-AI_EVERY = 15              # 15 x 20s = 5 minutes
+AI_EVERY = 60              # 60 x 5s = 5 minutes
 
 
 def meter_ai_once() -> None:
@@ -297,8 +299,8 @@ def meter_ai_once() -> None:
                             "until one is", ws.incus_project, ", ".join(out["unpriced"]))
 
 
-HERMES_EVERY = 15          # 15 x 20s = 5 minutes, same cadence as Claude metering
-POLICY_EVERY = 90          # 90 x 20s = 30 minutes; the catalogue changes slowly
+HERMES_EVERY = 60          # 60 x 5s = 5 minutes, same cadence as Claude metering
+POLICY_EVERY = 360         # 360 x 5s = 30 minutes; the catalogue changes slowly
 
 
 def hermes_once(sync_policy: bool = False, meter_usage: bool = True) -> None:
@@ -331,8 +333,8 @@ def hermes_once(sync_policy: bool = False, meter_usage: bool = True) -> None:
                          or not w.hermes_credit_blocked))
                     or (not w.hermes_enabled and w.hermes_key_hash)
                     or (w.hermes_enabled and w.hermes_key_hash and
-                        w.hermes_credit_blocked !=
-                        (svc.balance_micro(db, w.user_id) <= 0))]
+                        (w.hermes_limit_dirty or w.hermes_credit_blocked !=
+                         (svc.balance_micro(db, w.user_id) <= 0)))]
         if not rows:
             return
         try:
@@ -383,6 +385,7 @@ def _hermes_workspace(db, ws: Workspace, client: OpenRouter,
                 except Exception as e:  # noqa: BLE001
                     log.warning("hermes teardown ws %s: %s", ws.id, e)
             hermes.revoke_key(db, ws, client)
+            ws.hermes_limit_dirty = False
             db.commit()
         return
 
@@ -392,12 +395,14 @@ def _hermes_workspace(db, ws: Workspace, client: OpenRouter,
         # A zero-dollar OpenRouter limit is not a stop signal. Do not mint a
         # usable key until the account can pay for its first request.
         ws.hermes_credit_blocked = True
+        ws.hermes_limit_dirty = False
         ws.hermes_error = None
         db.commit()
         return
     cap = hermes.affordable_usd(balance, usd_rate, discount)
 
     if hermes.ensure_key(db, ws, client, platform, cap):
+        ws.hermes_limit_dirty = False
         db.commit()
         _hermes_install(db, ws)
         return
@@ -408,7 +413,8 @@ def _hermes_workspace(db, ws: Workspace, client: OpenRouter,
         # powers on should not have to toggle it again.
         _hermes_install(db, ws)
 
-    if not meter_usage and ws.hermes_credit_blocked == credit_blocked:
+    if (not meter_usage and not ws.hermes_limit_dirty
+            and ws.hermes_credit_blocked == credit_blocked):
         return
     info = client.get_key(ws.hermes_key_hash)
     hermes.meter(db, ws, info, usd_rate, discount)
@@ -431,6 +437,7 @@ def _hermes_workspace(db, ws: Workspace, client: OpenRouter,
         client.update_key(ws.hermes_key_hash, limit_usd=cap,
                           disabled=credit_blocked)
     ws.hermes_credit_blocked = credit_blocked
+    ws.hermes_limit_dirty = False
     ws.hermes_error = None
     db.commit()
 
@@ -654,6 +661,7 @@ async def _factory_reset(db, op: Operation, ws: Workspace) -> None:
     ws.hermes_key = None
     ws.hermes_key_hash = None
     ws.hermes_credit_blocked = False
+    ws.hermes_limit_dirty = False
     ws.hermes_dash_user = None
     ws.hermes_dash_password = None
     ws.hermes_error = None
@@ -810,7 +818,8 @@ async def main() -> None:
     while True:
         try:
             await operations_once()
-            await meter_once()
+            if tick % METRICS_EVERY == 0:
+                await meter_once()
             if tick % AI_EVERY == 0:
                 meter_ai_once()
             # Provisioning is checked every tick so a toggle takes seconds;
@@ -833,7 +842,7 @@ async def main() -> None:
         except Exception:  # noqa: BLE001
             log.exception("worker tick failed")
         tick += 1
-        await asyncio.sleep(TICK_SECONDS)
+        await asyncio.sleep(LOOP_SECONDS)
 
 
 if __name__ == "__main__":

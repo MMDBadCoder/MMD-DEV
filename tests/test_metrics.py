@@ -179,8 +179,9 @@ def test_faster_sampling_did_not_change_settlement_timing():
     """
     from mmd import worker
     assert worker.TICK_SECONDS == 20
-    assert worker.TICK_SECONDS * worker.SETTLE_EVERY == 300
-    assert worker.TICK_SECONDS * worker.RECONCILE_EVERY == 900
+    assert worker.LOOP_SECONDS * worker.METRICS_EVERY == worker.TICK_SECONDS
+    assert worker.LOOP_SECONDS * worker.SETTLE_EVERY == 300
+    assert worker.LOOP_SECONDS * worker.RECONCILE_EVERY == 900
     # The interface is told the real cadence.
     assert appmod.SAMPLE_SECONDS == worker.TICK_SECONDS
 

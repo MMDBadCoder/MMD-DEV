@@ -116,6 +116,8 @@ function renderHermes(head, h) {
     <div class="card">
       <h2>${t("ai.hermes.how.title")}</h2>
       <p class="muted small">${t("ai.hermes.how.body")}</p>
+      ${note("info", `${t("ai.hermes.discounts")} <a href="https://openrouter.ai/models?discount=true&order=discount-high-to-low"
+        target="_blank" rel="noopener noreferrer">${t("ai.hermes.discounts.link")}${icon.arrow}</a>`)}
       <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(260px,1fr));margin-top:12px">
         <div class="copybox ok">
           <div class="copybox-h">${icon.check}${t("ai.hermes.yours")}</div>

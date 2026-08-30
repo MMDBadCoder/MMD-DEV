@@ -17,9 +17,10 @@ import { render } from "../main.js";
 import { adminHead } from "./adminnav.js";
 
 export async function adminPage() {
-  const [users, cap, settings, presets, tickets] = await Promise.all([
+  const [users, cap, settings, presets, tickets, claude] = await Promise.all([
     get("/api/admin/users"), get("/api/admin/capacity"),
     get("/api/admin/settings"), get("/api/presets"), get("/api/admin/tickets"),
+    get("/api/admin/ai-pricing"),
   ]);
 
   const pct = (a, b) => Math.min(100, Math.round(100 * a / Math.max(b, 0.001)));
@@ -81,6 +82,22 @@ export async function adminPage() {
             <div style="font-weight:600;font-size:14px">${
               t("tools.preset." + p.key) || esc(p.key)}</div>
             <div class="tiny dim mono ltr">${p.packages.length} pkg</div></button>`).join("")}
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="between">
+        <div><h3>${t("adm.commercial.title")}</h3>
+          <p class="tiny dim" style="margin:3px 0 0">${t("adm.commercial.sub")}</p></div>
+        <a class="btn primary" href="/console/admin/claude">${icon.sparkle}${t("adm.commercial.manage")}</a>
+      </div>
+      <div class="row" style="margin-top:14px">
+        <div class="stat"><div class="k">${t("adm.ai.usdrate")}</div>
+          <div class="v">${fmtMoney(claude.usd_to_toman)}</div></div>
+        <div class="stat"><div class="k">${t("adm.ai.discount")}</div>
+          <div class="v">${fmtFa(claude.discount_percent)}<small>٪</small></div></div>
+        <div class="stat"><div class="k">${t("adm.commercial.models")}</div>
+          <div class="v">${fmtFa(claude.prices.length)}</div></div>
       </div>
     </div>
 

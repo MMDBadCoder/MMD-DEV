@@ -36,6 +36,7 @@ SCHEMA_PATCHES: tuple[str, ...] = (
     "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS hermes_dash_password VARCHAR(64)",
     "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS hermes_error TEXT",
     "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS hermes_credit_blocked BOOLEAN NOT NULL DEFAULT FALSE",
+    "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS hermes_limit_dirty BOOLEAN NOT NULL DEFAULT FALSE",
     "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS auto_stop_at TIMESTAMPTZ",
     # Published ports now carry both protocols. Customer-published rows written
     # before that are widened; the reserved SSH and RDP rows are left alone,

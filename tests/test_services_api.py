@@ -38,7 +38,8 @@ def env(monkeypatch):
     Local = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
     db = Local()
-    u = User(email="new@example.com", password_hash="x", status=UserStatus.APPROVED)
+    u = User(email="new@example.com", password_hash="x", status=UserStatus.APPROVED,
+             is_admin=True)
     db.add(u)
     db.commit()
     ws = Workspace(user_id=u.id, idx=3, incus_project="ws-3", state=WorkspaceState.ON,
@@ -51,6 +52,46 @@ def env(monkeypatch):
     api.dependency_overrides[appmod.current_user] = lambda: u
     yield TestClient(api), db, ws, calls
     api.dependency_overrides.clear()
+
+
+def test_credit_grant_marks_an_existing_hermes_cap_for_immediate_refresh(env):
+    client, db, ws, _ = env
+    ws.hermes_enabled = True
+    ws.hermes_key_hash = "supplier-hash"
+    db.commit()
+
+    r = client.post(f"/api/admin/users/{ws.user_id}/credit",
+                    json={"credits": 500_000, "note": "paid"})
+
+    assert r.status_code == 200
+    db.refresh(ws)
+    assert ws.hermes_limit_dirty is True
+
+
+def test_admin_can_power_off_a_customer_workspace(env, monkeypatch):
+    client, db, ws, _ = env
+
+    class Incus:
+        stopped = False
+
+        async def stop(self, instance, project):
+            assert (instance, project) == (ws.instance, ws.incus_project)
+            self.stopped = True
+
+        async def aclose(self):
+            pass
+
+    incus = Incus()
+    monkeypatch.setattr(appmod, "_incus", lambda: incus)
+    monkeypatch.setattr(svc, "settle_elapsed", lambda *args, **kwargs: None)
+
+    r = client.post(f"/api/admin/workspaces/{ws.id}/power-off")
+
+    assert r.status_code == 200
+    assert incus.stopped is True
+    db.refresh(ws)
+    assert ws.state == WorkspaceState.OFF
+    assert ws.desired_on is False
 
 
 def test_a_brand_new_machine_already_has_both_addresses(env):

@@ -1959,7 +1959,7 @@ def admin_users(_: User = Depends(require_admin),
             "created_at": u.created_at.isoformat() if u.created_at else None,
             "credits": (acct.balance_micro / MICRO) if acct else 0.0,
             "workspace": None if w is None else {
-                "state": w.state.value, "cpu_milli": w.cpu_milli,
+                "id": w.id, "state": w.state.value, "cpu_milli": w.cpu_milli,
                 "cpu_cores": w.cpu_cores, "memory_mb": w.mem_mib,
                 "disk_gb": w.disk_gib},
         })
@@ -2206,8 +2206,53 @@ def admin_credit(user_id: int, body: CreditGrant,
     svc.post_transaction(db, user_id=user.id, workspace_id=None,
                          kind=TxKind.GRANT, amount_micro=round(body.credits * MICRO),
                          detail={"note": body.note, "by": admin.email})
+    ws = db.scalar(select(Workspace).where(Workspace.user_id == user.id))
+    if ws is not None and ws.hermes_enabled and ws.hermes_key_hash:
+        ws.hermes_limit_dirty = True
+        db.commit()
     svc.audit(db, admin.id, "grant_credit", user.email, credits=body.credits)
     return {"ok": True, "balance": svc.balance_micro(db, user.id) / MICRO}
+
+
+@app.post("/api/admin/workspaces/{workspace_id}/power-off")
+async def admin_power_off(workspace_id: int, admin: User = Depends(require_admin),
+                          db: Session = Depends(get_session)) -> dict:
+    """Stop a customer's machine without impersonating their session."""
+    ws = db.get(Workspace, workspace_id)
+    if ws is None:
+        fail(404, "no_such_workspace", "No such workspace")
+    if ws.state == WorkspaceState.OFF:
+        return {"ok": True, "state": ws.state.value}
+    if ws.state != WorkspaceState.ON:
+        fail(409, "power_bad_state", "The machine cannot be stopped in its current state.")
+    client = _incus()
+    try:
+        ws.state = WorkspaceState.STOPPING
+        db.commit()
+        await client.stop(ws.instance, ws.incus_project)
+        svc.settle_elapsed(db, ws, powered_on=True)
+        ws.state = WorkspaceState.OFF
+        ws.desired_on = False
+        ws.period_start = None
+        svc.disarm_auto_stop(ws)
+        db.commit()
+    except IncusError as exc:
+        log.error("admin stop failed for %s: %s", ws.incus_project, exc)
+        ws.state = WorkspaceState.ERROR
+        ws.error = str(exc)
+        db.commit()
+        fail(500, "power_failed", "The machine could not be changed.")
+    except Exception as exc:  # noqa: BLE001
+        log.exception("unexpected admin stop failure for %s", ws.incus_project)
+        ws.state = WorkspaceState.ERROR
+        ws.error = f"{type(exc).__name__}: {exc}"
+        db.commit()
+        fail(500, "power_failed", "The machine could not be changed.")
+    finally:
+        await client.aclose()
+    svc.audit(db, admin.id, "admin_power_off", ws.incus_project,
+              owner_id=ws.user_id)
+    return {"ok": True, "state": ws.state.value}
 
 
 @app.post("/api/admin/workspaces/{workspace_id}/apt-repair")

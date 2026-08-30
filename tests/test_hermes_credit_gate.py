@@ -67,6 +67,20 @@ def test_adding_credit_reenables_the_same_key_with_new_headroom(monkeypatch):
     assert ws.hermes_credit_blocked is False
 
 
+def test_a_positive_balance_top_up_refreshes_the_cap_on_the_fast_pass(monkeypatch):
+    db, ws = workspace(400_000 * MICRO, blocked=False)
+    ws.hermes_limit_dirty = True
+    db.commit()
+    supplier = Supplier(disabled=False, usage=2.0, limit=3.0)
+    monkeypatch.setattr(hermes, "meter", lambda *args: 0)
+
+    worker._hermes_workspace(db, ws, supplier, object(), 200_000.0, 0.0,
+                             meter_usage=False)
+
+    assert supplier.updates[-1] == {"limit_usd": 4.0, "disabled": False}
+    assert ws.hermes_limit_dirty is False
+
+
 def test_zero_credit_does_not_mint_a_new_usable_key(monkeypatch):
     db, ws = workspace(0, blocked=False)
     ws.hermes_key = None

@@ -236,6 +236,7 @@ def test_reset_revokes_and_forgets_the_old_hermes_identity(env, monkeypatch):
     assert ws.hermes_key is None
     assert ws.hermes_dash_user is None
     assert ws.hermes_dash_password is None
+    assert ws.hermes_limit_dirty is False
 
 
 def test_failed_hermes_revocation_leaves_reset_retryable_and_unselected(env, monkeypatch):

@@ -340,7 +340,7 @@ def test_the_period_bucket_matches_the_worker_cadence():
     """The idempotency key and the scan interval must agree, or a pass either
     double-charges or silently skips."""
     from mmd import worker
-    assert svc.AI_PERIOD_SECONDS == worker.AI_EVERY * worker.TICK_SECONDS
+    assert svc.AI_PERIOD_SECONDS == worker.AI_EVERY * worker.LOOP_SECONDS
 
 
 # --- the two services are priced apart -------------------------------------

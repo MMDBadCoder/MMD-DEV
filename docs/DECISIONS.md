@@ -1630,6 +1630,22 @@ all and looked like the same bug; clicking now renders the structured Persian
 reason supplied by the workspace response.
 
 
+## Credit grants wake the OpenRouter cap path without widening API privilege
+
+The customer may use their capped OpenRouter key outside the managed workspace,
+so increasing dashboard credit must increase supplier headroom quickly even
+when the old balance was still positive. Watching only the transition through
+zero left those ordinary top-ups waiting for the five-minute metering pass.
+
+The API still does not receive the OpenRouter management key. A credit grant
+sets `hermes_limit_dirty` on the workspace; the worker sees that durable intent
+on its five-second lightweight pass, meters supplier usage first, recalculates
+the cumulative cap from the resulting balance, updates the key, and clears the
+flag only after success. A crash or supplier outage leaves the flag set for a
+retry. Metrics remain on their 20-second cadence and full usage metering remains
+five-minute, so faster cap delivery does not inflate the samples table or poll
+every supplier key.
+
 ## Recovery actions, connections and notifications share global primitives
 
 An error sentence without a next action still leaves the customer stranded.

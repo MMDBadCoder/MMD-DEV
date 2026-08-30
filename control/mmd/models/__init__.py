@@ -161,6 +161,9 @@ class Workspace(Base):
     # fast worker pass notice a balance transition without polling every key at
     # OpenRouter every twenty seconds.
     hermes_credit_blocked: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Set by a balance mutation. The API deliberately has no supplier
+    # management key; the worker consumes this durable signal on its next pass.
+    hermes_limit_dirty: Mapped[bool] = mapped_column(Boolean, default=False)
     # The key's identity upstream, used to read usage, move the cap and revoke.
     hermes_key_hash: Mapped[str | None] = mapped_column(String(128))
     # The key itself. Deliberately stored and deliberately shown to its owner:

@@ -180,7 +180,7 @@ is denied the file API. Paths are validated server-side.
 | `POST` | `/api/admin/users/{id}/approve` | Provisions a machine, optionally with toolsets, hands it back **off** |
 | `POST` | `/api/admin/users/{id}/reject` | |
 | `POST` | `/api/admin/users/{id}/admin` | Promote or demote |
-| `POST` | `/api/admin/users/{id}/credit` | Grant credit |
+| `POST` | `/api/admin/users/{id}/credit` | Grant credit. Marks an active Hermes key for supplier-cap refresh on the next worker pass |
 | `DELETE` | `/api/admin/users/{id}` | |
 | `GET` | `/api/admin/capacity` | Reserved against schedulable capacity |
 | `GET` | `/api/admin/metrics` | `?minutes=`. Actual usage summed across every workspace, in cores and GB, scaled against sellable capacity |
@@ -191,6 +191,7 @@ is denied the file API. Paths are validated server-side.
 | `POST` | `/api/admin/tickets/{id}/messages` | Reply; marks the ticket answered |
 | `PUT` | `/api/admin/tickets/{id}/status` | `open ｜ in_progress ｜ answered ｜ closed` |
 | `POST` | `/api/admin/workspaces/{id}/apt-repair` | Re-apply the apt configuration |
+| `POST` | `/api/admin/workspaces/{id}/power-off` | Stop a running customer workspace, settle elapsed usage, and preserve its data |
 
 ---
 

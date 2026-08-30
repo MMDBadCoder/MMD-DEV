@@ -62,6 +62,8 @@ export async function adminUsersPage() {
         ? `<button class="btn sm primary" data-approve="${u.id}">${t("adm.approve")}</button>
            <button class="btn sm danger" data-reject="${u.id}">${t("adm.reject")}</button>` : ""}
       <button class="btn sm" data-credit="${u.id}" ${u.status === "deleting" ? "disabled" : ""}>${t("adm.credit")}</button>
+      ${u.workspace?.state === "on" ? `<button class="btn sm danger" data-poweroff="${u.workspace.id}"
+        data-owner="${esc(u.email)}">${icon.power}${t("adm.poweroff")}</button>` : ""}
       <a class="btn sm ghost" href="/console/admin/users/${u.id}">${t("adm.details")}</a>
       <button class="btn sm ghost" data-admin="${u.id}" data-is="${u.is_admin}">
         ${u.is_admin ? t("adm.demote") : t("adm.makeadmin")}</button>
@@ -139,6 +141,18 @@ export async function adminUsersPage() {
     const makeAdmin = b.dataset.is !== "true";
     try { await post(`/api/admin/users/${b.dataset.admin}/admin`, { is_admin: makeAdmin }); }
     catch (e) { toast(e.message, "bad"); }
+    adminUsersPage();
+  });
+
+  $$("[data-poweroff]").forEach((b) => b.onclick = async () => {
+    if (!await confirmDialog(t("adm.poweroff.confirm.title", b.dataset.owner),
+                             t("adm.poweroff.confirm.body"), t("adm.poweroff"))) return;
+    b.disabled = true;
+    b.innerHTML = `<span class="spinner"></span>${t("adm.poweroff.working")}`;
+    try {
+      await post(`/api/admin/workspaces/${b.dataset.poweroff}/power-off`);
+      toast(t("adm.poweroff.done"), "ok");
+    } catch (e) { toast(e.message, "bad"); }
     adminUsersPage();
   });
 
