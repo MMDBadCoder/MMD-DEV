@@ -153,6 +153,14 @@ is denied the file API. Paths are validated server-side.
 | `POST` | `/api/workspace/presets` | Install. Package names are validated against a strict pattern on both sides |
 | `GET` | `/api/workspace/ai` | Claude Code state: installed, version, signed in, expiry |
 | `POST` | `/api/workspace/ai/claude` | `{action: "install"｜"unlink"}`. Installs the CLI and carries the platform sign-in across |
+| `POST` | `/api/workspace/ai/hermes` | `{enabled, telegram_enabled?, telegram_token?, telegram_users?}`. Enables Hermes and optionally its Telegram gateway. A token and comma-separated numeric sender allowlist are required when first enabling Telegram; the token is never returned |
+
+The AI state includes `hermes.telegram_enabled`, `telegram_ready`,
+`telegram_users`, and `telegram_error`. The control plane keeps the bot token
+only until the worker has delivered it to the workspace's protected environment
+file. Omitting `telegram_enabled` preserves the current gateway intent, making a
+repeated Hermes enable request idempotent. Explicitly setting it to `false`
+removes the gateway service and Telegram credentials without disabling Hermes.
 
 ## Billing and activity
 

@@ -83,6 +83,22 @@ WorkingDirectory=/home/dev
 WantedBy=multi-user.target
 """
 
+HERMES_GATEWAY_UNIT = """[Unit]
+Description=Hermes messaging gateway
+After=network-online.target hermes-dashboard.service
+
+[Service]
+Type=simple
+User=dev
+WorkingDirectory=/home/dev
+ExecStart=/home/dev/.local/bin/hermes gateway
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+"""
+
 VERBS = {"provision", "archive", "restore", "destroy",
          "expose_port", "unexpose_port", "install_packages",
          "service_ssh", "service_rdp", "service_hermes",
@@ -905,7 +921,7 @@ def handle(req: dict) -> dict:
         if action == "disable":
             ok, out = _run(["incus", "exec", "ws", "--project", project, "--",
                             "bash", "-lc",
-                            "systemctl disable --now hermes-dashboard >/dev/null 2>&1; "
+                            "systemctl disable --now hermes-dashboard hermes-gateway >/dev/null 2>&1; "
                             "systemctl reset-failed hermes-dashboard >/dev/null 2>&1; "
                             # The key is what actually costs money, so removing
                             # it matters more than stopping the listener.
@@ -920,10 +936,18 @@ def handle(req: dict) -> dict:
         ip = req.get("ip") or ""
         dash_user = req.get("dash_user") or ""
         dash_password = req.get("dash_password") or ""
+        telegram_enabled = bool(req.get("telegram_enabled"))
+        telegram_token = req.get("telegram_token") or ""
+        telegram_users = (req.get("telegram_users") or "").replace(" ", "")
         if not key or not ip:
             return {"ok": False, "error": "api_key and ip are required"}
         if not dash_user or not dash_password:
             return {"ok": False, "error": "dashboard credentials are required"}
+        if telegram_enabled:
+            if not re.fullmatch(r"[0-9]{6,15}:[A-Za-z0-9_-]{20,}", telegram_token):
+                return {"ok": False, "error": "invalid telegram token"}
+            if not re.fullmatch(r"[1-9][0-9]{4,14}(,[1-9][0-9]{4,14})*", telegram_users):
+                return {"ok": False, "error": "invalid telegram allowlist"}
 
         installed = False
         if req.get("install"):
@@ -953,7 +977,11 @@ def handle(req: dict) -> dict:
                                    "umask 077 && cat > /home/dev/.hermes/.env && "
                                    "chown dev:dev /home/dev/.hermes/.env && "
                                    "chmod 0600 /home/dev/.hermes/.env"],
-                                  timeout=60, stdin_text=f"OPENROUTER_API_KEY={key}\n")
+                                  timeout=60, stdin_text=(
+                                      f"OPENROUTER_API_KEY={key}\n"
+                                      + (f"TELEGRAM_BOT_TOKEN={telegram_token}\n"
+                                         f"TELEGRAM_ALLOWED_USERS={telegram_users}\n"
+                                         if telegram_enabled else "")))
         if rc != 0:
             return {"ok": False, "error": "could not write key",
                     "output": (out + err)[-300:]}
@@ -1010,7 +1038,33 @@ def handle(req: dict) -> dict:
             timeout=180, stdin_text=unit_text)
         out = out + err
         listening = "listeners=" in out and "listeners=0" not in out
-        return {"ok": listening, "installed": installed, "output": (out or "")[-900:]}
+        if not listening:
+            return {"ok": False, "installed": installed, "output": (out or "")[-900:]}
+
+        if telegram_enabled:
+            rc, gout, gerr = _run_split(
+                ["incus", "exec", "ws", "--project", project, "--", "bash", "-lc",
+                 "cat > /etc/systemd/system/hermes-gateway.service && "
+                 "chmod 0644 /etc/systemd/system/hermes-gateway.service && "
+                 "systemctl daemon-reload && systemctl enable hermes-gateway >/dev/null 2>&1 && "
+                 "systemctl restart hermes-gateway && sleep 3 && "
+                 "systemctl is-active hermes-gateway"],
+                timeout=120, stdin_text=HERMES_GATEWAY_UNIT)
+            if rc != 0 or "active" not in gout.splitlines():
+                return {"ok": False, "error": "telegram gateway failed",
+                        "output": (gout + gerr)[-900:]}
+        else:
+            _, gout = _run(
+                ["incus", "exec", "ws", "--project", project, "--", "bash", "-lc",
+                 "systemctl disable --now hermes-gateway >/dev/null 2>&1 || true; "
+                 "systemctl is-active --quiet hermes-gateway && echo gateway=1 || echo gateway=0; "
+                 "rm -f /etc/systemd/system/hermes-gateway.service; systemctl daemon-reload"],
+                timeout=120)
+            if "gateway=0" not in (gout or ""):
+                return {"ok": False, "error": "telegram gateway did not stop",
+                        "output": (gout or "")[-300:]}
+        return {"ok": True, "installed": installed,
+                "telegram_installed": telegram_enabled, "output": (out or "")[-900:]}
 
     if verb == "service_rdp":
         action = req.get("action")

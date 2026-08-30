@@ -429,3 +429,50 @@ def test_hermes_still_refuses_claudes_verbs(env):
     for bad in ("install", "unlink", "delete", ""):
         assert client.post("/api/workspace/ai/hermes",
                            json={"action": bad}).status_code == 422
+
+
+def test_telegram_can_be_selected_during_hermes_activation_without_leaking_token(env):
+    client, db, ws, _ = env
+    ws.user.username = "ali"
+    db.commit()
+    token = "123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcd"
+    r = client.post("/api/workspace/ai/hermes", json={
+        "action": "enable", "telegram_enabled": True,
+        "telegram_token": token, "telegram_users": "123456789, 987654321",
+    })
+    assert r.status_code == 200, r.text
+    assert token not in r.text
+    db.refresh(ws)
+    assert ws.hermes_telegram_enabled is True
+    assert ws.hermes_telegram_token == token
+    assert ws.hermes_telegram_users == "123456789,987654321"
+
+
+def test_telegram_requires_a_real_bot_token_and_numeric_allowlist(env):
+    client, db, ws, _ = env
+    ws.user.username = "ali"
+    db.commit()
+    bad_token = client.post("/api/workspace/ai/hermes", json={
+        "action": "enable", "telegram_enabled": True,
+        "telegram_token": "not-a-token", "telegram_users": "123456789",
+    })
+    assert bad_token.status_code == 400
+    assert bad_token.json()["detail"]["code"] == "telegram_bad_token"
+    bad_users = client.post("/api/workspace/ai/hermes", json={
+        "action": "enable", "telegram_enabled": True,
+        "telegram_token": "123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcd",
+        "telegram_users": "@username",
+    })
+    assert bad_users.status_code == 400
+    assert bad_users.json()["detail"]["code"] == "telegram_bad_users"
+
+
+def test_idempotent_hermes_enable_does_not_silently_disable_telegram(env):
+    client, db, ws, _ = env
+    ws.user.username = "ali"
+    ws.hermes_telegram_enabled = True
+    ws.hermes_telegram_installed = True
+    db.commit()
+    assert client.post("/api/workspace/ai/hermes", json={"action": "enable"}).status_code == 200
+    db.refresh(ws)
+    assert ws.hermes_telegram_enabled is True

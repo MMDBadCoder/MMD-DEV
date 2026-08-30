@@ -333,6 +333,8 @@ def hermes_once(sync_policy: bool = False, meter_usage: bool = True) -> None:
                          or not w.hermes_credit_blocked))
                     or (not w.hermes_enabled and w.hermes_key_hash)
                     or (w.hermes_enabled and w.hermes_key_hash and
+                        w.hermes_telegram_installed != w.hermes_telegram_enabled)
+                    or (w.hermes_enabled and w.hermes_key_hash and
                         (w.hermes_limit_dirty or w.hermes_credit_blocked !=
                          (svc.balance_micro(db, w.user_id) <= 0)))]
         if not rows:
@@ -407,7 +409,8 @@ def _hermes_workspace(db, ws: Workspace, client: OpenRouter,
         _hermes_install(db, ws)
         return
 
-    if not ws.hermes_installed:
+    if (not ws.hermes_installed
+            or ws.hermes_telegram_installed != ws.hermes_telegram_enabled):
         # Retried on later passes: the usual reason it has not happened yet is
         # simply that the machine is off, and a customer who enables Hermes then
         # powers on should not have to toggle it again.
@@ -454,22 +457,30 @@ def _hermes_install(db, ws: Workspace) -> None:
     try:
         resp = svc.call_provisioner({
             "verb": "service_hermes", "idx": ws.idx, "action": "enable",
-            "install": True, "api_key": ws.hermes_key,
+            "install": not ws.hermes_installed, "api_key": ws.hermes_key,
             "model": hermes.default_model(db),
             "dash_user": ws.hermes_dash_user,
             "dash_password": ws.hermes_dash_password,
+            "telegram_enabled": ws.hermes_telegram_enabled,
+            "telegram_token": ws.hermes_telegram_token,
+            "telegram_users": ws.hermes_telegram_users,
             "ip": svc.workspace_ip(ws)}, timeout=1800)
     except Exception as e:  # noqa: BLE001
         log.warning("hermes install ws %s: %s", ws.id, e)
         return
     if resp.get("ok"):
         ws.hermes_installed = True
+        ws.hermes_telegram_installed = ws.hermes_telegram_enabled
+        ws.hermes_telegram_token = None
+        ws.hermes_telegram_error = None
         ws.hermes_error = None
         log.info("hermes dashboard up for ws %s", ws.id)
     else:
         # Surfaced to the customer rather than only logged: "enabled but the
         # dashboard never appeared" is otherwise indistinguishable from a hang.
         ws.hermes_error = (resp.get("error") or resp.get("output") or "install failed")[-300:]
+        if ws.hermes_telegram_enabled:
+            ws.hermes_telegram_error = ws.hermes_error
         log.warning("hermes install ws %s failed: %s", ws.id, ws.hermes_error)
     db.commit()
 
@@ -662,6 +673,11 @@ async def _factory_reset(db, op: Operation, ws: Workspace) -> None:
     ws.hermes_key_hash = None
     ws.hermes_credit_blocked = False
     ws.hermes_limit_dirty = False
+    ws.hermes_telegram_enabled = False
+    ws.hermes_telegram_installed = False
+    ws.hermes_telegram_token = None
+    ws.hermes_telegram_users = None
+    ws.hermes_telegram_error = None
     ws.hermes_dash_user = None
     ws.hermes_dash_password = None
     ws.hermes_error = None

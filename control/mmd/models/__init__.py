@@ -180,6 +180,13 @@ class Workspace(Base):
     hermes_dash_user: Mapped[str | None] = mapped_column(String(64))
     hermes_dash_password: Mapped[str | None] = mapped_column(String(64))
     hermes_error: Mapped[str | None] = mapped_column(Text)
+    hermes_telegram_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    hermes_telegram_installed: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Temporary delivery state only: cleared immediately after the worker has
+    # written the token into the customer's 0600 workspace environment.
+    hermes_telegram_token: Mapped[str | None] = mapped_column(String(256))
+    hermes_telegram_users: Mapped[str | None] = mapped_column(String(256))
+    hermes_telegram_error: Mapped[str | None] = mapped_column(Text)
 
     user: Mapped[User] = relationship(back_populates="workspace")
 

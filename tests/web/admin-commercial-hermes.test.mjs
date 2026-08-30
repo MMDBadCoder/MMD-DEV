@@ -27,3 +27,17 @@ test("Hermes links to OpenRouter's highest-discount model view", () => {
   assert.match(ai, /https:\/\/openrouter\.ai\/models\?discount=true&order=discount-high-to-low/);
   assert.match(ai, /target="_blank" rel="noopener noreferrer"/);
 });
+
+test("Hermes activation offers an optional Telegram gateway with an allowlist", () => {
+  assert.match(ai, /id="tg-option"/);
+  assert.match(ai, /telegram_token/);
+  assert.match(ai, /telegram_users/);
+  assert.match(ai, /https:\/\/t\.me\/BotFather/);
+  assert.match(ai, /telegram_ready/);
+});
+
+test("Telegram can be enabled later or disabled without disabling Hermes", () => {
+  assert.match(ai, /id="tg-enable"/);
+  assert.match(ai, /id="tg-disable"/);
+  assert.match(ai, /action: "enable", \.\.\.payload/);
+});

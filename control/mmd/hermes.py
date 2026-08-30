@@ -321,6 +321,11 @@ def revoke_key(db, ws: Workspace, client: OpenRouter, *, strict: bool = False) -
     ws.hermes_installed = False
     ws.hermes_credit_blocked = False
     ws.hermes_dash_password = None
+    ws.hermes_telegram_enabled = False
+    ws.hermes_telegram_installed = False
+    ws.hermes_telegram_token = None
+    ws.hermes_telegram_users = None
+    ws.hermes_telegram_error = None
 
 
 def meter(db, ws: Workspace, info, usd_to_toman: float, discount_percent: float) -> int:

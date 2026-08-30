@@ -62,6 +62,19 @@ export async function aiPage(params) {
  * machine anyway, so hiding it from its owner would protect nothing. */
 function renderHermes(head, h) {
   const waiting = h.enabled && !h.ready && !h.credit_blocked;
+  const telegramWaiting = h.telegram_enabled && !h.telegram_ready;
+  const telegramFields = (hidden = false) => `<div class="telegram-fields" ${hidden ? "hidden" : ""}>
+    <div class="row">
+      <div class="field"><label for="tg-token">${t("ai.hermes.telegram.token")}</label>
+        <input id="tg-token" class="ltr mono" dir="ltr" type="password" autocomplete="off"
+          placeholder="123456789:AA…"></div>
+      <div class="field"><label for="tg-users">${t("ai.hermes.telegram.users")}</label>
+        <input id="tg-users" class="ltr mono" dir="ltr" inputmode="numeric"
+          placeholder="123456789"></div>
+    </div>
+    <p class="tiny dim">${t("ai.hermes.telegram.help")}
+      <a href="https://t.me/BotFather" target="_blank" rel="noopener noreferrer">BotFather ${icon.link}</a></p>
+  </div>`;
 
   render(`${head}
     <div class="card">
@@ -105,6 +118,23 @@ function renderHermes(head, h) {
           </div>` : ""}
         </div>` : ""}
 
+      ${!h.enabled ? `<div class="telegram-option">
+        <label class="ack"><input type="checkbox" id="tg-option">
+          <span><b>${t("ai.hermes.telegram.option")}</b><br>
+          <span class="tiny dim">${t("ai.hermes.telegram.option.sub")}</span></span></label>
+        ${telegramFields(true)}</div>` : `<div class="telegram-option">
+        <div class="between"><div><h3>${t("ai.hermes.telegram.title")}</h3>
+          <p class="tiny dim">${t("ai.hermes.telegram.sub")}</p></div>
+          <span class="pill"><span class="dot ${h.telegram_ready ? "on" : h.telegram_enabled ? "busy" : ""}"></span>${
+            h.telegram_ready ? t("ai.hermes.telegram.ready")
+              : h.telegram_enabled ? t("ai.hermes.telegram.preparing") : t("conn.off")}</span></div>
+        ${h.telegram_error ? note("bad", t("ai.hermes.telegram.error")) : ""}
+        ${h.telegram_enabled ? `<p class="small">${t("ai.hermes.telegram.allowed")}
+          <span class="mono ltr">${esc(h.telegram_users || "—")}</span></p>
+          <button class="btn sm danger ghost" id="tg-disable">${t("ai.hermes.telegram.disable")}</button>`
+          : `${telegramFields()}<button class="btn sm primary" id="tg-enable">${
+              icon.chat}${t("ai.hermes.telegram.enable")}</button>`}</div>`}
+
       <div class="btn-row" style="margin-top:16px">
         <button class="btn ${h.enabled ? "danger ghost" : "primary"}" id="hermes-go">
           ${h.enabled ? icon.trash : icon.shield}
@@ -133,6 +163,35 @@ function renderHermes(head, h) {
     </div>`);
 
   wireSecrets(document, t("conn.copied"));
+  $("#tg-option")?.addEventListener("change", (e) => {
+    document.querySelector(".telegram-fields").hidden = !e.currentTarget.checked;
+  });
+
+  const telegramPayload = () => ({
+    telegram_enabled: true,
+    telegram_token: $("#tg-token")?.value.trim() || "",
+    telegram_users: $("#tg-users")?.value.replace(/\s/g, "") || "",
+  });
+
+  const configureTelegram = async (enabled) => {
+    const payload = enabled ? telegramPayload() : { telegram_enabled: false };
+    if (enabled && (!payload.telegram_token || !payload.telegram_users)) {
+      $("#hermes-msg").innerHTML = note("bad", t("ai.hermes.telegram.required"));
+      return;
+    }
+    const b = enabled ? $("#tg-enable") : $("#tg-disable");
+    b.disabled = true;
+    try {
+      await post("/api/workspace/ai/hermes", { action: "enable", ...payload });
+      toast(t(enabled ? "ai.hermes.telegram.queued" : "ai.hermes.telegram.disabled"), "ok");
+      aiPage({ tab: "hermes" });
+    } catch (err) {
+      $("#hermes-msg").innerHTML = note("bad", esc(err.message));
+      b.disabled = false;
+    }
+  };
+  $("#tg-enable")?.addEventListener("click", () => configureTelegram(true));
+  $("#tg-disable")?.addEventListener("click", () => configureTelegram(false));
 
   $("#hermes-go").onclick = async () => {
     const on = h.enabled;
@@ -143,15 +202,25 @@ function renderHermes(head, h) {
     b.disabled = true;
     b.innerHTML = `<span class="spinner"></span>${t("conn.working")}`;
     try {
-      await post("/api/workspace/ai/hermes", { action: on ? "disable" : "enable" });
+      const telegram = !on && $("#tg-option")?.checked ? telegramPayload() : {};
+      if (telegram.telegram_enabled && (!telegram.telegram_token || !telegram.telegram_users)) {
+        $("#hermes-msg").innerHTML = note("bad", t("ai.hermes.telegram.required"));
+        b.disabled = false; b.innerHTML = `${icon.shield}${t("ai.hermes.enable")}`;
+        return;
+      }
+      await post("/api/workspace/ai/hermes", { action: on ? "disable" : "enable", ...telegram });
       toast(t(on ? "ai.hermes.done.disabled" : "ai.hermes.done.enabled"), "ok");
-    } catch (err) { $("#hermes-msg").innerHTML = note("bad", esc(err.message)); }
+    } catch (err) {
+      $("#hermes-msg").innerHTML = note("bad", esc(err.message));
+      b.disabled = false;
+      return;
+    }
     aiPage({ tab: "hermes" });
   };
 
   // The key is minted by the worker, not by this request, so the page polls
   // itself into the ready state instead of making the customer reload.
-  if (waiting) setTimeout(() => aiPage({ tab: "hermes" }), 5000);
+  if (waiting || telegramWaiting) setTimeout(() => aiPage({ tab: "hermes" }), 5000);
 }
 
 /* What the tokens have actually cost. Read from the platform's own records, not

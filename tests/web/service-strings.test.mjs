@@ -25,7 +25,7 @@ const { t } = await import(path.join(ROOT, "web/js/i18n.js"));
 const AI = read("web/js/pages/ai.js");
 // The Hermes half of the page: from its click handler to the end of the block.
 const HERMES = AI.slice(AI.indexOf('$("#hermes-go").onclick'),
-                        AI.indexOf('$("#hermes-go").onclick') + 700);
+                        AI.indexOf("/* What the tokens have actually cost."));
 
 test("the Hermes handler exists and posts the enable/disable verbs", () => {
   assert.ok(HERMES.includes('"disable" : "enable"'), HERMES);

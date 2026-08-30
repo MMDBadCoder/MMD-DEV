@@ -10,6 +10,11 @@ Notable changes. Dates are the day the work landed on the production host.
   elapsed usage is settled and customer files are retained.
 - Claude Pay-as-you-go commercial settings are surfaced on the admin overview,
   and the Hermes page links customers to OpenRouter's discounted-model view.
+- Hermes can optionally configure a Telegram bot during activation or later.
+  The gateway runs persistently as the workspace user with a mandatory numeric
+  sender allowlist; its token is delivered to the workspace and then erased
+  from the control database. Disabling Telegram or resetting Hermes removes
+  the gateway and its workspace credentials.
 - Destructive account deletion separates deleted and retained data, identifies
   the account, states that recovery is impossible, and requires its email.
 - A five-step first-run journey guides customers from funding through their

@@ -11,6 +11,7 @@ import json as _json
 import logging
 import os
 import posixpath
+import re
 import secrets
 import shutil
 from datetime import UTC, datetime, timedelta
@@ -218,6 +219,9 @@ class HermesAction(BaseModel):
     different - sharing one rejected every enable with a schema error.
     """
     action: str = Field(pattern="^(enable|disable)$")
+    telegram_enabled: bool | None = None
+    telegram_token: str | None = Field(default=None, max_length=256)
+    telegram_users: str | None = Field(default=None, max_length=256)
 
 
 class SshKeyAdd(BaseModel):
@@ -1168,6 +1172,10 @@ def _hermes_state(ws: Workspace) -> dict:
             "host": unames.hermes_host(ws.user.username, CONFIG.domain)
             if ws.user and ws.user.username else None,
             "machine_running": ws.state == WorkspaceState.ON,
+            "telegram_enabled": bool(ws.hermes_telegram_enabled),
+            "telegram_ready": bool(ws.hermes_telegram_installed),
+            "telegram_users": ws.hermes_telegram_users,
+            "telegram_error": bool(ws.hermes_telegram_error),
             # A FLAG, not the text. The stored value is whatever OpenRouter or
             # the provisioner said, in English, with HTTP status codes and JSON
             # in it - useful to an operator, meaningless and alarming to a
@@ -1198,10 +1206,31 @@ def ai_hermes(body: HermesAction, user: User = Depends(current_user),
         fail(409, "no_username", "This account has no username yet.")
 
     ws.hermes_enabled = (body.action == "enable")
+    if ws.hermes_enabled:
+        if body.telegram_enabled is True:
+            token = (body.telegram_token or "").strip()
+            users = (body.telegram_users or "").replace(" ", "")
+            if not re.fullmatch(r"[0-9]{6,15}:[A-Za-z0-9_-]{20,}", token):
+                fail(400, "telegram_bad_token", "The Telegram bot token is invalid.")
+            if not re.fullmatch(r"[1-9][0-9]{4,14}(,[1-9][0-9]{4,14})*", users):
+                fail(400, "telegram_bad_users", "The Telegram user allowlist is invalid.")
+            ws.hermes_telegram_enabled = True
+            ws.hermes_telegram_token = token
+            ws.hermes_telegram_users = users
+            ws.hermes_telegram_error = None
+        elif body.telegram_enabled is False and ws.hermes_telegram_enabled:
+            ws.hermes_telegram_enabled = False
+            ws.hermes_telegram_token = None
+            ws.hermes_telegram_users = None
+            ws.hermes_telegram_error = None
     if not ws.hermes_enabled:
         # Cleared here so the interface stops showing a secret the moment the
         # customer switches it off, rather than until the worker catches up.
         ws.hermes_key = None
+        ws.hermes_telegram_enabled = False
+        ws.hermes_telegram_token = None
+        ws.hermes_telegram_users = None
+        ws.hermes_telegram_error = None
     ws.hermes_error = None
     db.commit()
     svc.audit(db, user.id, f"ai_hermes_{body.action}", ws.incus_project)

@@ -1713,3 +1713,34 @@ that was destroyed (installed/enabled service flags, cached authorized-keys
 content, activity and automatic-stop timestamps). Keeping those flags was the
 source of a particularly misleading state: the dashboard could say software was
 installed when its disk no longer existed.
+
+
+## Telegram for Hermes is an outbound, workspace-owned gateway
+
+Hermes' Telegram integration uses BotFather credentials, a numeric sender
+allowlist and outbound long polling. It therefore needs no published customer
+port and must not create another public ingress path. The gateway runs as
+`dev`—the same identity that owns Hermes—under a persistent systemd service, so
+it restarts after failure and follows workspace boot without giving the process
+root privileges.
+
+The customer can select Telegram while enabling Hermes or add and remove it
+later without reinstalling Hermes. An allowlist is mandatory: accepting every
+Telegram sender by default would expose a customer's paid OpenRouter allowance
+to anyone who discovers the bot. Both the API and the root provisioner validate
+the restricted token and allowlist formats. The second validation is required
+by the privilege boundary; the provisioner never trusts values merely because
+the internet-facing API accepted them.
+
+The bot token is transient control-plane state. The API stores it only long
+enough for the worker to deliver it into `/home/dev/.hermes/.env`, whose
+directory and file permissions are restricted to `dev`; the worker clears the
+database value only after the provisioner confirms a running gateway. A crash
+or failed installation therefore remains retryable without leaving a permanent
+second copy in PostgreSQL. API responses never include the token.
+
+Explicit Telegram disable stops and removes its unit and rewrites the
+environment without Telegram credentials. Hermes disable, key revocation and
+factory reset clear both gateway intent and installed state as well. This keeps
+the dashboard tied to what exists on the current filesystem rather than what
+was installed on a machine that has already been destroyed.

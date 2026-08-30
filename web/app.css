@@ -476,6 +476,9 @@ tr.clickable:hover{background:var(--surface-2)}
 .onboarding-check{width:26px;height:26px;border:1px solid currentColor;border-radius:50%;
   display:grid;place-items:center;flex:none;font-size:12px;font-weight:700}
 .onboarding-check svg{width:15px;height:15px}
+.telegram-option{margin-top:16px;padding:14px;border:1px solid var(--border);
+  border-radius:10px;background:var(--surface-2)}
+.telegram-option h3,.telegram-option p{margin:0}.telegram-fields{margin-top:12px}
 
 /* --- usage charts -------------------------------------------------------- */
 .winpick{display:flex;gap:4px;flex-wrap:wrap}

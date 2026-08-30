@@ -65,7 +65,10 @@ def env(monkeypatch):
                    state=WorkspaceState.OFF, mem_mib=2048,
                    ssh_enabled=True, ssh_keys="ssh-ed25519 AAAA... dev@laptop",
                    rdp_enabled=True, rdp_installed=True,
-                   hermes_enabled=True, hermes_installed=True)
+                   hermes_enabled=True, hermes_installed=True,
+                   hermes_telegram_enabled=True, hermes_telegram_installed=True,
+                   hermes_telegram_token="temporary-token",
+                   hermes_telegram_users="123456789")
     db.add(ws)
     db.commit()
     PORTS.reserve_service_ports(db, ws.id)
@@ -203,6 +206,10 @@ def test_the_services_are_switched_back_off(env):
     assert ws.ssh_keys is None
     assert ws.hermes_enabled is False
     assert ws.hermes_installed is False
+    assert ws.hermes_telegram_enabled is False
+    assert ws.hermes_telegram_installed is False
+    assert ws.hermes_telegram_token is None
+    assert ws.hermes_telegram_users is None
     assert ws.auto_stop_at is None
 
 
