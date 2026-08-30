@@ -53,29 +53,27 @@ test("Claude Code's own string still names Claude Code", () => {
   assert.ok(/Claude Code/.test(t("ai.done")), t("ai.done"));
 });
 
-/* ---- reported: the sign-in form asked for a username ---------------------
- *
- * It was copy-pasted from sign-up, was never sent to /api/auth/login (which
- * takes an email and a password), and ran the availability check - so a
- * returning customer typing their own username was told it was taken.
- */
+/* Sign-in and signup have deliberately different identity fields. */
 const AUTH = read("web/js/pages/auth.js");
 const signIn = AUTH.slice(AUTH.indexOf("export function signInPage"),
                           AUTH.indexOf("export function signUpPage"));
 const signUp = AUTH.slice(AUTH.indexOf("export function signUpPage"));
 
-test("sign-in has no username field", () => {
-  assert.ok(!signIn.includes('id="uname"'), signIn);
+test("sign-in uses only username and password", () => {
+  assert.ok(signIn.includes('id="username"'), signIn);
+  assert.ok(signIn.includes('id="pw"'), signIn);
+  for (const field of ['id="email"', 'id="phone"', 'id="fullname"'])
+    assert.ok(!signIn.includes(field), `${field} leaked into sign-in`);
+  assert.match(signIn, /username:\s*\$\("#username"\)/);
 });
 
 test("sign-in does not call the username-availability endpoint", () => {
   assert.ok(!signIn.includes("username-available"), signIn);
 });
 
-test("sign-up still chooses a username", () => {
-  // The username is a DNS label and part of the Hermes hostname, so it has to
-  // be picked somewhere - just not on the way back in.
-  assert.ok(signUp.includes('id="uname"'));
+test("sign-up collects every required identity field", () => {
+  for (const field of ['id="fullname"', 'id="phone"', 'id="email"', 'id="uname"', 'id="pw"'])
+    assert.ok(signUp.includes(field), `${field} missing from signup`);
   assert.ok(signUp.includes("username-available"));
 });
 

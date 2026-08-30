@@ -126,7 +126,7 @@ class Credentials(BaseModel):
 
 
 class LoginBody(BaseModel):
-    email: EmailStr
+    username: str = Field(min_length=1, max_length=64)
     password: str
 
 
@@ -348,9 +348,12 @@ def username_available(name: str, db: Session = Depends(get_session)) -> dict:
 @app.post("/api/auth/login")
 def login(body: LoginBody, response: Response,
           db: Session = Depends(get_session)) -> dict:
-    user = db.scalar(select(User).where(User.email == body.email.lower()))
+    # Username is the sole public login identifier. Email and phone remain
+    # contact/profile data and changing either cannot lock a customer out.
+    username = body.username.strip().lower()
+    user = db.scalar(select(User).where(User.username == username))
     if user is None or not verify_password(body.password, user.password_hash):
-        fail(401, "bad_credentials", "Incorrect email or password")
+        fail(401, "bad_credentials", "Incorrect username or password")
     response.set_cookie(COOKIE, _serializer.dumps(str(user.id)), httponly=True,
                         samesite="lax", secure=True,
                         max_age=CONFIG.session_hours * 3600)

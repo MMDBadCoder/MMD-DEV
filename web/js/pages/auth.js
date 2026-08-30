@@ -33,21 +33,11 @@ export function signInPage(_p, msg) {
     altText: t("auth.noaccount"), altHref: "/signup", altLabel: t("auth.createone"),
     msg,
     fields: `
-      <div class="field"><label for="fullname">${t("auth.fullname")}</label>
-        <input id="fullname" autocomplete="name" maxlength="120" autofocus></div>
-      <div class="field"><label for="phone">${t("auth.phone")}</label>
-        <input id="phone" class="ltr" dir="ltr" type="tel" inputmode="numeric"
-               autocomplete="tel" maxlength="11" placeholder="09123456789"></div>
-      <div class="field"><label for="email">${t("auth.email")}</label>
-        <input id="email" type="email" autocomplete="username"></div>
+      <div class="field"><label for="username">${t("auth.username")}</label>
+        <input id="username" class="ltr" dir="ltr" autocomplete="username" autofocus></div>
       <div class="field"><label for="pw">${t("auth.password")}</label>
         <input id="pw" type="password" autocomplete="current-password"></div>`,
   }));
-
-  // No username field here. It is chosen once, at sign-up, and /api/auth/login
-  // takes only an email and a password - so the field that used to sit here was
-  // never sent anywhere. It also ran the availability check, which told a
-  // returning customer that their own username was already taken.
 
   $("#form").onsubmit = async (e) => {
     e.preventDefault();
@@ -55,7 +45,7 @@ export function signInPage(_p, msg) {
     btn.disabled = true; btn.textContent = t("auth.signin.busy");
     try {
       await post("/api/auth/login", {
-        email: $("#email").value.trim(), password: $("#pw").value });
+        username: $("#username").value.trim().toLowerCase(), password: $("#pw").value });
       await refreshMe();
       navigate("/console");
     } catch (err) {
@@ -71,8 +61,13 @@ export function signUpPage() {
     cta: t("auth.signup.cta"),
     altText: t("auth.hasaccount"), altHref: "/signin", altLabel: t("auth.gosignin"),
     fields: `
+      <div class="field"><label for="fullname">${t("auth.fullname")}</label>
+        <input id="fullname" autocomplete="name" maxlength="120" autofocus></div>
+      <div class="field"><label for="phone">${t("auth.phone")}</label>
+        <input id="phone" class="ltr" dir="ltr" type="tel" inputmode="numeric"
+               autocomplete="tel" maxlength="11" placeholder="09123456789"></div>
       <div class="field"><label for="email">${t("auth.email")}</label>
-        <input id="email" type="email" autocomplete="username" autofocus></div>
+        <input id="email" type="email" autocomplete="email"></div>
       <div class="field"><label for="uname">${t("auth.username")}</label>
         <input id="uname" class="ltr" dir="ltr" autocomplete="username"
                maxlength="32" placeholder="ali-hosseini">

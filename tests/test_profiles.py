@@ -83,6 +83,20 @@ def test_signup_requires_and_stores_full_name_and_mobile(env):
     assert (user.full_name, user.phone) == ("Signup Customer", "09555555555")
 
 
+def test_sign_in_accepts_username_and_rejects_email_as_the_identifier(env):
+    client, _, customer, _, _ = env
+    signed_in = client.post("/api/auth/login", json={
+        "username": "CUSTOMER", "password": "old-password"})
+    assert signed_in.status_code == 200
+
+    email = client.post("/api/auth/login", json={
+        "username": customer.email, "password": "old-password"})
+    assert email.status_code == 401
+    legacy_shape = client.post("/api/auth/login", json={
+        "email": customer.email, "password": "old-password"})
+    assert legacy_shape.status_code == 422
+
+
 def test_admin_can_change_customer_identity_without_learning_the_password(env):
     client, db, customer, admin, _ = env
     appmod.app.dependency_overrides[appmod.current_user] = lambda: admin

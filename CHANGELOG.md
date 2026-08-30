@@ -4,6 +4,9 @@ Notable changes. Dates are the day the work landed on the production host.
 
 ## [1.5.0] — 2026-08-30
 
+- Sign-in now accepts only the immutable username and password. Email, mobile
+  number and full name are collected at signup and managed as profile data, so
+  changing contact information cannot change the customer's login identifier.
 - Removed the managed Tools/preset feature from customer and administrator
   interfaces and from the API/privileged provisioner. Workspaces already give
   customers root access, `apt`, Docker and a terminal, so software installation

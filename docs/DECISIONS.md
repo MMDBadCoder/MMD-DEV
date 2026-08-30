@@ -1786,3 +1786,17 @@ internet-facing API can no longer ask the root provisioner to install arbitrary
 packages. The narrowly scoped operator-only `apt_repair` verb remains because
 it repairs image/container compatibility and is not a customer software
 catalogue. AI integrations remain separate managed product features.
+
+
+## Username is the only sign-in identifier
+
+Email, mobile number and full name are collected during registration but are
+account/profile information, not authentication identifiers. Sign-in accepts
+only the username chosen at registration and the password. This keeps the login
+stable when a customer or administrator corrects contact details and makes the
+form unambiguous: it contains exactly two fields.
+
+The browser and API tests assert both halves of the boundary. The sign-in form
+must not render email, phone or full name and must submit `username`; the signup
+form must render every required identity field. The API rejects the legacy
+email-shaped request rather than silently supporting two login identifiers.

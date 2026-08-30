@@ -33,7 +33,7 @@ and the auth endpoints. Accessing another account's resource returns **404**, no
 | Method | Path | Notes |
 |---|---|---|
 | `POST` | `/api/auth/register` | `{email, username, password, full_name, phone}`. Phone is an 11-digit Iranian mobile beginning `09`. The first account ever created becomes admin. Returns `{status, code}`; duplicate email and phone responses are indistinguishable from success so accounts cannot be enumerated |
-| `POST` | `/api/auth/login` | Sets the session cookie |
+| `POST` | `/api/auth/login` | `{username, password}`. Username is the only login identifier; email and phone are profile data. Sets the session cookie |
 | `POST` | `/api/auth/logout` | |
 | `POST` | `/api/auth/password` | Requires the current password |
 | `GET` | `/api/me` | Identity, admin flag, balance, unread ticket counts, Telegram configured flag and user ID; never the bot token |
