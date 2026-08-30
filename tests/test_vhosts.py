@@ -83,6 +83,19 @@ def test_a_customer_with_no_username_is_skipped(vh, db):
     assert vh.desired(s, _cfg(), usernames) == {}
 
 
+def test_dashboard_readiness_tracks_the_exact_published_hostname(vh, db):
+    from mmd import usernames
+    s, ws, _ = db
+    ws.hermes_vhost_ready = True
+    s.commit()
+
+    vh.mark_readiness(s, set(), _cfg().domain, usernames)
+    assert ws.hermes_vhost_ready is False
+
+    vh.mark_readiness(s, {"hermes.ali.mmd-ai.ir"}, _cfg().domain, usernames)
+    assert ws.hermes_vhost_ready is True
+
+
 def test_the_server_block_proxies_to_the_workspace_and_redirects_plain_http(vh):
     block = vh.server_block("hermes.ali.mmd-ai.ir", "wildcard-ali", "10.42.0.13", 9119)
     assert "server_name hermes.ali.mmd-ai.ir;" in block
@@ -101,6 +114,7 @@ def test_a_config_that_does_not_parse_is_rolled_back(vh, tmp_path, monkeypatch):
     monkeypatch.setattr(vh, "desired",
                         lambda db, cfg, u: {"ali": [("hermes.ali.x", "10.42.0.13", 9119)]})
     monkeypatch.setattr(vh, "obtain_wildcard", lambda *a: "wildcard-ali")
+    monkeypatch.setattr(vh, "mark_readiness", lambda *a: None)
 
     good = tmp_path / f"{vh.PREFIX}ali.conf"
     good.write_text("# the previous, working configuration\n")
@@ -123,6 +137,7 @@ def test_a_config_that_parses_is_written_and_reloaded(vh, tmp_path, monkeypatch)
     monkeypatch.setattr(vh, "desired",
                         lambda db, cfg, u: {"ali": [("hermes.ali.x", "10.42.0.13", 9119)]})
     monkeypatch.setattr(vh, "obtain_wildcard", lambda *a: "wildcard-ali")
+    monkeypatch.setattr(vh, "mark_readiness", lambda *a: None)
 
     # A leftover from the reconciler this one replaces: removed in the same
     # pass, so an upgraded host does not serve the same name from two files.

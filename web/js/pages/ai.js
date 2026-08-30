@@ -65,7 +65,7 @@ function renderHermes(head, h) {
   const telegramWaiting = h.telegram_enabled && !h.telegram_ready;
   const telegramFields = (hidden = false) => `<div class="telegram-fields" ${hidden ? "hidden" : ""}>
     ${h.telegram_profile_configured ? note("ok", `${t("ai.hermes.telegram.saved", h.telegram_profile_user_id)}
-      <a href="/console/security">${t("ai.hermes.telegram.edit")}</a>`) : `
+      <a href="/console/account">${t("ai.hermes.telegram.edit")}</a>`) : `
     <div class="row">
       <div class="field"><label for="tg-token">${t("ai.hermes.telegram.token")}</label>
         <input id="tg-token" class="ltr mono" dir="ltr" type="password" autocomplete="off"
@@ -112,10 +112,12 @@ function renderHermes(head, h) {
                opens in a new tab, with no copy control at all. -->
           ${h.host ? `<div class="stat" style="align-items:stretch">
             <div class="k">${t("ai.hermes.host")}</div>
-            <a class="v ltr mono" dir="ltr" href="https://${esc(h.host)}"
+            ${h.dashboard_ready ? `<a class="v ltr mono" dir="ltr" href="https://${esc(h.host)}"
                target="_blank" rel="noopener noreferrer"
                style="font-size:15px;word-break:break-all">${
-                 esc(h.host)} ${icon.link}</a>
+                 esc(h.host)} ${icon.link}</a>` : `<span class="v ltr mono dim"
+               style="font-size:15px;word-break:break-all">${esc(h.host)}</span>
+               ${note("info", t("ai.hermes.host.preparing"))}`}
             <p class="tiny dim" style="margin:6px 0 0">${t("ai.hermes.host.hint")}</p>
           </div>` : ""}
         </div>` : ""}

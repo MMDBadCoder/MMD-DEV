@@ -39,6 +39,7 @@ SCHEMA_PATCHES: tuple[str, ...] = (
     "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS hermes_usage_usd DOUBLE PRECISION DEFAULT 0",
     "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS hermes_dash_user VARCHAR(64)",
     "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS hermes_dash_password VARCHAR(64)",
+    "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS hermes_vhost_ready BOOLEAN NOT NULL DEFAULT FALSE",
     "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS hermes_error TEXT",
     "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS hermes_credit_blocked BOOLEAN NOT NULL DEFAULT FALSE",
     "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS hermes_limit_dirty BOOLEAN NOT NULL DEFAULT FALSE",

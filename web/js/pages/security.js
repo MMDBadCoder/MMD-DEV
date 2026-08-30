@@ -1,4 +1,4 @@
-/* Security: account details and password change, on their own page. */
+/* Account: identity, reusable integrations and password in one place. */
 import { get, post, put } from "../api.js";
 import { $, icon, esc, note, toast, stamp } from "../ui.js";
 import { t } from "../i18n.js";

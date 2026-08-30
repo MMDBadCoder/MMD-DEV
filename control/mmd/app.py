@@ -46,6 +46,7 @@ from .models import (AiModelPrice, AiUsageMark, AuditLog, CreditAccount,
 from .security import hash_password, verify_password
 from . import usernames as unames
 from .tickets import is_unread
+from .version import APP_VERSION
 
 log = logging.getLogger("mmd.api")
 
@@ -285,7 +286,7 @@ def _backfill_usernames() -> None:
 
 @app.get("/api/health")
 def health() -> dict:
-    return {"ok": True}
+    return {"ok": True, "version": APP_VERSION}
 
 
 # --- auth ----------------------------------------------------------------
@@ -389,6 +390,7 @@ def me(user: User = Depends(current_user), db: Session = Depends(get_session)) -
         "full_name": user.full_name, "phone": user.phone,
         "telegram_user_id": user.telegram_user_id,
         "telegram_configured": bool(user.telegram_bot_token and user.telegram_user_id),
+        "version": APP_VERSION,
         "status": user.status.value, "is_admin": user.is_admin,
         "credits": (acct.balance_micro / MICRO) if acct else 0.0,
         "has_workspace": ws is not None,
@@ -1221,6 +1223,7 @@ def _hermes_state(ws: Workspace) -> dict:
             "key": ws.hermes_key,
             "dashboard_user": ws.hermes_dash_user,
             "dashboard_password": ws.hermes_dash_password,
+            "dashboard_ready": bool(ws.hermes_vhost_ready),
             "host": unames.hermes_host(ws.user.username, CONFIG.domain)
             if ws.user and ws.user.username else None,
             "machine_running": ws.state == WorkspaceState.ON,
@@ -1288,6 +1291,7 @@ def ai_hermes(body: HermesAction, user: User = Depends(current_user),
         # Cleared here so the interface stops showing a secret the moment the
         # customer switches it off, rather than until the worker catches up.
         ws.hermes_key = None
+        ws.hermes_vhost_ready = False
         ws.hermes_telegram_enabled = False
         ws.hermes_telegram_token = None
         ws.hermes_telegram_users = None
@@ -2233,7 +2237,7 @@ def _sync_condition_notifications(db: Session, user: User,
         notifylib.emit(db, user_id=user.id, kind="security",
                        code="session_expiring", severity="warning",
                        detail={"at": session_expires_at.isoformat()},
-                       href="/console/security", dedupe_key="condition:session")
+                       href="/console/account", dedupe_key="condition:session")
     else:
         notifylib.resolve(db, user.id, "condition:session", now)
 

@@ -2,7 +2,21 @@
 
 Notable changes. Dates are the day the work landed on the production host.
 
-## [1.5.0] — 2026-08-30
+## [1.4.0] — 2026-08-30
+
+- Renamed the customer Security area to Account because it now owns identity,
+  reusable Telegram settings and password management. The previous URL remains
+  a compatible alias for saved bookmarks.
+- Inline information, warning, success and error messages now keep consistent
+  space from both adjacent cards and controls.
+- Hermes Telegram activation reuses the customer's saved bot token and user ID
+  during installation and repair, explicitly loads the protected environment,
+  and reports success only when a messaging platform actually started.
+- A Hermes dashboard address becomes clickable only after its exact nginx
+  virtual host and certificate are published, preventing the default homepage
+  from catching customers during the reconciliation window.
+- The running application version is now returned by the API and shown quietly
+  beside the product name in the customer interface.
 
 - Sign-in now accepts only the immutable username and password. Email, mobile
   number and full name are collected at signup and managed as profile data, so
@@ -37,10 +51,6 @@ Notable changes. Dates are the day the work landed on the production host.
   compact cards, and bottom-sheet destructive confirmations.
 - Empty states, destructive actions, focus styles, spacing and controls now use
   shared interface primitives.
-
-## [1.4.0] — 2026-08-30
-
-Live on the production host.
 
 ### Added
 

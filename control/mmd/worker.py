@@ -462,15 +462,19 @@ def _hermes_install(db, ws: Workspace) -> None:
             "dash_user": ws.hermes_dash_user,
             "dash_password": ws.hermes_dash_password,
             "telegram_enabled": ws.hermes_telegram_enabled,
-            "telegram_token": ws.hermes_telegram_token,
-            "telegram_users": ws.hermes_telegram_users,
+            # Account defaults remain available after the one-shot delivery
+            # field is cleared, so a gateway repair can always be reconciled.
+            "telegram_token": ((ws.user.telegram_bot_token if ws.user else None)
+                               or ws.hermes_telegram_token),
+            "telegram_users": ((ws.user.telegram_user_id if ws.user else None)
+                               or ws.hermes_telegram_users),
             "ip": svc.workspace_ip(ws)}, timeout=1800)
     except Exception as e:  # noqa: BLE001
         log.warning("hermes install ws %s: %s", ws.id, e)
         return
     if resp.get("ok"):
         ws.hermes_installed = True
-        ws.hermes_telegram_installed = ws.hermes_telegram_enabled
+        ws.hermes_telegram_installed = bool(resp.get("telegram_installed"))
         ws.hermes_telegram_token = None
         ws.hermes_telegram_error = None
         ws.hermes_error = None
@@ -669,6 +673,7 @@ async def _factory_reset(db, op: Operation, ws: Workspace) -> None:
     # Reset is a new machine, not a request to reinstall optional AI software.
     # The old key was revoked above; the customer chooses Hermes again later.
     ws.hermes_installed = False
+    ws.hermes_vhost_ready = False
     ws.hermes_key = None
     ws.hermes_key_hash = None
     ws.hermes_credit_blocked = False

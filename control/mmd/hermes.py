@@ -319,6 +319,7 @@ def revoke_key(db, ws: Workspace, client: OpenRouter, *, strict: bool = False) -
     ws.hermes_key = None
     ws.hermes_key_hash = None
     ws.hermes_installed = False
+    ws.hermes_vhost_ready = False
     ws.hermes_credit_blocked = False
     ws.hermes_dash_password = None
     ws.hermes_telegram_enabled = False

@@ -160,7 +160,7 @@ Real URLs via the History API, so refreshing or sharing a link works.
 | `/console/ports` | Publish a port to a reserved public address |
 | `/console/billing` | Balance, itemised Toman rates, spend chart, ledger |
 | `/console/activity` | Every action recorded on the account |
-| `/console/security` | Account details and password |
+| `/console/account` | Identity, Telegram defaults and password |
 | `/console/support` | Tickets |
 | `/console/admin` | People, capacity, pricing, support queue |
 

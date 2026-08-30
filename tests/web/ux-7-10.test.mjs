@@ -39,3 +39,9 @@ test("shared design primitives own destructive, empty and focus behaviour", () =
   assert.match(css, /button:focus-visible,a:focus-visible/);
   assert.match(css, /--space-1:/);
 });
+
+test("all inline messages keep space from both neighbouring boxes", () => {
+  assert.match(css, /\.note\{[^}]*margin:14px 0;/s);
+  for (const kind of ["ok", "warn", "bad", "info"])
+    assert.match(css, new RegExp(`\\.note\\.${kind}\\{`));
+});

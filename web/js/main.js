@@ -88,7 +88,7 @@ const NAV = [
   { href: "/console/ports", key: "nav.ports", ic: "plug" },
   { href: "/console/billing", key: "nav.billing", ic: "card" },
   { href: "/console/activity", key: "nav.activity", ic: "clock" },
-  { href: "/console/security", key: "nav.security", ic: "shield" },
+  { href: "/console/account", key: "nav.account", ic: "shield" },
   { href: "/console/support", key: "nav.support", ic: "chat" },
 ];
 
@@ -117,7 +117,8 @@ function chrome(bodyHtml) {
            the landing page at all - so a customer who wanted it had no way there
            short of editing the URL, and clicking the logo is what they tried. -->
       <a href="/" class="brand" style="color:inherit;text-decoration:none">
-        <span class="logo">${icon.machine}</span><span>${t("brand")}</span></a>
+        <span class="logo">${icon.machine}</span><span>${t("brand")}</span>
+        <small class="app-version" dir="ltr">v${me?.version || "1.4.0"}</small></a>
       <nav class="nav">${nav}</nav>
       <div class="spacer"></div>
       <div class="header-right">
@@ -193,7 +194,8 @@ route("/console/files", { title: "فایل‌ها", view: filesPage });
 route("/console/ports", { title: "پورت‌ها", view: portsPage });
 route("/console/billing", { title: "صورتحساب", view: billingPage });
 route("/console/activity", { title: "فعالیت‌ها", view: activityPage });
-route("/console/security", { title: "امنیت", view: securityPage });
+route("/console/account", { title: "حساب کاربری", view: securityPage });
+route("/console/security", { title: "حساب کاربری", view: securityPage });
 route("/console/ai", { title: "هوش مصنوعی", view: aiPage });
 route("/console/ai/:tab", { title: "هوش مصنوعی", view: aiPage });
 route("/console/support", { title: "پشتیبانی", view: supportPage });

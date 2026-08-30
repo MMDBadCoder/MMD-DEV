@@ -1753,8 +1753,9 @@ workspace. New registrations require both, with the mobile constrained to the
 eleven-digit `09xxxxxxxxx` form and unique across accounts. Existing production
 rows remain nullable because inventing identity during a migration would be
 worse than visibly asking those customers to complete it. A customer identity
-change requires the current password because changing email changes the login
-identifier; an administrator may correct the same three fields without knowing
+change requires the current password because contact identity is sensitive even
+though username remains the sign-in identifier; an administrator may correct
+the same three fields without knowing
 the customer's password, and both paths produce audit entries.
 
 Telegram credentials also belong to the account because more than one optional
@@ -1800,3 +1801,24 @@ The browser and API tests assert both halves of the boundary. The sign-in form
 must not render email, phone or full name and must submit `username`; the signup
 form must render every required identity field. The API rejects the legacy
 email-shaped request rather than silently supporting two login identifiers.
+
+
+## A dashboard address is not ready until nginx says it is
+
+Hermes installation finishes before the periodic vhost reconciler can obtain a
+certificate and publish `hermes.<username>.<domain>`. Showing a clickable link
+at installation time sent customers to the default website during that gap,
+which looked like a permanent routing failure.
+
+Workspace state now records whether the exact hostname was present in the last
+successful nginx reconciliation. The customer interface may display the name
+while it is preparing, but enables navigation only after that flag is true. A
+failed `nginx -t` never marks a host ready. Removal, Hermes disable and factory
+reset clear the flag so state from a destroyed filesystem cannot leak forward.
+
+The Telegram gateway follows the same evidence rule. systemd being active is
+not enough: Hermes can start and immediately report that no messaging platform
+is enabled if it did not load its environment. Its unit therefore names the
+protected `.env` explicitly, and provisioning rejects the install when the
+gateway journal contains that condition. Saved account credentials are the
+durable source for repair; the workspace delivery token remains one-shot.

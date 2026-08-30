@@ -29,7 +29,7 @@ const FA = {
   "nav.ports": "پورت‌ها",
   "nav.billing": "صورتحساب",
   "nav.activity": "فعالیت‌ها",
-  "nav.security": "امنیت",
+  "nav.account": "حساب کاربری",
   "nav.admin": "مدیریت",
   "nav.connections": "اتصال‌ها",
   "nav.files": "فایل‌ها",
@@ -504,9 +504,9 @@ const FA = {
   "act.a.ai_claude_unlink": "حذف دسترسی Claude Code",
   "act.a.apt_repair": "اصلاح تنظیمات بسته‌ها",
 
-  // --- security ---
-  "sec.title": "امنیت",
-  "sec.sub": "اطلاعات حساب و رمز عبور شما.",
+  // --- account ---
+  "sec.title": "حساب کاربری",
+  "sec.sub": "اطلاعات شخصی، تنظیمات Telegram و امنیت حساب شما.",
   "sec.account": "حساب کاربری",
   "sec.email": "ایمیل",
   "sec.role": "نقش",
@@ -712,6 +712,7 @@ const FA = {
   "ai.hermes.dashuser": "نام کاربری داشبورد",
   "ai.hermes.dashpass": "رمز عبور داشبورد",
   "ai.hermes.host": "نشانی داشبورد",
+  "ai.hermes.host.preparing": "نشانی امن داشبورد در حال آماده‌سازی است. پس از نصب مسیر و گواهی، دکمهٔ ورود خودکار فعال می‌شود.",
   "ai.hermes.host.hint": "داشبورد Hermes روی همین نشانی بالا می\u200cآید و با نام کاربری و رمز بالا وارد می\u200cشوید.",
   "ai.hermes.how.title": "این سرویس چگونه حساب می\u200cشود؟",
   "ai.hermes.how.body": "مصرف مستقیماً از گزارش خود OpenRouter خوانده می\u200cشود، نه از داخل ماشین شما. هر چند دقیقه یک بار اختلاف مصرف محاسبه و از اعتبار کم می\u200cشود.",

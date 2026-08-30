@@ -198,13 +198,15 @@ button:focus-visible,a:focus-visible,[tabindex]:focus-visible{
 .dot.bad{background:var(--bad)}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
 
-.note{padding:12px 14px;border-radius:10px;font-size:14px;margin:14px 0 0;
+.note{padding:12px 14px;border-radius:10px;font-size:14px;margin:14px 0;
   border:1px solid transparent;display:flex;gap:10px;align-items:flex-start}
 .note svg{flex:none;margin-top:2px}
 .note.ok{background:var(--ok-soft);border-color:var(--ok);color:var(--ok)}
 .note.warn{background:var(--warn-soft);border-color:var(--warn);color:var(--warn)}
 .note.bad{background:var(--bad-soft);border-color:var(--bad);color:var(--bad)}
 .note.info{background:var(--surface-2);border-color:var(--border);color:var(--ink-2)}
+.app-version{font-size:10px;font-weight:600;color:var(--ink-3);align-self:flex-end;
+  margin-inline-start:-4px;margin-bottom:2px}
 
 .stat{background:var(--surface-2);border:1px solid var(--border);
   border-radius:var(--radius);padding:14px 16px}

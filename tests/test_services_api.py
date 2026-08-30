@@ -476,3 +476,19 @@ def test_idempotent_hermes_enable_does_not_silently_disable_telegram(env):
     assert client.post("/api/workspace/ai/hermes", json={"action": "enable"}).status_code == 200
     db.refresh(ws)
     assert ws.hermes_telegram_enabled is True
+
+
+def test_hermes_dashboard_is_not_ready_until_its_vhost_is_published(env):
+    client, db, ws, _ = env
+    ws.user.username = "ali"
+    ws.hermes_enabled = True
+    ws.hermes_key = "secret"
+    ws.hermes_key_hash = "hash"
+    ws.hermes_dash_user = "ali"
+    ws.hermes_dash_password = "password"
+    ws.hermes_vhost_ready = False
+    db.commit()
+
+    state = client.get("/api/workspace/ai").json()["hermes"]
+    assert state["host"] == "hermes.ali.mmd-ai.ir"
+    assert state["dashboard_ready"] is False

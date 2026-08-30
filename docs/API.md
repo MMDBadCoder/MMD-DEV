@@ -36,7 +36,7 @@ and the auth endpoints. Accessing another account's resource returns **404**, no
 | `POST` | `/api/auth/login` | `{username, password}`. Username is the only login identifier; email and phone are profile data. Sets the session cookie |
 | `POST` | `/api/auth/logout` | |
 | `POST` | `/api/auth/password` | Requires the current password |
-| `GET` | `/api/me` | Identity, admin flag, balance, unread ticket counts, Telegram configured flag and user ID; never the bot token |
+| `GET` | `/api/me` | Identity, admin flag, balance, unread ticket counts, application version, Telegram configured flag and user ID; never the bot token |
 | `PUT` | `/api/profile` | `{email, full_name, phone, current_password}`. Changes customer identity after password confirmation |
 | `PUT` | `/api/profile/telegram` | `{bot_token?, user_id?, clear?}`. Stores or clears reusable account-level Telegram settings. A blank token preserves the existing one |
 
@@ -44,7 +44,7 @@ and the auth endpoints. Accessing another account's resource returns **404**, no
 
 | Method | Path | Notes |
 |---|---|---|
-| `GET` | `/api/health` | |
+| `GET` | `/api/health` | Health and application version |
 | `GET` | `/api/public/pricing` | Live rate card for the landing page |
 
 ## The machine

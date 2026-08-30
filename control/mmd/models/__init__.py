@@ -187,6 +187,9 @@ class Workspace(Base):
     # Dashboard credentials, generated at provision time and shown on request.
     hermes_dash_user: Mapped[str | None] = mapped_column(String(64))
     hermes_dash_password: Mapped[str | None] = mapped_column(String(64))
+    # Set only after mmd-vhosts has installed a matching nginx server block.
+    # A key being ready is earlier than the hostname being safe to open.
+    hermes_vhost_ready: Mapped[bool] = mapped_column(Boolean, default=False)
     hermes_error: Mapped[str | None] = mapped_column(Text)
     hermes_telegram_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     hermes_telegram_installed: Mapped[bool] = mapped_column(Boolean, default=False)

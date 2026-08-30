@@ -314,6 +314,19 @@ def desired(db, CONFIG, usernames) -> dict[str, list[tuple[str, str, int]]]:
     return out
 
 
+def mark_readiness(db, published_hosts: set[str], domain: str, usernames) -> None:
+    """Expose a dashboard link only after its exact nginx host exists."""
+    from mmd.models import Workspace
+    from sqlalchemy import select
+
+    for ws in db.execute(select(Workspace)).scalars().all():
+        user = ws.user
+        host = (usernames.hermes_host(user.username, domain)
+                if user and user.username else "")
+        ws.hermes_vhost_ready = host in published_hosts
+    db.commit()
+
+
 def main() -> int:
     load_env()
     STATE_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -329,6 +342,7 @@ def main() -> int:
 
     # --- decide the file contents, obtaining certificates as needed --------
     bodies: dict[pathlib.Path, str] = {}
+    published_hosts: set[str] = set()
     for username, hosts in sorted(wanted.items()):
         wildcard = obtain_wildcard(username, CONFIG.domain, email)
         blocks = []
@@ -337,6 +351,7 @@ def main() -> int:
             if cert is None:
                 continue          # try again next pass; the port still works
             blocks.append(server_block(host, cert, ip, port))
+            published_hosts.add(host)
         if blocks:
             bodies[NGINX_DIR / f"{PREFIX}{username}.conf"] = (
                 "# Managed by mmd-vhosts. Edits are overwritten.\n"
@@ -366,6 +381,8 @@ def main() -> int:
         print(f"  removed {path.name}")
 
     if not changed:
+        with SessionLocal() as db:
+            mark_readiness(db, published_hosts, CONFIG.domain, usernames)
         return 0
 
     rc, out = sh("nginx", "-t")
@@ -379,6 +396,8 @@ def main() -> int:
         return 1
 
     sh("systemctl", "reload", "nginx")
+    with SessionLocal() as db:
+        mark_readiness(db, published_hosts, CONFIG.domain, usernames)
     print("  nginx reloaded")
     return 0
 

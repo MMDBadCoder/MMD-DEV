@@ -11,6 +11,7 @@ def test_gateway_runs_as_the_workspace_user_and_restarts_with_the_machine():
     assert "ExecStart=/home/dev/.local/bin/hermes gateway" in unit
     assert "WantedBy=multi-user.target" in unit
     assert "Restart=on-failure" in unit
+    assert "EnvironmentFile=/home/dev/.hermes/.env" in unit
 
 
 def test_provisioner_revalidates_both_telegram_credentials():
@@ -28,3 +29,8 @@ def test_disabling_hermes_also_stops_the_gateway_and_removes_its_environment():
     disable = PROVISIONER.split('if action == "disable":', 1)[1].split("key = req.get", 1)[0]
     assert "hermes-gateway" in disable
     assert "rm -f /home/dev/.hermes/.env" in disable
+
+
+def test_gateway_startup_rejects_a_process_with_no_messaging_platform():
+    assert "No messaging platforms enabled" in PROVISIONER
+    assert "journalctl -u hermes-gateway" in PROVISIONER

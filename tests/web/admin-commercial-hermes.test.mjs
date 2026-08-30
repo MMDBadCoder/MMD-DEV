@@ -41,3 +41,10 @@ test("Telegram can be enabled later or disabled without disabling Hermes", () =>
   assert.match(ai, /id="tg-disable"/);
   assert.match(ai, /action: "enable", \.\.\.payload/);
 });
+
+test("Hermes reuses account Telegram defaults and waits for a published dashboard", () => {
+  assert.match(ai, /telegram_profile_configured/);
+  assert.match(ai, /href="\/console\/account"/);
+  assert.match(ai, /h\.dashboard_ready/);
+  assert.match(ai, /ai\.hermes\.host\.preparing/);
+});

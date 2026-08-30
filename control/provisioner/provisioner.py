@@ -91,6 +91,7 @@ After=network-online.target hermes-dashboard.service
 Type=simple
 User=dev
 WorkingDirectory=/home/dev
+EnvironmentFile=/home/dev/.hermes/.env
 ExecStart=/home/dev/.local/bin/hermes gateway
 Restart=on-failure
 RestartSec=5
@@ -1022,7 +1023,9 @@ def handle(req: dict) -> dict:
                  "chmod 0644 /etc/systemd/system/hermes-gateway.service && "
                  "systemctl daemon-reload && systemctl enable hermes-gateway >/dev/null 2>&1 && "
                  "systemctl restart hermes-gateway && sleep 3 && "
-                 "systemctl is-active hermes-gateway"],
+                 "systemctl is-active hermes-gateway && "
+                 "! journalctl -u hermes-gateway -n 30 --no-pager | "
+                 "grep -q 'No messaging platforms enabled'"],
                 timeout=120, stdin_text=HERMES_GATEWAY_UNIT)
             if rc != 0 or "active" not in gout.splitlines():
                 return {"ok": False, "error": "telegram gateway failed",
