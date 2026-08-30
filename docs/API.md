@@ -32,11 +32,13 @@ and the auth endpoints. Accessing another account's resource returns **404**, no
 
 | Method | Path | Notes |
 |---|---|---|
-| `POST` | `/api/auth/register` | The first account ever created becomes admin. Returns `{status, code}`; the response is identical whether or not the address already exists, so accounts cannot be enumerated |
+| `POST` | `/api/auth/register` | `{email, username, password, full_name, phone}`. Phone is an 11-digit Iranian mobile beginning `09`. The first account ever created becomes admin. Returns `{status, code}`; duplicate email and phone responses are indistinguishable from success so accounts cannot be enumerated |
 | `POST` | `/api/auth/login` | Sets the session cookie |
 | `POST` | `/api/auth/logout` | |
 | `POST` | `/api/auth/password` | Requires the current password |
-| `GET` | `/api/me` | Email, admin flag, balance, unread ticket counts |
+| `GET` | `/api/me` | Identity, admin flag, balance, unread ticket counts, Telegram configured flag and user ID; never the bot token |
+| `PUT` | `/api/profile` | `{email, full_name, phone, current_password}`. Changes customer identity after password confirmation |
+| `PUT` | `/api/profile/telegram` | `{bot_token?, user_id?, clear?}`. Stores or clears reusable account-level Telegram settings. A blank token preserves the existing one |
 
 ## Public
 
@@ -185,6 +187,7 @@ removes the gateway service and Telegram credentials without disabling Hermes.
 | Method | Path | Notes |
 |---|---|---|
 | `GET` | `/api/admin/users` | |
+| `PUT` | `/api/admin/users/{id}/profile` | Change the customer's email, full name and phone; audited |
 | `POST` | `/api/admin/users/{id}/approve` | Provisions a machine, optionally with toolsets, hands it back **off** |
 | `POST` | `/api/admin/users/{id}/reject` | |
 | `POST` | `/api/admin/users/{id}/admin` | Promote or demote |

@@ -4,8 +4,8 @@
  * The credit chart answers the question that arrives as a support ticket -
  * "where did my credit go" - with a shape rather than a number, so a steady
  * drain and a single large charge look different at a glance. */
-import { get } from "../api.js";
-import { $, $$, esc, fmtMoney, fmtNum, note, stamp, statePill } from "../ui.js";
+import { get, put } from "../api.js";
+import { $, $$, esc, fmtMoney, fmtNum, note, stamp, statePill, toast } from "../ui.js";
 import { t, CURRENCY } from "../i18n.js";
 import { render } from "../main.js";
 import { adminHead } from "./adminnav.js";
@@ -49,6 +49,19 @@ export async function adminUserPage(params) {
 
   render(`
     ${adminHead("users", esc(u.username || u.email), esc(u.email))}
+
+    <div class="card">
+      <h3>${t("adm.user.profile")}</h3>
+      <form id="admin-profile" class="grid" style="grid-template-columns:repeat(auto-fit,minmax(210px,1fr));align-items:end">
+        <div class="field"><label for="admin-name">${t("auth.fullname")}</label>
+          <input id="admin-name" maxlength="120" value="${esc(u.full_name || "")}"></div>
+        <div class="field"><label for="admin-phone">${t("auth.phone")}</label>
+          <input id="admin-phone" class="ltr" dir="ltr" inputmode="numeric" maxlength="11" value="${esc(u.phone || "")}"></div>
+        <div class="field"><label for="admin-email">${t("sec.email")}</label>
+          <input id="admin-email" class="ltr" dir="ltr" type="email" value="${esc(u.email)}"></div>
+        <button class="btn primary" type="submit">${t("sec.profile.save")}</button>
+      </form><div id="admin-profile-msg"></div>
+    </div>
 
     <div class="card">
       <div class="between" style="margin-bottom:10px">
@@ -103,6 +116,19 @@ export async function adminUserPage(params) {
     localStorage.setItem(KEY, b.dataset.win);
     adminUserPage(params);
   });
+  $("#admin-profile").onsubmit = async (e) => {
+    e.preventDefault();
+    const body = { full_name: $("#admin-name").value.trim(),
+      phone: $("#admin-phone").value.trim(), email: $("#admin-email").value.trim() };
+    if (body.full_name.length < 2 || !/^09[0-9]{9}$/.test(body.phone)) {
+      $("#admin-profile-msg").innerHTML = note("bad", t(body.full_name.length < 2
+        ? "auth.err.fullname" : "auth.err.phone")); return;
+    }
+    try {
+      await put(`/api/admin/users/${id}/profile`, body);
+      toast(t("sec.profile.saved"), "ok"); adminUserPage(params);
+    } catch (err) { $("#admin-profile-msg").innerHTML = note("bad", esc(err.message)); }
+  };
 }
 
 /* Ledger details are per-kind shapes, not one schema. Pull out the couple of

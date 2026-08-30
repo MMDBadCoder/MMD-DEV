@@ -27,6 +27,11 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False
 SCHEMA_PATCHES: tuple[str, ...] = (
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS username VARCHAR(32)",
     "CREATE UNIQUE INDEX IF NOT EXISTS ix_users_username ON users (username)",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS full_name VARCHAR(120)",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(11)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS ix_users_phone ON users (phone)",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_bot_token VARCHAR(256)",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_user_id VARCHAR(15)",
     "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS hermes_enabled BOOLEAN DEFAULT FALSE",
     "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS hermes_installed BOOLEAN DEFAULT FALSE",
     "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS hermes_key_hash VARCHAR(128)",

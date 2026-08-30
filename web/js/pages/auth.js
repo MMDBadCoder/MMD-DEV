@@ -33,8 +33,13 @@ export function signInPage(_p, msg) {
     altText: t("auth.noaccount"), altHref: "/signup", altLabel: t("auth.createone"),
     msg,
     fields: `
+      <div class="field"><label for="fullname">${t("auth.fullname")}</label>
+        <input id="fullname" autocomplete="name" maxlength="120" autofocus></div>
+      <div class="field"><label for="phone">${t("auth.phone")}</label>
+        <input id="phone" class="ltr" dir="ltr" type="tel" inputmode="numeric"
+               autocomplete="tel" maxlength="11" placeholder="09123456789"></div>
       <div class="field"><label for="email">${t("auth.email")}</label>
-        <input id="email" type="email" autocomplete="username" autofocus></div>
+        <input id="email" type="email" autocomplete="username"></div>
       <div class="field"><label for="pw">${t("auth.password")}</label>
         <input id="pw" type="password" autocomplete="current-password"></div>`,
   }));
@@ -104,11 +109,14 @@ export function signUpPage() {
     e.preventDefault();
     const email = $("#email").value.trim(), pw = $("#pw").value, pw2 = $("#pw2").value;
     const username = $("#uname").value.trim().toLowerCase();
+    const fullName = $("#fullname").value.trim(), phone = $("#phone").value.trim();
     const fail = (m) => { $("#msg").innerHTML = note("bad", esc(m)); };
 
     // Checked here so the answer is instant and specific, rather than a server
     // round trip returning a validation blob.
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return fail(t("auth.err.email"));
+    if (fullName.length < 2) return fail(t("auth.err.fullname"));
+    if (!/^09[0-9]{9}$/.test(phone)) return fail(t("auth.err.phone"));
     // Mirrors mmd/usernames.py. The server checks again - this is only so the
     // answer is instant.
     if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(username) || username.length < 3)
@@ -119,7 +127,8 @@ export function signUpPage() {
     const btn = $("#form button");
     btn.disabled = true; btn.textContent = t("auth.signup.busy");
     try {
-      const r = await post("/api/auth/register", { email, username, password: pw });
+      const r = await post("/api/auth/register",
+        { email, username, password: pw, full_name: fullName, phone });
       $("#form").innerHTML = "";
       // Keyed off the server's CODE. This used to compare the server's English
       // sentence, so any rewording of it would have shown the wrong message.

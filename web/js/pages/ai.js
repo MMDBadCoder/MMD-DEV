@@ -64,6 +64,8 @@ function renderHermes(head, h) {
   const waiting = h.enabled && !h.ready && !h.credit_blocked;
   const telegramWaiting = h.telegram_enabled && !h.telegram_ready;
   const telegramFields = (hidden = false) => `<div class="telegram-fields" ${hidden ? "hidden" : ""}>
+    ${h.telegram_profile_configured ? note("ok", `${t("ai.hermes.telegram.saved", h.telegram_profile_user_id)}
+      <a href="/console/security">${t("ai.hermes.telegram.edit")}</a>`) : `
     <div class="row">
       <div class="field"><label for="tg-token">${t("ai.hermes.telegram.token")}</label>
         <input id="tg-token" class="ltr mono" dir="ltr" type="password" autocomplete="off"
@@ -73,7 +75,7 @@ function renderHermes(head, h) {
           placeholder="123456789"></div>
     </div>
     <p class="tiny dim">${t("ai.hermes.telegram.help")}
-      <a href="https://t.me/BotFather" target="_blank" rel="noopener noreferrer">BotFather ${icon.link}</a></p>
+      <a href="https://t.me/BotFather" target="_blank" rel="noopener noreferrer">BotFather ${icon.link}</a></p>`}
   </div>`;
 
   render(`${head}
@@ -175,7 +177,8 @@ function renderHermes(head, h) {
 
   const configureTelegram = async (enabled) => {
     const payload = enabled ? telegramPayload() : { telegram_enabled: false };
-    if (enabled && (!payload.telegram_token || !payload.telegram_users)) {
+    if (enabled && !h.telegram_profile_configured
+        && (!payload.telegram_token || !payload.telegram_users)) {
       $("#hermes-msg").innerHTML = note("bad", t("ai.hermes.telegram.required"));
       return;
     }
@@ -203,7 +206,8 @@ function renderHermes(head, h) {
     b.innerHTML = `<span class="spinner"></span>${t("conn.working")}`;
     try {
       const telegram = !on && $("#tg-option")?.checked ? telegramPayload() : {};
-      if (telegram.telegram_enabled && (!telegram.telegram_token || !telegram.telegram_users)) {
+      if (telegram.telegram_enabled && !h.telegram_profile_configured
+          && (!telegram.telegram_token || !telegram.telegram_users)) {
         $("#hermes-msg").innerHTML = note("bad", t("ai.hermes.telegram.required"));
         b.disabled = false; b.innerHTML = `${icon.shield}${t("ai.hermes.enable")}`;
         return;

@@ -84,6 +84,14 @@ class User(Base):
     # display name. Nullable only so the column can be added to a live table;
     # every row is backfilled and signup requires it. See mmd/usernames.py.
     username: Mapped[str | None] = mapped_column(String(32), unique=True, index=True)
+    # Nullable for accounts created before profile details became mandatory.
+    # New signups cannot omit either value.
+    full_name: Mapped[str | None] = mapped_column(String(120))
+    phone: Mapped[str | None] = mapped_column(String(11), unique=True, index=True)
+    # Reusable account-level Telegram settings. The token is never serialized
+    # by an API response; only the presence flag and numeric user ID are shown.
+    telegram_bot_token: Mapped[str | None] = mapped_column(String(256))
+    telegram_user_id: Mapped[str | None] = mapped_column(String(15))
     password_hash: Mapped[str] = mapped_column(String(255))
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
     status: Mapped[UserStatus] = mapped_column(

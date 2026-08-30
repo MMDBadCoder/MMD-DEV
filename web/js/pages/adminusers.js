@@ -35,6 +35,8 @@ export async function adminUsersPage() {
     const q = (f.q || "").trim().toLowerCase();
     if (!q) return true;
     return (u.email || "").toLowerCase().includes(q)
+        || (u.full_name || "").toLowerCase().includes(q)
+        || (u.phone || "").includes(q)
         || (u.username || "").toLowerCase().includes(q);
   };
 
@@ -46,6 +48,7 @@ export async function adminUsersPage() {
         href="/console/admin/users/${u.id}">${esc(u.email)}</a>
       <div class="tiny dim">${u.username
         ? `<span class="ltr">${esc(u.username)}</span> · ` : ""}${
+        u.full_name ? esc(u.full_name) + " · " : ""}${u.phone ? `<span class="ltr">${esc(u.phone)}</span> · ` : ""}${
         u.is_admin ? t("sec.role.admin") + " · " : ""}${t("adm.joined")} ${stamp(u.created_at)}</div></td>
     <td><span class="pill"><span class="dot ${u.status === "approved" ? "on"
         : u.status === "pending" ? "busy" : "bad"}"></span>${

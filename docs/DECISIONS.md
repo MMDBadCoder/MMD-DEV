@@ -1744,3 +1744,28 @@ environment without Telegram credentials. Hermes disable, key revocation and
 factory reset clear both gateway intent and installed state as well. This keeps
 the dashboard tied to what exists on the current filesystem rather than what
 was installed on a machine that has already been destroyed.
+
+
+## Identity is account data; Telegram credentials are reusable secrets
+
+Full name and an Iranian mobile number are properties of the account, not its
+workspace. New registrations require both, with the mobile constrained to the
+eleven-digit `09xxxxxxxxx` form and unique across accounts. Existing production
+rows remain nullable because inventing identity during a migration would be
+worse than visibly asking those customers to complete it. A customer identity
+change requires the current password because changing email changes the login
+identifier; an administrator may correct the same three fields without knowing
+the customer's password, and both paths produce audit entries.
+
+Telegram credentials also belong to the account because more than one optional
+feature may use the same bot. The API accepts one BotFather token and one
+numeric Telegram user ID, returns only a configured flag and the user ID, and
+never serializes the token. A blank token on update preserves the stored value;
+an explicit clear removes both values. Hermes copies the saved values into its
+existing transient workspace-delivery fields only when the customer enables
+Telegram, preserving the worker's retry and protected-file behavior.
+
+The token must remain recoverable by the control plane—hashing would make reuse
+impossible—so it is stored as a secret rather than a verifier. It is excluded
+from customer and administrator payloads, logs and audits. Account deletion
+removes it with the user row through the existing final database-erasure step.

@@ -4,6 +4,12 @@ Notable changes. Dates are the day the work landed on the production host.
 
 ## [1.5.0] — 2026-08-30
 
+- Signup now requires a full name and a unique 11-digit Iranian mobile number.
+  Customers can update their verified account identity, administrators can
+  correct it from the customer detail page, and both paths are audited.
+- Customers can save one write-only Telegram bot token and numeric Telegram
+  user ID at account level. Hermes reuses those settings on request, while API
+  responses expose only whether a token exists and never the token itself.
 - Every credit grant now schedules an OpenRouter key-cap refresh within about
   five seconds, including top-ups made while the balance is already positive.
 - Administrators can stop a running customer workspace from the user list;

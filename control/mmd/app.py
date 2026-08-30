@@ -117,6 +117,8 @@ class SignUp(BaseModel):
     # Not optional: it becomes part of a hostname, so it has to be chosen rather
     # than derived from an address the customer may later change.
     username: str = Field(min_length=1, max_length=64)
+    full_name: str = Field(min_length=2, max_length=120)
+    phone: str = Field(pattern=r"^09[0-9]{9}$")
 
 
 class Credentials(BaseModel):
@@ -132,6 +134,25 @@ class LoginBody(BaseModel):
 class PasswordChange(BaseModel):
     current_password: str
     new_password: str = Field(min_length=10, max_length=200)
+
+
+class ProfileUpdate(BaseModel):
+    email: EmailStr
+    full_name: str = Field(min_length=2, max_length=120)
+    phone: str = Field(pattern=r"^09[0-9]{9}$")
+    current_password: str = Field(min_length=1, max_length=256)
+
+
+class TelegramProfileUpdate(BaseModel):
+    bot_token: str | None = Field(default=None, max_length=256)
+    user_id: str | None = Field(default=None, max_length=15)
+    clear: bool = False
+
+
+class AdminProfileUpdate(BaseModel):
+    email: EmailStr
+    full_name: str = Field(min_length=2, max_length=120)
+    phone: str = Field(pattern=r"^09[0-9]{9}$")
 
 
 class PowerRequest(BaseModel):
@@ -289,9 +310,14 @@ def register(body: SignUp, db: Session = Depends(get_session)) -> dict:
         # Identical to the success response on purpose: differing replies would
         # let anyone enumerate which addresses hold accounts.
         return {"status": "pending", "code": "pending_approval"}
+    if db.scalar(select(User).where(User.phone == body.phone)):
+        # Phone ownership is private account information, so duplicate phone
+        # and duplicate email deliberately have the same non-enumerating reply.
+        return {"status": "pending", "code": "pending_approval"}
     first = db.scalar(select(User).limit(1)) is None
     user = User(
         email=body.email.lower(), username=username,
+        full_name=body.full_name.strip(), phone=body.phone,
         password_hash=hash_password(body.password),
         is_admin=first,
         status=UserStatus.APPROVED if first else UserStatus.PENDING)
@@ -363,6 +389,9 @@ def me(user: User = Depends(current_user), db: Session = Depends(get_session)) -
     ws = db.scalar(select(Workspace).where(Workspace.user_id == user.id))
     return {
         "email": user.email, "username": user.username,
+        "full_name": user.full_name, "phone": user.phone,
+        "telegram_user_id": user.telegram_user_id,
+        "telegram_configured": bool(user.telegram_bot_token and user.telegram_user_id),
         "status": user.status.value, "is_admin": user.is_admin,
         "credits": (acct.balance_micro / MICRO) if acct else 0.0,
         "has_workspace": ws is not None,
@@ -373,6 +402,60 @@ def me(user: User = Depends(current_user), db: Session = Depends(get_session)) -
         "unread_staff_tickets": (_unread_count(db, user, staff=True)
                                  if user.is_admin else 0),
     }
+
+
+def _validate_identity(db: Session, user: User, email: str, phone: str) -> None:
+    other_email = db.scalar(select(User).where(User.email == email, User.id != user.id))
+    if other_email:
+        fail(409, "email_taken", "That email address is already in use.")
+    other_phone = db.scalar(select(User).where(User.phone == phone, User.id != user.id))
+    if other_phone:
+        fail(409, "phone_taken", "That phone number is already in use.")
+
+
+def _apply_identity(user: User, email: str, full_name: str, phone: str) -> None:
+    name = full_name.strip()
+    if len(name) < 2:
+        fail(400, "full_name_invalid", "The full name is too short.")
+    user.email = email
+    user.full_name = name
+    user.phone = phone
+
+
+@app.put("/api/profile")
+def update_profile(body: ProfileUpdate, user: User = Depends(current_user),
+                   db: Session = Depends(get_session)) -> dict:
+    if not verify_password(body.current_password, user.password_hash):
+        fail(401, "wrong_password", "Your current password is not correct")
+    email = body.email.lower()
+    _validate_identity(db, user, email, body.phone)
+    _apply_identity(user, email, body.full_name, body.phone)
+    db.commit()
+    svc.audit(db, user.id, "profile_change", user.email)
+    return {"ok": True}
+
+
+@app.put("/api/profile/telegram")
+def update_telegram_profile(body: TelegramProfileUpdate,
+                            user: User = Depends(current_user),
+                            db: Session = Depends(get_session)) -> dict:
+    if body.clear:
+        user.telegram_bot_token = None
+        user.telegram_user_id = None
+    else:
+        token = (body.bot_token or user.telegram_bot_token or "").strip()
+        telegram_user_id = (body.user_id or "").strip()
+        if not re.fullmatch(r"[0-9]{6,15}:[A-Za-z0-9_-]{20,}", token):
+            fail(400, "telegram_bad_token", "The Telegram bot token is invalid.")
+        if not re.fullmatch(r"[1-9][0-9]{4,14}", telegram_user_id):
+            fail(400, "telegram_bad_users", "The Telegram user ID is invalid.")
+        user.telegram_bot_token = token
+        user.telegram_user_id = telegram_user_id
+    db.commit()
+    svc.audit(db, user.id, "telegram_profile_change", user.email,
+              configured=not body.clear)
+    return {"ok": True, "configured": bool(user.telegram_bot_token),
+            "user_id": user.telegram_user_id}
 
 
 def _unread_count(db: Session, user: User, *, staff: bool) -> int:
@@ -1175,6 +1258,9 @@ def _hermes_state(ws: Workspace) -> dict:
             "telegram_enabled": bool(ws.hermes_telegram_enabled),
             "telegram_ready": bool(ws.hermes_telegram_installed),
             "telegram_users": ws.hermes_telegram_users,
+            "telegram_profile_configured": bool(
+                ws.user and ws.user.telegram_bot_token and ws.user.telegram_user_id),
+            "telegram_profile_user_id": ws.user.telegram_user_id if ws.user else None,
             "telegram_error": bool(ws.hermes_telegram_error),
             # A FLAG, not the text. The stored value is whatever OpenRouter or
             # the provisioner said, in English, with HTTP status codes and JSON
@@ -1208,8 +1294,8 @@ def ai_hermes(body: HermesAction, user: User = Depends(current_user),
     ws.hermes_enabled = (body.action == "enable")
     if ws.hermes_enabled:
         if body.telegram_enabled is True:
-            token = (body.telegram_token or "").strip()
-            users = (body.telegram_users or "").replace(" ", "")
+            token = (body.telegram_token or user.telegram_bot_token or "").strip()
+            users = (body.telegram_users or user.telegram_user_id or "").replace(" ", "")
             if not re.fullmatch(r"[0-9]{6,15}:[A-Za-z0-9_-]{20,}", token):
                 fail(400, "telegram_bad_token", "The Telegram bot token is invalid.")
             if not re.fullmatch(r"[1-9][0-9]{4,14}(,[1-9][0-9]{4,14})*", users):
@@ -1218,6 +1304,12 @@ def ai_hermes(body: HermesAction, user: User = Depends(current_user),
             ws.hermes_telegram_token = token
             ws.hermes_telegram_users = users
             ws.hermes_telegram_error = None
+            # Inline credentials from older clients become the account defaults
+            # so the next Telegram-capable feature can reuse them too.
+            if body.telegram_token:
+                user.telegram_bot_token = token
+            if body.telegram_users and "," not in users:
+                user.telegram_user_id = users
         elif body.telegram_enabled is False and ws.hermes_telegram_enabled:
             ws.hermes_telegram_enabled = False
             ws.hermes_telegram_token = None
@@ -1983,6 +2075,7 @@ def admin_users(_: User = Depends(require_admin),
         acct = db.get(CreditAccount, u.id)
         out.append({
             "id": u.id, "email": u.email, "username": u.username,
+            "full_name": u.full_name, "phone": u.phone,
             "status": u.status.value,
             "is_admin": u.is_admin,
             "created_at": u.created_at.isoformat() if u.created_at else None,
@@ -1993,6 +2086,21 @@ def admin_users(_: User = Depends(require_admin),
                 "disk_gb": w.disk_gib},
         })
     return out
+
+
+@app.put("/api/admin/users/{user_id}/profile")
+def admin_update_profile(user_id: int, body: AdminProfileUpdate,
+                         admin: User = Depends(require_admin),
+                         db: Session = Depends(get_session)) -> dict:
+    user = db.get(User, user_id)
+    if user is None:
+        fail(404, "no_such_user", "No such user")
+    email = body.email.lower()
+    _validate_identity(db, user, email, body.phone)
+    _apply_identity(user, email, body.full_name, body.phone)
+    db.commit()
+    svc.audit(db, admin.id, "admin_profile_change", user.email, user_id=user.id)
+    return {"ok": True}
 
 
 @app.post("/api/admin/users/{user_id}/approve")
@@ -2498,6 +2606,7 @@ def admin_user_detail(user_id: int, minutes: int = 10080,
 
     return {
         "user": {"id": u.id, "email": u.email, "username": u.username,
+                 "full_name": u.full_name, "phone": u.phone,
                  "status": u.status.value if hasattr(u.status, "value") else str(u.status),
                  "is_admin": u.is_admin, "created_at": u.created_at.isoformat()},
         "balance": balance / MICRO,
