@@ -31,7 +31,6 @@ const FA = {
   "nav.activity": "فعالیت‌ها",
   "nav.security": "امنیت",
   "nav.admin": "مدیریت",
-  "nav.tools": "ابزارها",
   "nav.connections": "اتصال‌ها",
   "nav.files": "فایل‌ها",
   "nav.overview": "نمای کلی",
@@ -72,8 +71,6 @@ const FA = {
   "notification.support_reply": "پشتیبانی به تیکت شما پاسخ داده است.",
   "notification.factory_reset_succeeded": "بازنشانی کارخانه‌ای ماشین با موفقیت تمام شد.",
   "notification.factory_reset_failed": "بازنشانی کارخانه‌ای ماشین ناموفق بود؛ می‌توانید دوباره تلاش کنید یا با پشتیبانی تماس بگیرید.",
-  "notification.install_packages_succeeded": "نصب ابزارها با موفقیت تمام شد.",
-  "notification.install_packages_failed": "نصب ابزارها ناموفق بود؛ وضعیت ماشین را بررسی و دوباره تلاش کنید.",
 
   // --- auth ---
   "auth.signin.title": "خوش آمدید",
@@ -233,26 +230,6 @@ const FA = {
   "res.billing.body": "تا زمانی که ماشین روشن است، بابت <b>رزرو</b> منابع و <b>مصرف</b> واقعی هزینه پرداخت می‌کنید. در حالت خاموش تنها هزینهٔ فضای ذخیره‌سازی دریافت می‌شود. اگر وسط ساعت منابع را تغییر دهید، بخش سپری‌شدهٔ همان ساعت با منابع <b>قبلی</b> تسویه می‌شود.",
   "res.applied.live": (l) => `منابع به ${l} تغییر کرد و بلافاصله اعمال شد`,
   "res.applied.next": (l) => `منابع به ${l} تغییر کرد و از روشن شدن بعدی اعمال می‌شود`,
-
-  // --- tools / presets ---
-  "tools.title": "ابزارها",
-  "tools.sub": "بسته‌های آمادهٔ نصب روی ماشین شما. ماشین باید روشن باشد.",
-  "tools.install": "نصب موارد انتخاب‌شده",
-  "tools.installing": "در حال نصب…",
-  "tools.custom": "بسته‌های دلخواه (با فاصله جدا کنید)",
-  "tools.selected": (n) => `${n} بسته انتخاب شده`,
-  "tools.none": "چیزی انتخاب نشده است.",
-  "tools.done": (n) => `${n} بسته نصب شد`,
-  "tools.queued": (n) => `نصب ${n} بسته آغاز شد و می‌توانید این صفحه را ترک کنید`,
-  "tools.offhint": "برای نصب ابزارها ابتدا ماشین را روشن کنید.",
-  "tools.preset.editors": "ادیتورهای متنی",
-  "tools.preset.monitoring": "پایش منابع و دیسک",
-  "tools.preset.shell": "ابزارهای شل",
-  "tools.preset.network": "ابزارهای شبکه",
-  "tools.preset.build": "کامپایلر و ابزار ساخت",
-  "tools.preset.python": "زنجیرهٔ ابزار Python",
-  "tools.preset.databases": "کلاینت‌های پایگاه داده",
-  "tools.preset.media": "ابزارهای رسانه و سند",
 
   // --- files ---
   "files.title": "فایل‌ها",
@@ -496,7 +473,6 @@ const FA = {
   "act.a.size_change": "تغییر منابع",
   "act.a.port_publish": "انتشار پورت",
   "act.a.port_unpublish": "حذف پورت",
-  "act.a.packages_installed": "نصب ابزار",
   "act.a.ssh_enabled": "روشن کردن SSH",
   "act.a.ssh_disabled": "خاموش کردن SSH",
   "act.a.ssh_key_added": "افزودن کلید SSH",
@@ -603,9 +579,6 @@ const FA = {
   "adm.confirm.del.cta": "حذف دائمی",
   "adm.deleted": "حساب حذف شد",
   "adm.deletequeued": "حذف کامل حساب آغاز شد و پس از پاک شدن همهٔ منابع از فهرست ناپدید می‌شود",
-  "adm.presets": "ابزارهای پیش‌فرض هنگام ساخت",
-  "adm.presets.hint": "این بسته‌ها روی ماشین جدید نصب می‌شوند، پیش از آنکه تحویل کاربر شود.",
-
   // --- shared ---
   "common.cancel": "انصراف",
   "common.delete": "حذف",
@@ -892,7 +865,6 @@ const FA = {
   "reset.done": "ماشین شما بازنشانی شد و خاموش تحویل داده شد",
   "reset.queued": "بازنشانی آغاز شد؛ پیشرفت آن در بالای همهٔ صفحه‌ها نمایش داده می‌شود",
   "op.kind.factory_reset": "بازنشانی کارخانه‌ای ماشین",
-  "op.kind.install_packages": "نصب ابزارها",
   "op.kind.account_delete": "حذف کامل حساب",
   "op.progress.queued": "در صف اجرا",
   "op.progress.rebuilding_machine": "در حال ساخت دوبارهٔ ماشین",

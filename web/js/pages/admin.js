@@ -1,15 +1,14 @@
 /* Administration overview.
  *
- * This used to be everything: approvals, capacity, host charts, presets, the
+ * This used to be everything: approvals, capacity, host charts, pricing, the
  * rate card and a link to AI pricing, stacked in one column. Each is a
  * different job done at a different time, so the page is now a short landing
  * screen - what needs attention, and where the sections are - with the work
  * itself on real routes under /console/admin/*.
  *
  * What stays here is what is genuinely "the host as a whole": how much capacity
- * is committed, what a workspace is charged, and which toolsets new accounts
- * are built with. */
-import { get, post, put, del } from "../api.js";
+ * is committed and what a workspace is charged. */
+import { get, put } from "../api.js";
 import { $, $$, icon, esc, fmtMoney, fmtNum, fmtFa, note, toast,
          confirmDialog } from "../ui.js";
 import { t } from "../i18n.js";
@@ -17,9 +16,9 @@ import { render } from "../main.js";
 import { adminHead } from "./adminnav.js";
 
 export async function adminPage() {
-  const [users, cap, settings, presets, tickets, claude] = await Promise.all([
+  const [users, cap, settings, tickets, claude] = await Promise.all([
     get("/api/admin/users"), get("/api/admin/capacity"),
-    get("/api/admin/settings"), get("/api/presets"), get("/api/admin/tickets"),
+    get("/api/admin/settings"), get("/api/admin/tickets"),
     get("/api/admin/ai-pricing"),
   ]);
 
@@ -73,19 +72,6 @@ export async function adminPage() {
     </div>
 
     <div class="card">
-      <h3>${t("adm.presets")}</h3>
-      <p class="tiny dim" style="margin:0 0 12px">${t("adm.presets.hint")}</p>
-      <div class="opts" style="grid-template-columns:repeat(auto-fit,minmax(190px,1fr))">
-        ${presets.presets.map((p) => `
-          <button class="opt" data-defpreset="${esc(p.key)}"
-            style="text-align:start;padding:12px 14px">
-            <div style="font-weight:600;font-size:14px">${
-              t("tools.preset." + p.key) || esc(p.key)}</div>
-            <div class="tiny dim mono ltr">${p.packages.length} pkg</div></button>`).join("")}
-      </div>
-    </div>
-
-    <div class="card">
       <div class="between">
         <div><h3>${t("adm.commercial.title")}</h3>
           <p class="tiny dim" style="margin:3px 0 0">${t("adm.commercial.sub")}</p></div>
@@ -113,17 +99,6 @@ export async function adminPage() {
       <div class="btn-row" style="margin-top:16px">
         <button class="btn primary" id="save">${icon.save}${t("adm.save")}</button></div>
     </div>`);
-
-  const defaults = new Set(JSON.parse(localStorage.getItem("mmd-default-presets") || "[]"));
-  $$("[data-defpreset]").forEach((b) => {
-    b.classList.toggle("sel", defaults.has(b.dataset.defpreset));
-    b.onclick = () => {
-      const k = b.dataset.defpreset;
-      defaults.has(k) ? defaults.delete(k) : defaults.add(k);
-      b.classList.toggle("sel", defaults.has(k));
-      localStorage.setItem("mmd-default-presets", JSON.stringify([...defaults]));
-    };
-  });
 
   $("#save").onclick = async () => {
     const body = {};

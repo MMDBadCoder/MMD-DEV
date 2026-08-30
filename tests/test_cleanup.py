@@ -101,14 +101,15 @@ def test_a_failed_cleanup_does_not_block_customer_operations(monkeypatch):
     db, _, victim, ws, cleanup = populated()
     cleanup.status = "failed"
     customer_op = Operation(user_id=victim.id, workspace_id=ws.id,
-                            actor_id=victim.id, kind="install_packages",
+                            actor_id=victim.id, kind="factory_reset",
                             status="queued", progress_code="queued")
     db.add(customer_op); db.commit()
     selected = []
 
     monkeypatch.setattr(worker, "SessionLocal", lambda: db)
-    monkeypatch.setattr(worker, "_install_packages",
-                        lambda _db, op, _ws: selected.append(op.id))
+    async def reset(_db, op, _ws):
+        selected.append(op.id)
+    monkeypatch.setattr(worker, "_factory_reset", reset)
     asyncio.run(worker.operations_once())
 
     assert selected == [customer_op.id]

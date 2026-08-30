@@ -54,7 +54,7 @@ test("every dynamically-built key prefix has all its variants", () => {
                       "adjustment"],
     "act.a.": ["register", "sign_in", "password_change", "power_on", "power_off",
                "size_change", "port_publish", "port_unpublish",
-               "packages_installed", "approve", "reject", "grant_credit",
+               "approve", "reject", "grant_credit",
                "set_admin", "delete_user", "settings_update", "provision_failed",
                "ticket_opened", "ticket_replied", "ticket_status",
                "ai_claude_install", "ai_claude_unlink", "apt_repair",
@@ -74,21 +74,11 @@ test("every dynamically-built key prefix has all its variants", () => {
     "term.closed.": ["machineoff", "nomachine", "denied"],
     // Chart window picker: a missing variant prints a raw key on a button.
     "chart.win.": ["minutes", "hours"],
-    "tools.preset.": ["editors", "monitoring", "shell", "network", "build",
-                      "python", "databases", "media"],
   };
   const missing = [];
   for (const [prefix, variants] of Object.entries(expect))
     for (const v of variants) if (!hasKey(prefix + v)) missing.push(prefix + v);
   assert.deepEqual(missing, []);
-});
-
-test("toolset keys match the backend catalogue exactly", () => {
-  const py = fs.readFileSync(path.join(ROOT, "control/mmd/presets.py"), "utf8");
-  const keys = [...py.matchAll(/^\s{4}"([a-z]+)": Preset\(/gm)].map((m) => m[1]);
-  assert.ok(keys.length >= 5, "expected to find presets in the catalogue");
-  const missing = keys.filter((k) => !hasKey(`tools.preset.${k}`));
-  assert.deepEqual(missing, [], "toolsets with no Persian label");
 });
 
 test("no catalogue value is an empty string", () => {

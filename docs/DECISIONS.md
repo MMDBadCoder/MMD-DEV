@@ -1769,3 +1769,20 @@ The token must remain recoverable by the control plane—hashing would make reus
 impossible—so it is stored as a secret rather than a verifier. It is excluded
 from customer and administrator payloads, logs and audits. Account deletion
 removes it with the user row through the existing final database-erasure step.
+
+
+## Software installation belongs inside the workspace
+
+The managed Tools page duplicated a capability every customer already has:
+root access to their own Ubuntu environment, including `apt`, Docker and the
+terminal. Its preset catalogue created a second package-management surface that
+the platform had to curate, validate, queue and support, while still covering
+only a small fraction of what customers may install themselves.
+
+The customer and administrator pages, preset API, approval-time preset path,
+worker operation and privileged `install_packages` verb are removed together.
+This is intentionally a boundary reduction, not merely hidden navigation: the
+internet-facing API can no longer ask the root provisioner to install arbitrary
+packages. The narrowly scoped operator-only `apt_repair` verb remains because
+it repairs image/container compatibility and is not a customer software
+catalogue. AI integrations remain separate managed product features.

@@ -156,14 +156,13 @@ Real URLs via the History API, so refreshing or sharing a link works.
 | `/console/connections` | Browser terminal · SSH · RDP desktop |
 | `/console/files` | File manager: edit, upload, download, zip, preview |
 | `/console/resources` | Size, and the factory reset |
-| `/console/tools` | Install toolsets |
 | `/console/ai` | Claude Code, installed and signed in |
 | `/console/ports` | Publish a port to a reserved public address |
 | `/console/billing` | Balance, itemised Toman rates, spend chart, ledger |
 | `/console/activity` | Every action recorded on the account |
 | `/console/security` | Account details and password |
 | `/console/support` | Tickets |
-| `/console/admin` | People, capacity, pricing, toolsets, support queue |
+| `/console/admin` | People, capacity, pricing, support queue |
 
 No build step and no framework: ES modules, a History-API router, CodeMirror for
 editing and xterm.js for the terminal. Light and dark themes, remembered per

@@ -1,7 +1,7 @@
 /* People: approving them, funding them, and finding one among many.
  *
  * Split out of the old single admin page, which stacked approvals, capacity,
- * charts, presets and the rate card in one column - five different jobs done at
+ * charts and the rate card in one column - different jobs done at
  * five different times, four of which you scrolled past to reach the fifth.
  *
  * The filters are here rather than on the other sections because this is the
@@ -99,9 +99,6 @@ export async function adminUsersPage() {
     </div>
     <p class="tiny dim">${t("adm.users.showing", fmtFa(shown.length), fmtFa(users.length))}</p>`);
 
-  // The approval toolset defaults live with approval, which happens here.
-  const defaults = new Set(JSON.parse(localStorage.getItem("mmd-default-presets") || "[]"));
-
   $$("[data-status]").forEach((b) => {
     b.onclick = () => { f.status = b.dataset.status; saveFilter(f); adminUsersPage(); };
   });
@@ -115,7 +112,7 @@ export async function adminUsersPage() {
   $$("[data-approve]").forEach((b) => b.onclick = async () => {
     b.disabled = true; b.innerHTML = `<span class="spinner"></span>${t("adm.approving")}`;
     try {
-      await post(`/api/admin/users/${b.dataset.approve}/approve`, { presets: [...defaults] });
+      await post(`/api/admin/users/${b.dataset.approve}/approve`);
       toast(t("adm.machinecreated"), "ok");
     } catch (e) { toast(e.message, "bad"); }
     adminUsersPage();

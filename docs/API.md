@@ -151,8 +151,6 @@ is denied the file API. Paths are validated server-side.
 
 | Method | Path | Notes |
 |---|---|---|
-| `GET` | `/api/presets` | Toolset bundles |
-| `POST` | `/api/workspace/presets` | Install. Package names are validated against a strict pattern on both sides |
 | `GET` | `/api/workspace/ai` | Claude Code state: installed, version, signed in, expiry |
 | `POST` | `/api/workspace/ai/claude` | `{action: "install"｜"unlink"}`. Installs the CLI and carries the platform sign-in across |
 | `POST` | `/api/workspace/ai/hermes` | `{enabled, telegram_enabled?, telegram_token?, telegram_users?}`. Enables Hermes and optionally its Telegram gateway. A token and comma-separated numeric sender allowlist are required when first enabling Telegram; the token is never returned |
@@ -188,7 +186,7 @@ removes the gateway service and Telegram credentials without disabling Hermes.
 |---|---|---|
 | `GET` | `/api/admin/users` | |
 | `PUT` | `/api/admin/users/{id}/profile` | Change the customer's email, full name and phone; audited |
-| `POST` | `/api/admin/users/{id}/approve` | Provisions a machine, optionally with toolsets, hands it back **off** |
+| `POST` | `/api/admin/users/{id}/approve` | Provisions a machine and hands it back **off** |
 | `POST` | `/api/admin/users/{id}/reject` | |
 | `POST` | `/api/admin/users/{id}/admin` | Promote or demote |
 | `POST` | `/api/admin/users/{id}/credit` | Grant credit. Marks an active Hermes key for supplier-cap refresh on the next worker pass |

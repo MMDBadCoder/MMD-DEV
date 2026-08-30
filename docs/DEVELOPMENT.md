@@ -140,7 +140,6 @@ control/
     tickets.py             pure ticket rules, testable without a database
     ports.py               external port allocation
     sshkeys.py             public key parsing
-    presets.py             toolset bundles
     billing/pricing.py     the sole authority on cost
     scheduler/admission.py elastic capacity
     incus/                 REST client, exec websocket, metrics

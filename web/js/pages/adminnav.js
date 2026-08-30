@@ -1,7 +1,7 @@
 /* The admin area's own navigation.
  *
  * Administration used to be one long page: approvals, capacity, host charts,
- * rate card, presets and AI pricing stacked in a column. Every one of those is
+ * rate card and AI pricing stacked in a column. Every one of those is
  * a different job done at a different time, and stacking them meant scrolling
  * past four of them to reach the fifth.
  *

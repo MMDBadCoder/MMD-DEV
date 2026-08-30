@@ -110,7 +110,7 @@ Current verbs:
 
 ```
 provision  reset  archive  restore  destroy
-expose_port  unexpose_port  install_packages  apt_repair
+expose_port  unexpose_port  apt_repair
 service_ssh  service_rdp  probe_sessions  ai_claude
 fs_list  fs_pull  fs_push  fs_mkdir  fs_delete  fs_archive
 ping

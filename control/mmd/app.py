@@ -31,7 +31,6 @@ from . import operations as oplib
 from . import notifications as notifylib
 from . import ports as portalloc
 from . import sshkeys
-from . import presets as presetlib
 from . import service as svc
 from .billing import aipricing, pricing
 from .billing.pricing import MICRO, InvalidTier, Tier
@@ -173,11 +172,6 @@ class PortRequest(BaseModel):
     internal_port: int = Field(ge=1, le=65535)
     protocol: str | None = None
     note: str | None = Field(default=None, max_length=120)
-
-
-class PresetRequest(BaseModel):
-    presets: list[str] = []
-    packages: list[str] = []
 
 
 class SshToggle(BaseModel):
@@ -538,34 +532,6 @@ def public_pricing(db: Session = Depends(get_session)) -> dict:
         })
     return {"currency": pricing.CURRENCY, "plans": plans,
             "catalogue": pricing.catalogue()}
-
-
-# --- toolsets ------------------------------------------------------------
-@app.get("/api/presets")
-def list_presets(_: User = Depends(current_user)) -> dict:
-    return {"presets": presetlib.catalogue(),
-            "max_packages": presetlib.MAX_PACKAGES}
-
-
-@app.post("/api/workspace/presets")
-def install_presets(body: PresetRequest, user: User = Depends(current_user),
-                    db: Session = Depends(get_session)) -> dict:
-    """Install a toolset into the running machine."""
-    ws = my_workspace(db, user)
-    if ws.state != WorkspaceState.ON:
-        fail(409, "machine_off", "The machine must be running to install software.")
-    try:
-        packages = presetlib.resolve(body.presets, body.packages)
-    except presetlib.PresetError as exc:
-        fail(400, "bad_package", str(exc))
-    if not packages:
-        fail(400, "no_packages", "Nothing selected to install.")
-
-    op = oplib.create(db, kind="install_packages", user_id=user.id,
-                      workspace_id=ws.id, actor_id=user.id,
-                      detail={"packages": packages, "presets": body.presets})
-    return {"ok": True, "code": "operation_queued", "packages": packages,
-            "operation": oplib.view(op)}
 
 
 # --- the machine ---------------------------------------------------------
@@ -2104,8 +2070,7 @@ def admin_update_profile(user_id: int, body: AdminProfileUpdate,
 
 
 @app.post("/api/admin/users/{user_id}/approve")
-def admin_approve(user_id: int, body: PresetRequest | None = None,
-                  admin: User = Depends(require_admin),
+def admin_approve(user_id: int, admin: User = Depends(require_admin),
                   db: Session = Depends(get_session)) -> dict:
     user = db.get(User, user_id)
     if user is None:
@@ -2137,25 +2102,6 @@ def admin_approve(user_id: int, body: PresetRequest | None = None,
     # customer has no credit, and a running machine would bill them into debt
     # before they ever signed in.
     #
-    # Toolsets are installed while the machine is still running from
-    # provisioning, before it is handed back switched off - so the customer's
-    # first start already has everything, and they are not billed for the
-    # install time.
-    installed = []
-    if body and (body.presets or body.packages):
-        try:
-            installed = presetlib.resolve(body.presets, body.packages)
-        except presetlib.PresetError as exc:
-            svc.audit(db, admin.id, "preset_rejected", user.email, error=str(exc))
-            installed = []
-        if installed:
-            r = svc.call_provisioner({"verb": "install_packages", "idx": idx,
-                                      "packages": installed}, timeout=900)
-            if not r.get("ok"):
-                svc.audit(db, admin.id, "preset_install_failed", user.email,
-                          error=(r.get("output") or r.get("error", ""))[-300:])
-                installed = []
-
     client = _incus()
     stop_failed = False
     try:
@@ -2183,9 +2129,8 @@ def admin_approve(user_id: int, body: PresetRequest | None = None,
     db.commit()
     svc.sync_published_ports(db)
 
-    svc.audit(db, admin.id, "approve", user.email, idx=idx, packages=len(installed))
-    return {"ok": True, "workspace": ws.incus_project, "state": ws.state.value,
-            "installed": installed}
+    svc.audit(db, admin.id, "approve", user.email, idx=idx)
+    return {"ok": True, "workspace": ws.incus_project, "state": ws.state.value}
 
 
 @app.post("/api/admin/users/{user_id}/reject")

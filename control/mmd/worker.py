@@ -687,22 +687,6 @@ async def _factory_reset(db, op: Operation, ws: Workspace) -> None:
     oplib.finish(db, op, svc.now())
 
 
-def _install_packages(db, op: Operation, ws: Workspace) -> None:
-    if ws.state != WorkspaceState.ON:
-        oplib.fail(db, op, "machine_off", svc.now())
-        return
-    packages = list((op.detail or {}).get("packages") or [])
-    oplib.progress(db, op, "installing_packages")
-    resp = svc.call_provisioner({"verb": "install_packages", "idx": ws.idx,
-                                 "packages": packages}, timeout=900)
-    if not resp.get("ok"):
-        oplib.fail(db, op, "install_failed", svc.now())
-        return
-    svc.audit(db, op.actor_id, "packages_installed", ws.incus_project,
-              presets=(op.detail or {}).get("presets") or [], count=len(packages))
-    oplib.finish(db, op, svc.now())
-
-
 async def operations_once() -> None:
     """Advance one durable operation; running work is safe to retry."""
     with SessionLocal() as db:
@@ -728,9 +712,6 @@ async def operations_once() -> None:
                 return
             if op.kind == "factory_reset":
                 await _factory_reset(db, op, ws)
-                return
-            if op.kind == "install_packages":
-                _install_packages(db, op, ws)
                 return
             oplib.fail(db, op, "unknown_operation", svc.now())
         except Exception as exc:  # noqa: BLE001

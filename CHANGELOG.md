@@ -4,6 +4,11 @@ Notable changes. Dates are the day the work landed on the production host.
 
 ## [1.5.0] — 2026-08-30
 
+- Removed the managed Tools/preset feature from customer and administrator
+  interfaces and from the API/privileged provisioner. Workspaces already give
+  customers root access, `apt`, Docker and a terminal, so software installation
+  belongs inside the customer's machine rather than in a second control-plane
+  package manager.
 - Signup now requires a full name and a unique 11-digit Iranian mobile number.
   Customers can update their verified account identity, administrators can
   correct it from the customer detail page, and both paths are audited.

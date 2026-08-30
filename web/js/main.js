@@ -9,7 +9,6 @@ import { signInPage, signUpPage } from "./pages/auth.js";
 import { machinePage, teardownTerminal } from "./pages/machine.js";
 import { filesPage } from "./pages/files.js";
 import { resourcesPage } from "./pages/resources.js";
-import { toolsPage } from "./pages/tools.js";
 import { portsPage } from "./pages/ports.js";
 import { connectionsPage } from "./pages/connections.js";
 import { billingPage } from "./pages/billing.js";
@@ -85,7 +84,6 @@ const NAV = [
   { href: "/console/connections", key: "nav.connections", ic: "link" },
   { href: "/console/files", key: "nav.files", ic: "folder" },
   { href: "/console/resources", key: "nav.resources", ic: "sliders" },
-  { href: "/console/tools", key: "nav.tools", ic: "box" },
   { href: "/console/ai", key: "nav.ai", ic: "sparkle" },
   { href: "/console/ports", key: "nav.ports", ic: "plug" },
   { href: "/console/billing", key: "nav.billing", ic: "card" },
@@ -189,7 +187,6 @@ route("/signin", { title: "ورود", view: signInPage, guest: true });
 route("/signup", { title: "ثبت‌نام", view: signUpPage, guest: true });
 route("/console", { title: "نمای کلی", view: machinePage });
 route("/console/resources", { title: "منابع", view: resourcesPage });
-route("/console/tools", { title: "ابزارها", view: toolsPage });
 route("/console/connections", { title: "اتصال‌ها", view: connectionsPage });
 route("/console/connections/:tab", { title: "اتصال‌ها", view: connectionsPage });
 route("/console/files", { title: "فایل‌ها", view: filesPage });
