@@ -5,7 +5,7 @@
  * machine doing, and what is it costing me. */
 import { get, post } from "../api.js";
 import { $, icon, esc, fmtMoney, fmtNum, fmtFa, note, toast, stamp,
-         statePill } from "../ui.js";
+         statePill, confirmDialog } from "../ui.js";
 import { t, CURRENCY } from "../i18n.js";
 import { render } from "../main.js";
 import { usageChart, windowPicker, wireWindowPicker,
@@ -73,6 +73,27 @@ export async function machinePage() {
     get("/api/activity?limit=6").catch(() => ({ events: [] })),
   ]);
 
+  // The customer must learn about the limit HERE, not from a machine that
+  // stopped. So this is a full-width bar with its own colour, on the machine
+  // page, above the fold - not a line of grey text under the buttons, and not
+  // a toast that appears once and is gone.
+  const autoStopBanner = (w, on) => {
+    if (!on) return "";
+    if (!w.auto_stop_at) {
+      return `<div class="autostop keep">
+        <div>${icon.check}<b>${t("machine.autostop.kept")}</b></div>
+        <p>${t("machine.autostop.kept.sub")}</p></div>`;
+    }
+    const left = Math.max(0, new Date(w.auto_stop_at) - Date.now());
+    const hours = Math.floor(left / 3600000);
+    const mins = Math.floor((left % 3600000) / 60000);
+    return `<div class="autostop">
+      <div>${icon.alert}<b>${t("machine.autostop.title", w.auto_stop_hours)}</b></div>
+      <p>${t("machine.autostop.body", hours, mins, stamp(w.auto_stop_at))}</p>
+      <button class="btn primary sm" id="keep-running">${
+        icon.power}${t("machine.autostop.keep")}</button></div>`;
+  };
+
   const svcRow = (label, enabled, href, ic) => `
     <div class="between" style="padding:11px 0;border-bottom:1px solid var(--border)">
       <div style="display:flex;align-items:center;gap:10px">${icon[ic]}
@@ -91,7 +112,20 @@ export async function machinePage() {
       ${statePill(w.status)}
     </div>
 
-    <div class="card">
+    <div class="card machine-hero ${on ? "is-on" : "is-off"}">
+      <div class="machine-control">
+        <div>
+          <div class="tiny dim">${t("machine.control.state")}</div>
+          <div class="machine-state-line">${statePill(w.status)}
+            <strong>${t("machine.state." + w.status)}</strong></div>
+          <p class="muted small">${on ? t("machine.control.on") : t("machine.control.off")}</p>
+        </div>
+        <button class="btn ${on ? "danger" : "primary"} machine-power" id="power"
+          ${busy || (!on && !w.can_power_on) ? "disabled" : ""}>
+          ${icon.power}<span>${on ? t("machine.power.off") : t("machine.power.on")}</span></button>
+      </div>
+      ${w.blocked ? `<div class="machine-blocked">${
+        note("warn", t("blocked." + w.blocked.code, w.blocked))}</div>` : ""}
       <div class="row" style="margin-bottom:18px">
         <div class="stat"><div class="k">${t("machine.stat.balance")}</div>
           <div class="v">${fmtMoney(w.credits)}<small>${t("unit.toman")}</small></div></div>
@@ -103,14 +137,12 @@ export async function machinePage() {
           <div class="v">${fmtFa(w.days_remaining ?? 0, (w.days_remaining ?? 0) >= 10 ? 0 : 1)}<small>${t("machine.days")}</small></div></div>
       </div>
       <div class="btn-row">
-        <button class="btn primary" id="power" ${busy || (!on && !w.can_power_on) ? "disabled" : ""}>
-          ${icon.power}${on ? t("machine.power.off") : t("machine.power.on")}</button>
         <a class="btn" href="/console/connections/terminal">${icon.machine}${t("ov.openterminal")}</a>
         <a class="btn" href="/console/files">${icon.folder}${t("ov.browsefiles")}</a>
         <a class="btn ghost" href="/console/resources">${icon.sliders}${t("machine.changesize")}</a>
       </div>
-      ${w.blocked ? note("warn", t("blocked." + w.blocked.code, w.blocked)) : ""}
       ${on ? "" : note("info", t("machine.offnote", fmtMoney(w.rate_off_per_hour)))}
+      ${autoStopBanner(w, on)}
     </div>
 
     <div class="card" style="margin-bottom:16px">
@@ -165,15 +197,60 @@ export async function machinePage() {
     </div>`);
 
   $("#power").onclick = async (e) => {
+    if (!on) {
+      const preview = `<div class="cost-preview">
+        <div><span>${t("machine.preview.balance")}</span><b>${fmtMoney(w.credits)} ${CURRENCY}</b></div>
+        <div><span>${t("machine.preview.required")}</span><b>${fmtMoney(w.rate_on_per_hour)} ${CURRENCY}</b></div>
+        <div><span>${t("machine.preview.idle")}</span><b>${fmtMoney(w.rate_idle_per_hour)} ${CURRENCY}</b></div>
+        <div><span>${t("machine.preview.maximum")}</span><b>${fmtMoney(w.rate_on_per_hour)} ${CURRENCY}</b></div>
+      </div><p>${t("machine.preview.body")}</p>`;
+      if (!await confirmDialog(t("machine.preview.title"), preview,
+                               t("machine.power.on"), { tone: "primary" })) return;
+    }
     const b = e.currentTarget;
     b.disabled = true;
     b.innerHTML = `<span class="spinner"></span>${
       on ? t("machine.power.turningoff") : t("machine.power.turningon")}`;
-    try { await post("/api/workspace/power", { on: !on });
-          toast(on ? t("machine.off.toast") : t("machine.on.toast"), "ok"); }
+    try {
+      const r = await post("/api/workspace/power", { on: !on });
+      toast(on ? t("machine.off.toast") : t("machine.on.toast"), "ok");
+      // Stated at the moment the machine starts, not left to be discovered on
+      // the page or - worse - from a machine that has already stopped. Both
+      // buttons are a real choice, so neither is styled as a cancel.
+      if (!on && r.auto_stop_at) {
+        const keep = await confirmDialog(
+          t("machine.autostop.dialog.title", r.auto_stop_hours ?? w.auto_stop_hours),
+          t("machine.autostop.dialog.body", stamp(r.auto_stop_at)),
+          t("machine.autostop.keep"),
+          { cancelLabel: t("machine.autostop.dialog.ok"), tone: "primary" });
+        if (keep) {
+          try { await post("/api/workspace/keep-running");
+                toast(t("machine.autostop.kept"), "ok"); }
+          catch (err2) { toast(err2.message, "bad"); }
+        }
+      }
+    }
     catch (err) { toast(err.message, "bad"); }
     machinePage();
   };
+  const keep = $("#keep-running");
+  if (keep) {
+    keep.onclick = async () => {
+      // Confirmed rather than one-click: it turns off a spending limit the
+      // customer is otherwise protected by, and "I clicked it by accident" is
+      // a bill rather than an inconvenience.
+      if (!await confirmDialog(t("machine.autostop.keep"),
+                               t("machine.autostop.confirm"),
+                               t("machine.autostop.keep"))) return;
+      keep.disabled = true;
+      keep.innerHTML = `<span class="spinner"></span>${t("conn.working")}`;
+      try { await post("/api/workspace/keep-running");
+            toast(t("machine.autostop.kept"), "ok"); }
+      catch (err) { toast(err.message, "bad"); }
+      machinePage();
+    };
+  }
+
   wireWindowPicker($("#win"), (m) => {
     saveWindow(m);
     $("#win").querySelectorAll("[data-win]").forEach((b) =>

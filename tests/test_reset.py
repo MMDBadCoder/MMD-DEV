@@ -19,8 +19,8 @@ from sqlalchemy.pool import StaticPool             # noqa: E402
 
 from mmd import app as appmod                      # noqa: E402
 from mmd import ports as PORTS                     # noqa: E402
-from mmd import service as svc                     # noqa: E402
-from mmd.models import (Base, ExposedPort, PortKind, SshKey, User,  # noqa: E402
+from mmd import service as svc, worker             # noqa: E402
+from mmd.models import (Base, ExposedPort, Operation, PortKind, SshKey, User,  # noqa: E402
                         UserStatus, Workspace, WorkspaceState)
 from mmd.security import hash_password             # noqa: E402
 
@@ -48,6 +48,7 @@ def env(monkeypatch):
             pass
 
     monkeypatch.setattr(appmod, "_incus", lambda: FakeIncus())
+    monkeypatch.setattr(worker, "_incus", lambda: FakeIncus())
 
     engine = create_engine("sqlite://", connect_args={"check_same_thread": False},
                            poolclass=StaticPool)
@@ -62,7 +63,8 @@ def env(monkeypatch):
     ws = Workspace(user_id=u.id, idx=4, incus_project="ws-4",
                    state=WorkspaceState.OFF, mem_mib=2048,
                    ssh_enabled=True, ssh_keys="ssh-ed25519 AAAA... dev@laptop",
-                   rdp_enabled=True, rdp_installed=True)
+                   rdp_enabled=True, rdp_installed=True,
+                   hermes_enabled=True, hermes_installed=True)
     db.add(ws)
     db.commit()
     PORTS.reserve_service_ports(db, ws.id)
@@ -79,6 +81,13 @@ def env(monkeypatch):
 
 def _ok_body():
     return {"confirm": EMAIL, "password": PASSWORD}
+
+
+def _finish_reset(db, ws):
+    import asyncio
+    op = db.scalar(select(Operation).where(Operation.workspace_id == ws.id))
+    asyncio.run(worker._factory_reset(db, op, ws))
+    return op
 
 
 # --- the confirmation ------------------------------------------------------
@@ -137,10 +146,13 @@ def test_a_refused_attempt_is_recorded(env):
 
 
 # --- what it does ----------------------------------------------------------
-def test_a_successful_reset_hands_the_machine_back_off(env):
+def test_a_successful_reset_is_queued_then_hands_the_machine_back_off(env):
     client, db, ws, u, sent = env
     r = client.post("/api/workspace/reset", json=_ok_body())
     assert r.status_code == 200, r.text
+    db.refresh(ws)
+    assert ws.state is WorkspaceState.RESETTING
+    _finish_reset(db, ws)
     db.refresh(ws)
     assert ws.state is WorkspaceState.OFF
     assert ws.desired_on is False
@@ -150,6 +162,7 @@ def test_a_successful_reset_hands_the_machine_back_off(env):
 def test_it_asks_the_provisioner_for_the_same_size(env):
     client, db, ws, u, sent = env
     client.post("/api/workspace/reset", json=_ok_body())
+    _finish_reset(db, ws)
     reset = next(p for p in sent if p.get("verb") == "reset")
     assert reset["idx"] == ws.idx
     assert reset["mem_mib"] == 2048
@@ -181,11 +194,15 @@ def test_the_services_are_switched_back_off(env):
     flags set would show a desktop switch for software that is not there."""
     client, db, ws, *_ = env
     client.post("/api/workspace/reset", json=_ok_body())
+    _finish_reset(db, ws)
     db.refresh(ws)
     assert ws.ssh_enabled is False
     assert ws.rdp_enabled is False
     assert ws.rdp_installed is False
     assert ws.ssh_keys is None
+    assert ws.hermes_enabled is True
+    assert ws.hermes_installed is False
+    assert ws.auto_stop_at is None
 
 
 def test_a_running_machine_is_billed_for_the_time_it_ran(env, monkeypatch):
@@ -217,6 +234,7 @@ def test_a_wedged_machine_can_be_reset(env):
     ws.error = "ReadTimeout"
     db.commit()
     assert client.post("/api/workspace/reset", json=_ok_body()).status_code == 200
+    _finish_reset(db, ws)
     db.refresh(ws)
     assert ws.state is WorkspaceState.OFF
     assert ws.error is None
@@ -238,10 +256,12 @@ def test_a_failed_reset_leaves_a_retryable_error(env, monkeypatch):
                         lambda p, timeout=None: {"ok": False, "output": "boom"})
     client, db, ws, *_ = env
     r = client.post("/api/workspace/reset", json=_ok_body())
-    assert r.status_code == 500
+    assert r.status_code == 200
+    op = _finish_reset(db, ws)
     db.refresh(ws)
     assert ws.state is WorkspaceState.ERROR
     assert ws.error
+    assert op.status == "failed"
 
 
 # --- the script it drives --------------------------------------------------

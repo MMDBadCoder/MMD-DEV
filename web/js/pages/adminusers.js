@@ -20,14 +20,15 @@ const readFilter = () => {
 };
 const saveFilter = (f) => localStorage.setItem(KEY, JSON.stringify(f));
 
-const STATUSES = ["all", "pending", "approved", "rejected", "suspended"];
+const STATUSES = ["all", "pending", "approved", "rejected", "suspended", "deleting"];
 
 export async function adminUsersPage() {
   const users = await get("/api/admin/users");
   const f = { status: "all", q: "", ...readFilter() };
 
   const statusLabel = { approved: "تأیید شده", pending: "در انتظار تأیید",
-                        rejected: "رد شده", suspended: "معلق" };
+                        rejected: "رد شده", suspended: "معلق",
+                        deleting: t("adm.st.deleting") };
 
   const matches = (u) => {
     if (f.status !== "all" && u.status !== f.status) return false;
@@ -60,11 +61,11 @@ export async function adminUsersPage() {
       ${u.status === "pending"
         ? `<button class="btn sm primary" data-approve="${u.id}">${t("adm.approve")}</button>
            <button class="btn sm danger" data-reject="${u.id}">${t("adm.reject")}</button>` : ""}
-      <button class="btn sm" data-credit="${u.id}">${t("adm.credit")}</button>
+      <button class="btn sm" data-credit="${u.id}" ${u.status === "deleting" ? "disabled" : ""}>${t("adm.credit")}</button>
       <a class="btn sm ghost" href="/console/admin/users/${u.id}">${t("adm.details")}</a>
       <button class="btn sm ghost" data-admin="${u.id}" data-is="${u.is_admin}">
         ${u.is_admin ? t("adm.demote") : t("adm.makeadmin")}</button>
-      ${u.id === state.me?.id ? "" : `<button class="btn sm danger" data-del="${u.id}"
+      ${u.id === state.me?.id || u.status === "deleting" ? "" : `<button class="btn sm danger" data-del="${u.id}"
         data-email="${esc(u.email)}">${icon.trash}</button>`}
     </td></tr>`;
 
@@ -145,7 +146,7 @@ export async function adminUsersPage() {
     if (!await confirmDialog(t("adm.confirm.del.title", b.dataset.email),
                              t("adm.confirm.del.body"), t("adm.confirm.del.cta"))) return;
     b.disabled = true;
-    try { await del(`/api/admin/users/${b.dataset.del}`); toast(t("adm.deleted"), "ok"); }
+    try { await del(`/api/admin/users/${b.dataset.del}`); toast(t("adm.deletequeued"), "ok"); }
     catch (e) { toast(e.message, "bad"); }
     adminUsersPage();
   });

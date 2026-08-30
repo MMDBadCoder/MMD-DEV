@@ -2,6 +2,51 @@
 
 Notable changes. Dates are the day the work landed on the production host.
 
+## [1.4.0] — 2026-08-30
+
+Live on the production host.
+
+### Added
+
+- **Long-running changes now stay visible across pages and refreshes.** Factory
+  reset and tool installation are durable worker operations with a persistent
+  progress strip. Account deletion uses the same queue but erases its operation
+  with the account after revoking AI spend, removing public routes, destroying
+  Incus storage and deleting every related database row. Port removal now keeps
+  its reservation when the firewall cannot be updated, so a failed removal is
+  retryable rather than invisible.
+
+- **The machine page now leads with one unambiguous state and action.** Starting
+  a machine previews current balance, the required next hour, idle cost and
+  maximum hourly cost. Resizing compares old and new hourly costs before the
+  customer confirms. These figures come from the server's billing authority.
+
+- **Every customer-published port now forwards both TCP and UDP.** The protocol
+  selector is gone; one reservation produces both nftables rules. Each row also
+  shows the existing `MMD_ENDPOINT_HOST:<port>` address and the equivalent
+  `<username>.<domain>:<port>` address. The name is a DNS alias, not a second
+  routing dimension: the globally unique external port still selects the
+  workspace. Existing single-protocol customer rows are widened during the
+  schema patch; permanent SSH and RDP reservations remain TCP-only.
+
+- **A machine now switches itself off 12 hours after it starts**, unless the
+  customer says otherwise for that run. Asked for in ticket #17, with the
+  consent requirement in the customer's own words. The machine page carries the
+  rule as a full-width notice with the time remaining and a
+  «روشن بماند تا خودم خاموشش کنم» button.
+
+  This reverses *"Nothing switches off a workspace the customer has paid for"*
+  and the difference matters: the removed idle timer fired on 60 minutes without
+  browser-terminal activity, using a signal that never saw SSH, RDP, the file
+  manager or a published port — so it killed long builds. This one measures
+  elapsed time from power-on, treats every run alike, and asks. `MMD_AUTO_STOP_HOURS`
+  configures it.
+
+  The waiver is **per run**, not a stored preference: every start arms a new
+  deadline, including the reconciler restoring a machine after host downtime. A
+  permanent opt-out would be ticked once by exactly the customer most likely to
+  forget a machine.
+
 ## [1.3.0] — 2026-08-26
 
 Live on the production host, except where noted. Almost entirely bug fixes,

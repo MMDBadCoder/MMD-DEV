@@ -25,7 +25,7 @@ import { supportPage } from "./pages/support.js";
 import { adminTicketsPage } from "./pages/admintickets.js";
 import { aiPricingPage } from "./pages/aipricing.js";
 
-export const state = { me: null };
+export const state = { me: null, operations: [] };
 
 export async function refreshMe() {
   try {
@@ -34,6 +34,25 @@ export async function refreshMe() {
     state.me = null;
   }
   return state.me;
+}
+
+async function refreshOperations() {
+  if (!state.me) { state.operations = []; return; }
+  try { state.operations = (await get("/api/operations")).operations || []; }
+  catch { state.operations = []; }
+}
+
+function operationStrip() {
+  const op = state.operations.find((o) => ["queued", "running"].includes(o.status))
+    || state.operations.find((o) => o.status === "failed");
+  if (!op) return "";
+  const failed = op.status === "failed";
+  return `<div class="operation-strip ${failed ? "failed" : ""}">
+    ${failed ? icon.alert : '<span class="spinner"></span>'}
+    <div><b>${t("op.kind." + op.kind)}</b>
+      <span>${t("op.progress." + op.progress_code)}</span></div>
+    <small>${t("op.status." + op.status)}</small>
+  </div>`;
 }
 
 // Connections sits second, right after the overview: it is what a developer
@@ -89,7 +108,7 @@ function chrome(bodyHtml) {
           ${icon.logout}<span class="lbl">${t("nav.signout")}</span></button>
       </div>
     </header>
-    <main class="page">${bodyHtml}</main>`;
+    <main class="page">${operationStrip()}${bodyHtml}</main>`;
 }
 
 export function render(bodyHtml) {
@@ -156,6 +175,7 @@ setGuard(async (r) => {
   // customer reported exactly that. It is one small local query per page
   // change, and it keeps the balance honest too.
   await refreshMe();
+  await refreshOperations();
   if (r.public) return null;
   if (r.guest) return state.me ? "/console" : null;
   if (!state.me) return "/signin";
@@ -166,3 +186,18 @@ setGuard(async (r) => {
 // No standalone fetch here: startRouter() resolves the first route immediately,
 // and the guard above fetches before any view renders.
 startRouter();
+
+// Long operations outlive a page. Refresh only their compact global banner;
+// never redraw the active form or disturb its scroll position.
+setInterval(async () => {
+  if (!state.me || !currentPath().startsWith("/console")) return;
+  const before = JSON.stringify(state.operations);
+  await refreshOperations();
+  if (before !== JSON.stringify(state.operations)) {
+    const old = document.querySelector(".operation-strip");
+    const holder = document.createElement("div");
+    holder.innerHTML = operationStrip();
+    if (old) old.replaceWith(holder.firstElementChild || document.createTextNode(""));
+    else if (holder.firstElementChild) document.querySelector("main.page")?.prepend(holder.firstElementChild);
+  }
+}, 3000);

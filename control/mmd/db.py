@@ -35,6 +35,21 @@ SCHEMA_PATCHES: tuple[str, ...] = (
     "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS hermes_dash_user VARCHAR(64)",
     "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS hermes_dash_password VARCHAR(64)",
     "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS hermes_error TEXT",
+    "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS auto_stop_at TIMESTAMPTZ",
+    # Published ports now carry both protocols. Customer-published rows written
+    # before that are widened; the reserved SSH and RDP rows are left alone,
+    # because both are TCP services and a UDP rule there would forward to a port
+    # that never answers. The old UI allowed the same internal port to be
+    # published once per protocol, so collapse that rare pair first; otherwise
+    # widening both rows would violate uq_one_mapping_per_internal_port and
+    # leave the entire migration unapplied.
+    "DELETE FROM exposed_ports newer USING exposed_ports older "
+    "WHERE newer.kind = 'USER' AND older.kind = 'USER' "
+    "AND newer.workspace_id = older.workspace_id "
+    "AND newer.internal_port = older.internal_port AND newer.id > older.id",
+    # Idempotent - the second run matches nothing.
+    "UPDATE exposed_ports SET protocol = 'both' "
+    "WHERE kind = 'USER' AND protocol IN ('tcp', 'udp')",
 )
 
 

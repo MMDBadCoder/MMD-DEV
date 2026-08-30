@@ -89,9 +89,19 @@ function renderHermes(head, h) {
           ${secretRow({ label: t("ai.hermes.dashuser"), value: h.dashboard_user,
                         masked: false })}
           ${secretRow({ label: t("ai.hermes.dashpass"), value: h.dashboard_password })}
-          ${h.host ? secretRow({ label: t("ai.hermes.host"),
-                                 value: "https://" + h.host, masked: false,
-                                 hint: t("ai.hermes.host.hint") }) : ""}
+          <!-- An address, not a credential. secretRow gives every value a
+               copy button and a reveal toggle, which is right for the key and
+               the password and wrong here: what a customer wants to do with
+               their dashboard address is OPEN it. So this is a plain link that
+               opens in a new tab, with no copy control at all. -->
+          ${h.host ? `<div class="stat" style="align-items:stretch">
+            <div class="k">${t("ai.hermes.host")}</div>
+            <a class="v ltr mono" dir="ltr" href="https://${esc(h.host)}"
+               target="_blank" rel="noopener noreferrer"
+               style="font-size:15px;word-break:break-all">${
+                 esc(h.host)} ${icon.link}</a>
+            <p class="tiny dim" style="margin:6px 0 0">${t("ai.hermes.host.hint")}</p>
+          </div>` : ""}
         </div>` : ""}
 
       <div class="btn-row" style="margin-top:16px">

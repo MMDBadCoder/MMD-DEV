@@ -14,21 +14,39 @@ export async function portsPage() {
 
   const hasReserved = d.ports.some((p) => !p.removable);
 
+  // Two addresses for a customer's own port, one line each. Both reach the same
+  // place: the named one puts the customer's own name in front of the SAME port
+  // number, because the port is what selects the workspace. It is not a way to
+  // omit the port - nothing in a TCP or UDP packet carries the hostname.
+  //
+  // The reserved SSH and RDP rows keep the single address they have always had.
+  const line = (label, text, href) => `
+    <div style="display:flex;align-items:center;gap:6px;min-width:0">
+      <span class="dim tiny" style="flex:0 0 auto;min-width:34px">${label}</span>
+      ${href
+        ? `<a class="mono ltr" dir="ltr" href="${esc(href)}" target="_blank"
+              rel="noopener noreferrer" style="word-break:break-all">${esc(text)}</a>`
+        : `<span class="mono ltr" dir="ltr" style="word-break:break-all">${esc(text)}</span>`}
+      <button class="btn sm ghost icon" data-copy="${esc(text)}">${icon.copy}</button>
+    </div>`;
+
+  const addressCell = (p) => {
+    const rowsOut = [];
+    if (p.host_address) {
+      rowsOut.push(line(t("ports.addr.name"), p.host_address, p.host_url));
+    }
+    rowsOut.push(line(p.host_address ? t("ports.addr.ip") : "",
+                      p.address, p.url));
+    return `<div style="display:grid;gap:4px">${rowsOut.join("")}</div>`;
+  };
+
   const rows = d.ports.map((p) => `
     <tr>
-      <td class="mono ltr" dir="ltr">${p.internal_port}<span class="dim tiny"> ${esc(p.protocol)}</span></td>
+      <td class="mono ltr" dir="ltr">${p.internal_port}<span class="dim tiny"> ${
+        esc((p.protocols || []).join("/").toUpperCase())}</span></td>
       <td><span class="pill" style="font-size:12px;padding:3px 10px">${
         t("ports.kind." + p.kind)}</span></td>
-      <td>${p.url
-        // A published port is almost always an HTTP service, so show a URL the
-        // customer can click straight through to. The reserved SSH and RDP rows
-        // have no url and keep the bare host:port, because a scheme in front of
-        // those would be wrong rather than merely unhelpful.
-        ? `<a class="mono ltr" dir="ltr" href="${esc(p.url)}" target="_blank"
-              rel="noopener noreferrer">${esc(p.url)}</a>`
-        : `<span class="mono ltr" dir="ltr">${esc(p.address)}</span>`}
-        <button class="btn sm ghost icon"
-          data-copy="${esc(p.url || p.address)}">${icon.copy}</button></td>
+      <td>${addressCell(p)}</td>
       <td class="muted small">${esc(p.note || "—")}</td>
       <td class="muted small nowrap">${stamp(p.created_at)}</td>
       <td class="num">${p.removable
@@ -48,13 +66,12 @@ export async function portsPage() {
       <div class="row" style="align-items:flex-end">
         <div style="flex:0 0 160px"><label for="p">${t("ports.internal")}</label>
           <input id="p" type="number" min="1" max="65535" placeholder="8080"></div>
-        <div style="flex:0 0 130px"><label for="proto">${t("ports.protocol")}</label>
-          <select id="proto"><option value="tcp">TCP</option><option value="udp">UDP</option></select></div>
         <div><label for="note">${t("ports.label")}</label>
           <input id="note" maxlength="120"></div>
         <div style="flex:0 0 auto"><button class="btn primary" id="add">${icon.plus}${t("ports.publish")}</button></div>
       </div>
       <p class="tiny dim" style="margin:12px 0 0">${t("ports.free", d.max_ports)}</p>
+      <p class="tiny dim" style="margin:6px 0 0">${t("ports.bothproto")}</p>
       <div id="msg"></div>
     </div>
 
@@ -81,9 +98,8 @@ export async function portsPage() {
     btn.disabled = true; btn.innerHTML = `<span class="spinner"></span>${t("ports.publishing")}`;
     try {
       const r = await post("/api/workspace/ports", {
-        internal_port: port, protocol: $("#proto").value,
-        note: $("#note").value.trim() || null });
-      toast(r.url || r.address, "ok");
+        internal_port: port, note: $("#note").value.trim() || null });
+      toast(r.host_address || r.address, "ok");
       if (r.warning_code) toast(t("ports.warn." + r.warning_code), "bad");
       portsPage();
     } catch (err) {

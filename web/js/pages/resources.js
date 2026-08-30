@@ -1,7 +1,7 @@
 /* Size selection - its own page, so nothing stacks onto the machine page. */
 import { get, post } from "../api.js";
-import { $, $$, icon, esc, fmtMoney, fmtNum, note, toast } from "../ui.js";
-import { t } from "../i18n.js";
+import { $, $$, icon, esc, fmtMoney, fmtNum, note, toast, confirmDialog } from "../ui.js";
+import { t, CURRENCY } from "../i18n.js";
 import { render } from "../main.js";
 import { navigate } from "../router.js";
 import { dangerDialog } from "../dangerdialog.js";
@@ -116,7 +116,7 @@ export async function resourcesPage() {
     btn.innerHTML = `<span class="spinner"></span>${t("reset.working")}`;
     try {
       await post("/api/workspace/reset", answer);
-      toast(t("reset.done"), "ok");
+      toast(t("reset.queued"), "ok");
       navigate("/console");
     } catch (err) {
       $("#reset-msg").innerHTML = note("bad", esc(err.message));
@@ -126,6 +126,17 @@ export async function resourcesPage() {
   };
 
   $("#apply").onclick = async () => {
+    const before = priceOf(cur.cpu, cur.mem);
+    const after = priceOf(sel.cpu, sel.mem);
+    const delta = (after.max_per_hour || 0) - (before.max_per_hour || 0);
+    const preview = `<div class="cost-preview">
+      <div><span>${t("res.preview.current")}</span><b>${fmtMoney(before.max_per_hour)} ${CURRENCY}</b></div>
+      <div><span>${t("res.preview.new")}</span><b>${fmtMoney(after.max_per_hour)} ${CURRENCY}</b></div>
+      <div><span>${t("res.preview.idle")}</span><b>${fmtMoney(after.idle_per_hour)} ${CURRENCY}</b></div>
+      <div><span>${t("res.preview.difference")}</span><b class="ltr">${delta > 0 ? "+" : ""}${fmtMoney(delta)} ${CURRENCY}</b></div>
+    </div><p>${running ? t("res.preview.running") : t("res.preview.off")}</p>`;
+    if (!await confirmDialog(t("res.preview.title"), preview,
+                             t("res.apply"), { tone: "primary" })) return;
     const btn = $("#apply");
     btn.disabled = true; btn.innerHTML = `<span class="spinner"></span>${t("res.applying")}`;
     try {

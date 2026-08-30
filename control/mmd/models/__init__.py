@@ -27,6 +27,7 @@ class UserStatus(str, enum.Enum):
     APPROVED = "approved"      # workspace provisioned
     REJECTED = "rejected"
     SUSPENDED = "suspended"
+    DELETING = "deleting"      # durable cleanup is removing external resources
 
 
 class WorkspaceState(str, enum.Enum):
@@ -125,9 +126,20 @@ class Workspace(Base):
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     purge_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # Informational only. Recorded on power-on and when the browser terminal
-    # opens, and acted on by nothing: the idle auto-stop that used to read it
-    # has been removed. Nothing switches off a funded workspace.
+    # opens, and acted on by nothing. The idle auto-stop that used to read it is
+    # gone for good: it could not tell a long build from an abandoned machine.
     last_activity: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    # When THIS power-on cycle is scheduled to end, or NULL for "runs until the
+    # customer stops it". Set to now + CONFIG.auto_stop_hours every time the
+    # machine starts, and cleared when the customer asks to keep it running.
+    #
+    # Deliberately NOT a persistent per-workspace preference. A customer who
+    # once ticked "never stop this" would be paying for a forgotten machine for
+    # the life of the account, which is the cost this feature exists to prevent.
+    # Resetting on every start means the choice is made about a machine the
+    # customer has just this moment decided to run - see docs/DECISIONS.md.
+    auto_stop_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     error: Mapped[str | None] = mapped_column(Text)
 
     # --- optional services -------------------------------------------------
@@ -327,6 +339,34 @@ class AuditLog(Base):
     action: Mapped[str] = mapped_column(String(64), index=True)
     target: Mapped[str | None] = mapped_column(String(128))
     detail: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class Operation(Base):
+    """A durable, customer-visible long-running action.
+
+    An HTTP request records intent and returns immediately; the worker performs
+    the work. Keeping this in PostgreSQL means navigation, an API restart, or a
+    worker crash cannot make a destructive action disappear while it is still
+    changing the world.
+    """
+    __tablename__ = "operations"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    workspace_id: Mapped[int | None] = mapped_column(
+        ForeignKey("workspaces.id", ondelete="CASCADE"), index=True)
+    actor_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"))
+    kind: Mapped[str] = mapped_column(String(48), index=True)
+    status: Mapped[str] = mapped_column(String(16), default="queued", index=True)
+    progress_code: Mapped[str] = mapped_column(String(64), default="queued")
+    detail: Mapped[dict] = mapped_column(JSON, default=dict)
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class Ticket(Base):

@@ -131,15 +131,20 @@ export function toggleTheme() {
 }
 
 /* ---- confirmation ---- */
-export function confirmDialog(title, body, confirmLabel = "تأیید") {
+/* opts.cancelLabel  - the second button's text. Defaults to "انصراف", which is
+                       right for a destructive question and wrong for an
+                       informational one where BOTH answers are a real choice.
+   opts.tone          - "danger" (default) or "primary" for the confirm button. */
+export function confirmDialog(title, body, confirmLabel = "تأیید", opts = {}) {
   return new Promise((resolve) => {
     const wrap = document.createElement("div");
     wrap.style.cssText = "position:fixed;inset:0;z-index:150;display:grid;place-items:center;background:rgba(0,0,0,.45);padding:20px";
     wrap.innerHTML = `<div class="card" style="max-width:420px;width:100%;margin:0">
-      <h2>${esc(title)}</h2><p class="muted small">${body}</p>
+      <h2>${esc(title)}</h2><div class="muted small">${body}</div>
       <div class="btn-row" style="justify-content:flex-end;margin-top:16px">
-        <button class="btn ghost" data-no>انصراف</button>
-        <button class="btn danger" data-yes>${esc(confirmLabel)}</button>
+        <button class="btn ghost" data-no>${esc(opts.cancelLabel || "انصراف")}</button>
+        <button class="btn ${opts.tone === "primary" ? "primary" : "danger"}"
+                data-yes>${esc(confirmLabel)}</button>
       </div></div>`;
     const done = (v) => { wrap.remove(); resolve(v); };
     wrap.querySelector("[data-no]").onclick = () => done(false);

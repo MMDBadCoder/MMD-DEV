@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 from .billing import pricing
 from .billing import aipricing
 from .billing.pricing import MICRO, Rates, Tier
+from . import ports
 from .config import CONFIG
 from .models import (AuditLog, CreditAccount, CreditTransaction, ExposedPort,
                      Setting, TxKind, User, Workspace, WorkspaceState, AiModelPrice, AiUsageMark)
@@ -173,27 +174,66 @@ def settle_elapsed(db: Session, ws: Workspace, *, powered_on: bool,
                          fraction=min(elapsed_h, 1.0), tier=tier)
 
 
+# --- the automatic stop --------------------------------------------------
+def arm_auto_stop(ws: Workspace) -> None:
+    """Schedule the end of this power-on cycle.
+
+    Called on EVERY transition into ON, including the reconciler restoring a
+    machine after host downtime. That is what makes the customer's "keep it
+    running" choice apply to one run rather than forever: the deadline comes
+    back the next time the machine starts, so a machine left on by accident is
+    always bounded, while a machine someone is deliberately using is one click
+    from staying up.
+    """
+    ws.auto_stop_at = now() + timedelta(hours=CONFIG.auto_stop_hours)
+
+
+def disarm_auto_stop(ws: Workspace) -> None:
+    """The customer has asked for this run to continue until they stop it."""
+    ws.auto_stop_at = None
+
+
+def due_for_auto_stop(ws: Workspace, at: datetime | None = None) -> bool:
+    """Is this machine past the deadline it was given when it started?
+
+    A NULL deadline is not "stop now" - it means the customer opted out for
+    this run, or the machine predates the feature. Reading it either way round
+    is the difference between a feature and an outage.
+    """
+    return (ws.state == WorkspaceState.ON
+            and ws.auto_stop_at is not None
+            and ws.auto_stop_at <= (at or now()))
+
+
 def workspace_ip(ws: Workspace) -> str:
     """Deterministic address, matching workspace/ws-lib.sh's ws_ip()."""
     return f"10.42.0.{ws.idx + 10}"
 
 
-def sync_published_ports(db: Session) -> dict:
+def sync_published_ports(db: Session, *, exclude_workspace_id: int | None = None,
+                         exclude_port_id: int | None = None) -> dict:
     """Push the complete set of published ports to the host firewall.
 
     Sends every mapping for every workspace, not a delta. A full rewrite is
     idempotent and self-heals after a crash, a restart, or a rule someone
     removed by hand - which a sequence of add/remove calls cannot do.
     """
-    rows = db.execute(
-        select(ExposedPort, Workspace)
-        .join(Workspace, Workspace.id == ExposedPort.workspace_id)).all()
+    q = select(ExposedPort, Workspace).join(
+        Workspace, Workspace.id == ExposedPort.workspace_id)
+    if exclude_workspace_id is not None:
+        q = q.where(Workspace.id != exclude_workspace_id)
+    if exclude_port_id is not None:
+        q = q.where(ExposedPort.id != exclude_port_id)
+    rows = db.execute(q).all()
+    # One row can stand for both protocols, and the provisioner deliberately
+    # accepts only "tcp" or "udp" - it re-validates everything and does not know
+    # about our shorthand. Expanding here keeps that boundary narrow.
     mappings = [{
         "external_port": p.external_port,
         "internal_port": p.internal_port,
-        "protocol": p.protocol,
+        "protocol": proto,
         "ip": workspace_ip(w),
-    } for p, w in rows]
+    } for p, w in rows for proto in ports.expand(p.protocol)]
     return call_provisioner({"verb": "expose_port", "idx": 1, "mappings": mappings},
                             timeout=60)
 

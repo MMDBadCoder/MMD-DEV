@@ -26,6 +26,7 @@ from sqlalchemy import desc, func, or_, select
 from sqlalchemy.orm import Session, aliased
 
 from . import hermes
+from . import operations as oplib
 from . import ports as portalloc
 from . import sshkeys
 from . import presets as presetlib
@@ -38,7 +39,7 @@ from .incus.client import IncusClient, IncusConfig, IncusError
 from .incus.execws import open_exec
 from .models import (AiModelPrice, AiUsageMark, AuditLog, CreditAccount,
                      CreditTransaction, ExposedPort, PortKind, Setting, SshKey,
-                     Ticket, TicketMessage, TicketStatus, TxKind, UsageSample,
+                     Operation, Ticket, TicketMessage, TicketStatus, TxKind, UsageSample,
                      User, UserStatus, Workspace, WorkspaceState)
 from .security import hash_password, verify_password
 from . import usernames as unames
@@ -83,7 +84,7 @@ def current_user(request: Request, db: Session = Depends(get_session)) -> User:
     except BadSignature:
         fail(401, "session_expired", "Your session has expired.")
     user = db.get(User, int(uid))
-    if user is None or user.status == UserStatus.REJECTED:
+    if user is None or user.status in (UserStatus.REJECTED, UserStatus.DELETING):
         fail(401, "not_signed_in", "Not signed in")
     if user.status == UserStatus.SUSPENDED:
         fail(403, "suspended", "Your account is suspended.")
@@ -137,8 +138,13 @@ class TierRequest(BaseModel):
 
 
 class PortRequest(BaseModel):
+    """No protocol. Every published port forwards TCP and UDP alike.
+
+    The field is still accepted and ignored so an older page, or a script
+    somebody wrote against the previous API, does not start failing.
+    """
     internal_port: int = Field(ge=1, le=65535)
-    protocol: str = "tcp"
+    protocol: str | None = None
     note: str | None = Field(default=None, max_length=120)
 
 
@@ -463,15 +469,11 @@ def install_presets(body: PresetRequest, user: User = Depends(current_user),
     if not packages:
         fail(400, "no_packages", "Nothing selected to install.")
 
-    resp = svc.call_provisioner({"verb": "install_packages", "idx": ws.idx,
-                                 "packages": packages}, timeout=900)
-    if not resp.get("ok"):
-        log.error("package install failed for %s: %s", ws.incus_project, resp)
-        fail(500, "install_failed", "The software could not be installed.",
-             output=(resp.get("output") or resp.get("error", ""))[-400:])
-    svc.audit(db, user.id, "packages_installed", ws.incus_project,
-              presets=body.presets, count=len(packages))
-    return {"ok": True, "packages": packages}
+    op = oplib.create(db, kind="install_packages", user_id=user.id,
+                      workspace_id=ws.id, actor_id=user.id,
+                      detail={"packages": packages, "presets": body.presets})
+    return {"ok": True, "code": "operation_queued", "packages": packages,
+            "operation": oplib.view(op)}
 
 
 # --- the machine ---------------------------------------------------------
@@ -529,7 +531,38 @@ def workspace_status(user: User = Depends(current_user),
         "blocked": blocked,
         "started_at": ws.started_at.isoformat() if ws.started_at else None,
         "archived_until": ws.purge_after.isoformat() if ws.purge_after else None,
+        # The end of THIS run, or null when the customer has asked for it to
+        # keep going. `auto_stop_hours` is sent whether or not a deadline is
+        # armed, because the interface has to state the rule up front - the
+        # customer should learn about the limit from the machine page, not from
+        # a machine that stopped.
+        "auto_stop_hours": CONFIG.auto_stop_hours,
+        "auto_stop_at": (ws.auto_stop_at.isoformat()
+                         if ws.auto_stop_at and ws.state == WorkspaceState.ON
+                         else None),
     }
+
+
+@app.post("/api/workspace/keep-running")
+def keep_running(user: User = Depends(current_user),
+                 db: Session = Depends(get_session)) -> dict:
+    """Let this run continue until the customer stops it themselves.
+
+    Scoped to the current run on purpose. The next start arms a new deadline,
+    so this cannot become a setting someone ticks once and then forgets while a
+    machine bills for a month - which is the cost the automatic stop exists to
+    prevent. Making it permanent would give the feature away to exactly the
+    customers it is meant to help.
+    """
+    ws = my_workspace(db, user)
+    if ws.state != WorkspaceState.ON:
+        fail(409, "machine_off", "The machine must be running to change this.")
+    if ws.auto_stop_at is None:
+        return {"ok": True, "auto_stop_at": None}     # already opted out
+    svc.disarm_auto_stop(ws)
+    db.commit()
+    svc.audit(db, user.id, "auto_stop_waived", ws.incus_project)
+    return {"ok": True, "auto_stop_at": None}
 
 
 @app.post("/api/workspace/power")
@@ -569,9 +602,17 @@ async def workspace_power(body: PowerRequest, user: User = Depends(current_user)
             ws.started_at = svc.now()
             ws.period_start = svc.now()
             ws.last_activity = svc.now()
+            # Every run starts on the clock. The customer can take it off, but
+            # only for this run.
+            svc.arm_auto_stop(ws)
             db.commit()
-            svc.audit(db, user.id, "power_on", ws.incus_project)
-            return {"ok": True, "status": "on"}
+            svc.audit(db, user.id, "power_on", ws.incus_project,
+                      auto_stop_at=ws.auto_stop_at.isoformat())
+            # Both, so the dialog the interface raises here can state the rule
+            # without a second request.
+            return {"ok": True, "status": "on",
+                    "auto_stop_hours": CONFIG.auto_stop_hours,
+                    "auto_stop_at": ws.auto_stop_at.isoformat()}
 
         if ws.state == WorkspaceState.OFF:
             return {"ok": True, "status": "off"}
@@ -582,6 +623,9 @@ async def workspace_power(body: PowerRequest, user: User = Depends(current_user)
         ws.state = WorkspaceState.OFF
         ws.desired_on = False
         ws.period_start = None
+        # A deadline on a stopped machine would be read as "stop it again" by
+        # anything that looks at the column without checking state first.
+        svc.disarm_auto_stop(ws)
         db.commit()
         svc.audit(db, user.id, "power_off", ws.incus_project)
         return {"ok": True, "status": "off"}
@@ -670,6 +714,51 @@ async def workspace_tier(body: TierRequest, user: User = Depends(current_user),
 
 
 # --- published ports -----------------------------------------------------
+def _port_view(p: ExposedPort, username: str | None) -> dict:
+    """One row, with BOTH of its addresses.
+
+    The numeric one is what it has always been. The second puts the customer's
+    own name in front of the same port, and it is a real address rather than a
+    label: every name under the domain resolves to this host and the DNAT rule
+    keys on the PORT, so `ali.<domain>:24815` reaches exactly what
+    `<ip>:24815` reaches. Measured against the live host before it was shown to
+    anyone.
+
+    What it is NOT is a way to drop the port number. Nothing in a TCP or UDP
+    packet carries the hostname the customer typed - that only exists inside
+    HTTP, as the `Host:` header - so the port is what selects the workspace and
+    the name is a nicer way to write the address it is attached to.
+
+    Only the customer's own published ports get it. The reserved SSH and RDP
+    rows keep exactly the address they have always had.
+    """
+    host = (f"{username}.{CONFIG.domain}"
+            if username and p.kind is PortKind.USER else None)
+    protos = portalloc.expand(p.protocol)
+    return {
+        "id": p.id, "internal_port": p.internal_port,
+        "external_port": p.external_port,
+        "protocol": p.protocol,
+        "protocols": list(protos),
+        "kind": p.kind.value,
+        # Reserved ports are part of the machine, not something the
+        # customer published, so they cannot be handed back.
+        "removable": p.kind is PortKind.USER,
+        "note": p.note,
+        "address": f"{CONFIG.endpoint_host}:{p.external_port}",
+        "host_address": f"{host}:{p.external_port}" if host else None,
+        # A ready-to-click URL for the ports a customer publishes, which are
+        # almost always HTTP. Not for the reserved SSH and RDP rows - prefixing
+        # those with a scheme would be wrong rather than merely unhelpful.
+        # Offered on the named form too, since that is the one worth reading.
+        "url": (f"http://{CONFIG.endpoint_host}:{p.external_port}"
+                if p.kind is PortKind.USER and "tcp" in protos else None),
+        "host_url": (f"http://{host}:{p.external_port}"
+                     if host and "tcp" in protos else None),
+        "created_at": p.created_at.isoformat() if p.created_at else None,
+    }
+
+
 @app.get("/api/workspace/ports")
 def list_ports(request: Request, user: User = Depends(current_user),
                db: Session = Depends(get_session)) -> dict:
@@ -679,23 +768,10 @@ def list_ports(request: Request, user: User = Depends(current_user),
                            .order_by(ExposedPort.kind, ExposedPort.internal_port)))
     return {
         "host": CONFIG.endpoint_host,
+        "domain": CONFIG.domain,
+        "username": user.username,
         "max_ports": portalloc.MAX_PORTS_PER_WORKSPACE,
-        "ports": [{
-            "id": p.id, "internal_port": p.internal_port,
-            "external_port": p.external_port, "protocol": p.protocol,
-            "kind": p.kind.value,
-            # Reserved ports are part of the machine, not something the
-            # customer published, so they cannot be handed back.
-            "removable": p.kind is PortKind.USER,
-            "note": p.note,
-            "address": f"{CONFIG.endpoint_host}:{p.external_port}",
-            # A ready-to-click URL for the ports a customer publishes, which are
-            # almost always HTTP. Not for UDP, and not for the reserved SSH and
-            # RDP rows - prefixing those with a scheme would be simply wrong.
-            "url": (f"http://{CONFIG.endpoint_host}:{p.external_port}"
-                    if p.kind is PortKind.USER and p.protocol == "tcp" else None),
-            "created_at": p.created_at.isoformat() if p.created_at else None,
-        } for p in rows],
+        "ports": [_port_view(p, user.username) for p in rows],
         "user_port_count": sum(1 for p in rows if p.kind is PortKind.USER),
     }
 
@@ -706,8 +782,9 @@ def create_port(body: PortRequest, request: Request,
                 db: Session = Depends(get_session)) -> dict:
     ws = my_workspace(db, user)
     try:
+        # body.protocol is ignored on purpose - see PortRequest.
         row = portalloc.allocate(db, ws.id, body.internal_port,
-                                 body.protocol, body.note)
+                                 portalloc.PROTO_BOTH, body.note)
     except portalloc.PortError as exc:
         fail(400, exc.code, str(exc))
 
@@ -724,11 +801,7 @@ def create_port(body: PortRequest, request: Request,
 
     svc.audit(db, user.id, "port_publish", ws.incus_project,
               internal=row.internal_port, external=row.external_port)
-    return {"ok": True, "internal_port": row.internal_port,
-            "external_port": row.external_port, "protocol": row.protocol,
-            "address": f"{CONFIG.endpoint_host}:{row.external_port}",
-            "url": (f"http://{CONFIG.endpoint_host}:{row.external_port}"
-                    if row.protocol == "tcp" else None),
+    return {"ok": True, **_port_view(row, user.username),
             "warning_code": ("discouraged_port"
                              if row.internal_port in portalloc.DISCOURAGED_INTERNAL
                              else None)}
@@ -743,10 +816,16 @@ def delete_port(port_id: int, user: User = Depends(current_user),
         fail(404, "no_such_port", "No such published port")
     if row.kind is not PortKind.USER:
         fail(409, "port_reserved", "Reserved ports cannot be removed.")
+    # Remove reachability BEFORE forgetting the reservation. The old order
+    # deleted the row first; if nftables then failed, the kernel kept forwarding
+    # an address the database no longer knew existed, so no later reconciliation
+    # could identify and remove it.
+    resp = svc.sync_published_ports(db, exclude_port_id=row.id)
+    if not resp.get("ok"):
+        fail(500, "port_failed", "The published port could not be removed.")
     svc.audit(db, user.id, "port_unpublish", ws.incus_project,
               internal=row.internal_port, external=row.external_port)
     portalloc.release(db, row)
-    svc.sync_published_ports(db)
     return {"ok": True}
 
 
@@ -1019,51 +1098,13 @@ async def workspace_reset(body: ResetRequest, user: User = Depends(current_user)
     db.commit()
     svc.audit(db, user.id, "reset_started", ws.incus_project, was_on=was_on)
 
-    resp = svc.call_provisioner({
-        "verb": "reset", "idx": ws.idx,
-        "cores": max(1, round(ws.cpu_milli / 1000)), "mem_mib": ws.mem_mib,
-        "root_gib": ws.root_gib, "docker_gib": ws.docker_gib}, timeout=1800)
-
-    if not resp.get("ok"):
-        log.error("reset failed for %s: %s", ws.incus_project, resp)
-        ws.state = WorkspaceState.ERROR
-        ws.error = (resp.get("error") or resp.get("output", ""))[-500:]
-        db.commit()
-        svc.audit(db, user.id, "reset_failed", ws.incus_project, error=ws.error[:200])
-        # ws-reset.sh tolerates a half-destroyed workspace, so retrying is the
-        # recovery path rather than something only an operator can unstick.
-        fail(500, "reset_failed", "The machine could not be reset.",
-             output=(resp.get("output") or "")[-300:])
-
-    # ws-reset.sh leaves it running so it can be checked; hand it back off, the
-    # same as a new machine. Restarting it is the customer's decision and their
-    # credit.
-    client = _incus()
-    try:
-        await client.stop(ws.instance, ws.incus_project)
-    except Exception as exc:  # noqa: BLE001
-        log.warning("post-reset stop failed for %s: %s", ws.incus_project, exc)
-    finally:
-        await client.aclose()
-
-    ws.state = WorkspaceState.OFF
-    ws.desired_on = False
-    ws.period_start = None
-    ws.started_at = None
-    ws.last_activity = None
-    # The services were installed on a filesystem that no longer exists. Leaving
-    # these true would show the customer a desktop switch for software that is
-    # not there, and an SSH toggle for a machine with no keys pushed.
-    ws.ssh_enabled = False
-    ws.ssh_keys = None
-    ws.rdp_enabled = False
-    ws.rdp_installed = False
-    db.commit()
-
-    # The keys themselves are kept - they are the customer's, not the machine's -
-    # and go back on the machine the moment SSH is switched on again.
-    svc.audit(db, user.id, "reset_done", ws.incus_project)
-    return {"ok": True, "state": ws.state.value}
+    op = oplib.create(db, kind="factory_reset", user_id=user.id,
+                      workspace_id=ws.id, actor_id=user.id,
+                      detail={"cores": max(1, round(ws.cpu_milli / 1000)),
+                              "mem_mib": ws.mem_mib, "root_gib": ws.root_gib,
+                              "docker_gib": ws.docker_gib})
+    return {"ok": True, "code": "operation_queued", "state": ws.state.value,
+            "operation": oplib.view(op)}
 
 
 # --- AI tools -------------------------------------------------------------
@@ -1897,7 +1938,8 @@ def admin_users(_: User = Depends(require_admin),
         w = db.scalar(select(Workspace).where(Workspace.user_id == u.id))
         acct = db.get(CreditAccount, u.id)
         out.append({
-            "id": u.id, "email": u.email, "status": u.status.value,
+            "id": u.id, "email": u.email, "username": u.username,
+            "status": u.status.value,
             "is_admin": u.is_admin,
             "created_at": u.created_at.isoformat() if u.created_at else None,
             "credits": (acct.balance_micro / MICRO) if acct else 0.0,
@@ -1963,9 +2005,11 @@ def admin_approve(user_id: int, body: PresetRequest | None = None,
                 installed = []
 
     client = _incus()
+    stop_failed = False
     try:
         asyncio.run(client.stop(ws.instance, ws.incus_project))
     except Exception as exc:  # noqa: BLE001
+        stop_failed = True
         svc.audit(db, admin.id, "post_provision_stop_failed", user.email, error=str(exc))
     finally:
         try:
@@ -1973,7 +2017,8 @@ def admin_approve(user_id: int, body: PresetRequest | None = None,
         except Exception:
             pass
 
-    ws.state = WorkspaceState.OFF
+    ws.state = WorkspaceState.ERROR if stop_failed else WorkspaceState.OFF
+    ws.error = "post-provision stop did not complete" if stop_failed else None
     ws.desired_on = False
     ws.period_start = None
     db.commit()
@@ -2031,16 +2076,37 @@ def admin_delete_user(user_id: int, admin: User = Depends(require_admin),
     user = db.get(User, user_id)
     if user is None:
         fail(404, "no_such_user", "No such user")
+    if user.status == UserStatus.DELETING:
+        op = db.scalar(select(Operation).where(
+            Operation.user_id == user.id,
+            Operation.kind == "account_delete",
+            Operation.status.in_(oplib.ACTIVE)))
+        return {"ok": True, "code": "delete_queued",
+                "operation": oplib.view(op) if op else None}
     ws = db.scalar(select(Workspace).where(Workspace.user_id == user_id))
+    user.status = UserStatus.DELETING
     if ws is not None:
-        resp = svc.call_provisioner({"verb": "destroy", "idx": ws.idx})
-        if not resp.get("ok"):
-            fail(500, "destroy_failed", "Could not remove the machine.")
-    email = user.email
-    db.delete(user)
+        ws.desired_on = False
     db.commit()
-    svc.audit(db, admin.id, "delete_user", email)
-    return {"ok": True}
+    op = oplib.create(db, kind="account_delete", user_id=user.id,
+                      workspace_id=ws.id if ws else None, actor_id=admin.id,
+                      detail={"user_id": user.id})
+    return {"ok": True, "code": "delete_queued", "operation": oplib.view(op)}
+
+
+@app.get("/api/operations")
+def my_operations(user: User = Depends(current_user),
+                  db: Session = Depends(get_session)) -> dict:
+    rows = db.scalars(select(Operation).where(Operation.user_id == user.id)
+                      .order_by(Operation.id.desc()).limit(20)).all()
+    return {"operations": [oplib.view(o) for o in rows]}
+
+
+@app.get("/api/admin/operations")
+def admin_operations(_: User = Depends(require_admin),
+                     db: Session = Depends(get_session)) -> dict:
+    rows = db.scalars(select(Operation).order_by(Operation.id.desc()).limit(100)).all()
+    return {"operations": [oplib.view(o) for o in rows]}
 
 
 @app.post("/api/admin/users/{user_id}/credit")

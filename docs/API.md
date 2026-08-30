@@ -52,7 +52,7 @@ and the auth endpoints. Accessing another account's resource returns **404**, no
 | `GET` | `/api/workspace` | State, size, rates, `blocked`, `can_power_on` |
 | `POST` | `/api/workspace/power` | `{on: bool}`. Runs the affordability gate and the admission check |
 | `POST` | `/api/workspace/tier` | `{cpu_milli, mem_mib}`. Live-applied when running; memory cannot shrink while on |
-| `POST` | `/api/workspace/reset` | **Factory reset.** `{confirm, password}` — see below |
+| `POST` | `/api/workspace/reset` | **Factory reset.** `{confirm, password}` — validates immediately, then returns a durable `operation` |
 | `GET` | `/api/workspace/metrics` | `?minutes=` (default 5, one of 5/15/60/360/1440). CPU in **cores** and memory in **GB** — absolute, never percentages — plus the tier so a chart can show headroom, and `sample_seconds` so it can refresh in step |
 | `GET` | `/api/tiers` | Size catalogue with the price of each option |
 
@@ -65,8 +65,9 @@ and the auth endpoints. Accessing another account's resource returns **404**, no
 
 ### Factory reset
 
-`POST /api/workspace/reset` destroys the machine and rebuilds it from the golden
-image. Both fields are required and both are checked server-side:
+`POST /api/workspace/reset` queues a durable operation that destroys the machine
+and rebuilds it from the golden image. Both fields are required and both are
+checked server-side before anything is queued:
 
 ```json
 { "confirm": "owner@example.com", "password": "…" }
@@ -79,6 +80,20 @@ where starting over is most useful.
 
 Kept: reserved ports, saved public keys, size, credit, ledger. Gone: filesystem,
 packages, all Docker data.
+
+## Operations
+
+| Method | Path | Notes |
+|---|---|---|
+| `GET` | `/api/operations` | The signed-in customer's 20 newest resets and package installations, including progress and failure codes |
+| `GET` | `/api/admin/operations` | The 100 newest operations across all accounts |
+
+Factory reset and package installation return an `operation` rather than
+holding an HTTP request open. The worker advances `queued` through `running` to
+`succeeded` or `failed`; the global dashboard strip polls this resource, so
+progress survives navigation and a browser refresh. Account deletion is also a
+durable operation, but its row is deliberately erased with the account after
+all external resources have been removed.
 
 ## Connections
 
@@ -113,7 +128,7 @@ is denied the file API. Paths are validated server-side.
 | Method | Path | Notes |
 |---|---|---|
 | `GET` | `/api/workspace/ports` | Published and reserved ports |
-| `POST` | `/api/workspace/ports` | `{internal_port, protocol}`. External port allocated from 20000–29999. Free. Returns a `url` for TCP, and `warning_code: "discouraged_port"` for port 22 |
+| `POST` | `/api/workspace/ports` | `{internal_port, note?}`. External port allocated from 20000–29999 and forwarded over both TCP and UDP. Free. Returns the ordinary endpoint plus `<username>.<domain>:<external_port>`, and `warning_code: "discouraged_port"` for port 22 |
 | `DELETE` | `/api/workspace/ports/{id}` | Reserved SSH/RDP ports refuse with `port_reserved` |
 
 ## Tools and AI

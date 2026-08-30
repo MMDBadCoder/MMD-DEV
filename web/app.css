@@ -538,3 +538,57 @@ a.card.attn:hover { border-color: var(--brand); }
   width: 100%;
 }
 .field-input:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
+
+/* --- the automatic stop notice -----------------------------------------
+   Deliberately loud. The customer has to meet this rule on the machine page,
+   while the machine is running and there is still something they can do about
+   it - not afterwards, on a machine that has already switched itself off. */
+.autostop {
+  margin-top: 14px;
+  padding: 14px 16px;
+  border: 1px solid var(--warn, #b45309);
+  border-inline-start: 4px solid var(--warn, #b45309);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--warn, #b45309) 8%, transparent);
+}
+.autostop > div { display: flex; align-items: center; gap: 8px; }
+.autostop b { font-size: 15px; }
+.autostop svg { flex: 0 0 auto; }
+.autostop p { margin: 6px 0 12px; font-size: 13px; line-height: 1.7; }
+.autostop .btn { margin: 0; }
+
+/* Waived: the same shape so the page does not jump, in the calm colour. */
+.autostop.keep {
+  border-color: var(--ok, #15803d);
+  border-inline-start-color: var(--ok, #15803d);
+  background: color-mix(in srgb, var(--ok, #15803d) 8%, transparent);
+}
+.autostop.keep p { margin-bottom: 0; }
+
+/* The machine's state and its one primary action must read before the supporting
+   charts and numbers. Colour is an edge, never the only carrier of state. */
+.machine-hero { overflow: hidden; border-inline-start: 4px solid var(--border); }
+.machine-hero.is-on { border-inline-start-color: var(--ok); }
+.machine-hero.is-off { border-inline-start-color: var(--muted); }
+.machine-control { display:flex;align-items:center;justify-content:space-between;
+  gap:18px;padding-bottom:16px;margin-bottom:18px;border-bottom:1px solid var(--border); }
+.machine-state-line { display:flex;align-items:center;gap:10px;margin-top:5px;font-size:20px; }
+.machine-control p { margin:7px 0 0; }
+.machine-power { min-width:160px;min-height:48px;justify-content:center;font-size:15px; }
+.machine-blocked { margin:-8px 0 18px; }
+.cost-preview { display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:14px 0; }
+.cost-preview > div { display:flex;flex-direction:column;gap:3px;padding:10px;
+  border:1px solid var(--border);border-radius:8px;background:var(--surface); }
+.cost-preview span { color:var(--muted);font-size:12px; }
+.cost-preview b { font-size:14px; }
+@media (max-width:640px) {
+  .machine-control { align-items:stretch;flex-direction:column; }
+  .machine-power { width:100%; }
+  .cost-preview { grid-template-columns:1fr; }
+}
+.operation-strip { display:flex;align-items:center;gap:10px;margin-bottom:14px;
+  padding:11px 14px;border:1px solid var(--brand);border-radius:10px;
+  background:color-mix(in srgb,var(--brand) 7%,transparent); }
+.operation-strip.failed { border-color:var(--bad);background:color-mix(in srgb,var(--bad) 7%,transparent); }
+.operation-strip > div { display:flex;flex:1;flex-direction:column;gap:2px; }
+.operation-strip span,.operation-strip small { color:var(--muted);font-size:12px; }

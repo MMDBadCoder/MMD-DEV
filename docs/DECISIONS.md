@@ -1489,3 +1489,132 @@ precisely the machine that reported success.
 Status now carries `onboarded` separately, install requires both, and the page
 has a third state — «نیازمند تنظیم اولیه» — for signed-in-but-not-configured.
 Calling that "ready" is what made the bug invisible for so long.
+
+
+## A username can name a published port, but it cannot route it
+
+Each customer-published port is now shown at both
+`MMD_ENDPOINT_HOST:<external>` and `<username>.<domain>:<external>`. Both names
+resolve to the same IPv4 address and both reach the same nftables DNAT rule.
+The readable customer name is useful, but it is important not to assign it a
+power it does not have: the globally unique **external port** still selects the
+workspace.
+
+Arbitrary TCP and UDP packets do not carry the DNS name the client resolved.
+Therefore `ali.<domain>:25000` and `sara.<domain>:25000` are indistinguishable
+after resolution when both names point at this host. Customers cannot reuse the
+same public port on one IPv4 address merely because their hostnames differ.
+HTTP can do that through its `Host` header and TLS can do it through SNI; raw
+TCP and UDP cannot in general.
+
+Customer-published rows also no longer ask for a protocol. One reservation is
+expanded into TCP and UDP rules before crossing the provisioner boundary. The
+provisioner continues to accept only the concrete words `tcp` and `udp`, which
+keeps privileged validation simple. SSH and RDP reservations remain TCP-only
+because those services do not speak UDP.
+
+Existing customer rows are widened during schema patching. The old interface
+allowed the same internal port to be published separately for TCP and UDP, so
+such pairs are collapsed before conversion; otherwise both would become
+`protocol=both` and violate the uniqueness constraint.
+
+
+## The automatic stop, and why it is not the idle timer coming back
+
+Ticket #17, from a customer:
+
+> امکان تنظیم کردن خاموشی خودکار ماشین یا دادن الرت برای خاموش کردن برای عدم
+> مصرف زیادی منابع **البته باید پرسیده شود که میخواهیم ماشین روشن بماند یا خیر**
+
+The emphasis is theirs, and it is the whole design: *of course it must ask
+whether we want the machine to stay on.*
+
+This reverses **"Nothing switches off a workspace the customer has paid for"**
+above, so the difference has to be stated precisely, because the earlier
+decision was right about the thing it was reacting to.
+
+| | the removed idle stop | this |
+|---|---|---|
+| trigger | 60 min without browser-terminal activity | 12 h since power-on |
+| signal | `last_activity` — written in exactly two places | elapsed time |
+| consent | none | stated up front, waivable in one click |
+| a long build | **killed**, because it looked idle | runs to the deadline like anything else |
+
+The old one failed because it tried to tell a busy machine from an abandoned one
+and could not: `last_activity` never saw SSH, RDP, the file manager or a
+published port, so it killed real work. **This one does not try.** It treats
+every run the same and asks the customer instead. That is why the operator's
+original instruction — *we must not touch their space without their allowance* —
+is satisfied rather than overridden: the allowance is now explicitly requested,
+and the customer who wants a machine to keep running says so.
+
+### The waiver is per run, and that is the load-bearing part
+
+`auto_stop_at` is set on **every** transition into ON — the power button, and
+the reconciler restoring a machine after host downtime. "Keep it running" clears
+it for that run only.
+
+A persistent *"never stop this machine"* preference was the obvious alternative
+and is worse. It would be ticked once, by exactly the customer most likely to
+forget a machine, and would then hand the cost straight back — which is the cost
+this feature exists to prevent. Resetting on every start means the choice is
+always made about a machine somebody has just decided to run.
+
+### No warning before the stop
+
+Considered and rejected: a customer who is not watching gets no benefit from a
+notice thirty minutes out, and one who is watching already sees the countdown on
+the machine page. What matters is that the rule is **stated while the machine is
+running and something can still be done about it** — a full-width coloured bar
+above the fold, with the remaining time and the button, not a line of grey text.
+
+### Kept apart from the credit path
+
+`auto_stop_once()` is its own worker pass, not a branch in `lifecycle_once()`.
+Every stop in the lifecycle pass is a consequence of an empty balance, and
+`tests/test_auto_stop.py` asserts that is still true — a credit path that
+quietly grew a second reason to stop a funded workspace is how the first version
+of this went wrong. It also runs on **every tick** rather than every settlement,
+so a machine due at 12h00m does not bill on to the next five-minute boundary,
+and it settles the part-hour before flipping the state, exactly as the Stop
+button does.
+
+`last_activity` is still recorded and still read by nothing.
+
+
+## Destructive and long operations are durable state, not HTTP requests
+
+Factory reset, package installation and account deletion can take minutes and
+cross process boundaries. Running them inside the request made a closed browser,
+proxy timeout or API restart indistinguishable from failure. Worse, account
+deletion used to erase its database identity before every external side effect
+was known to be complete, leaving no safe way to retry a leaked resource.
+
+They now enter an `operations` table and the worker advances them. Reset and
+installation retain their terminal result for the customer; the dashboard polls
+that resource globally, so changing page or refreshing does not lose progress.
+Only one operation may be active for a workspace at a time.
+
+Account deletion has a stricter order:
+
+1. mark the account `deleting`, which invalidates its sessions;
+2. revoke its OpenRouter key;
+3. rebuild the public-port firewall without its rules;
+4. destroy its Incus project and storage;
+5. erase tickets, messages, metrics, keys, ports, ledger, audits, workspace,
+   operation and user rows.
+
+Every external step is idempotent. If one fails, the identity and operation are
+kept and a later worker pass retries; failed cleanup is ordered behind ordinary
+queued work so an unavailable upstream cannot starve every customer's reset or
+installation. Database erasure is the final step, never the first. A
+published-port removal follows the same rule on a smaller scale:
+the firewall is successfully rebuilt without the mapping before its reservation
+row is deleted.
+
+A factory reset preserves control-plane property (size, balance, ledger,
+reserved addresses and saved public keys), but clears facts about the filesystem
+that was destroyed (installed/enabled service flags, cached authorized-keys
+content, activity and automatic-stop timestamps). Keeping those flags was the
+source of a particularly misleading state: the dashboard could say software was
+installed when its disk no longer existed.

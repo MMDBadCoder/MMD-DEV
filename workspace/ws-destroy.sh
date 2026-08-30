@@ -12,7 +12,14 @@ IDX="${1:?usage: ws-destroy.sh <index> [--yes]}"
 PROJ="$(ws_project "$IDX")"
 INST="$(ws_instance "$IDX")"
 
-incus project info "$PROJ" >/dev/null 2>&1 || die "no such workspace: $IDX"
+# Deletion is a durable operation and may be retried after a worker restart.
+# If the project is already gone, the desired end state has been reached; a
+# failure here would strand the database row forever after a crash between the
+# Incus delete and the database commit.
+if ! incus project info "$PROJ" >/dev/null 2>&1; then
+  log "workspace $IDX already absent"
+  exit 0
+fi
 
 if [ "${2:-}" != "--yes" ]; then
   warn "This DESTROYS workspace $IDX: rootfs, Docker volume, snapshots. No undo."

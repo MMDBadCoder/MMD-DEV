@@ -102,5 +102,12 @@ class Config:
         _env("MMD_ARCHIVE_RETENTION_DAYS", "30")))
     session_hours: int = field(default_factory=lambda: int(_env("MMD_SESSION_HOURS", "12")))
 
+    # How long a machine runs before it switches itself off, unless the customer
+    # says otherwise for that run. Twelve hours: long enough to survive an
+    # overnight job, short enough that a machine left on by accident costs one
+    # day rather than a month.
+    auto_stop_hours: int = field(default_factory=lambda: int(
+        _env("MMD_AUTO_STOP_HOURS", "12")))
+
 
 CONFIG = Config()

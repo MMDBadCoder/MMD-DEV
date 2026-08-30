@@ -22,9 +22,10 @@ import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import case, delete, or_, select, update
 
 from . import hermes
+from . import operations as oplib
 from . import ports as portalloc
 from . import service as svc
 from .config import CONFIG
@@ -33,7 +34,9 @@ from .incus.client import IncusClient, IncusConfig, IncusError
 from .incus.metrics import MetricsClient
 from .openrouter import OpenRouter, OpenRouterError
 from .billing.pricing import MICRO
-from .models import (ExposedPort, PortKind, UsageSample, Workspace,
+from .models import (AiUsageMark, AuditLog, CreditAccount, CreditTransaction,
+                     ExposedPort, Operation, PortKind, SshKey, Ticket,
+                     TicketMessage, UsageSample, User, Workspace,
                      WorkspaceState)
 
 UTC = timezone.utc
@@ -136,6 +139,54 @@ async def settle_once() -> None:
                             db.commit()
                         except IncusError as exc:
                             log.error("stop failed for %s: %s", ws.incus_project, exc)
+    finally:
+        await client.aclose()
+
+
+# --- the automatic stop --------------------------------------------------
+async def auto_stop_once() -> None:
+    """Switch off machines that have reached the end of their run.
+
+    Deliberately its OWN pass, not a branch inside lifecycle_once. The stops in
+    that pass are all consequences of an empty balance; this one is a schedule
+    the customer agreed to when they started the machine. Keeping them apart is
+    what lets `tests/test_auto_stop.py` state, and check, that the credit path
+    has not quietly grown a second reason to stop a funded workspace.
+
+    Note what is NOT here: any notion of idleness. The deadline is measured from
+    power-on, so a machine running a twelve-hour build and a machine nobody has
+    touched are treated identically - which is the point. The predecessor to
+    this feature tried to tell them apart from `last_activity` and killed real
+    work; see docs/DECISIONS.md.
+    """
+    client = _incus()
+    try:
+        with SessionLocal() as db:
+            for ws in db.scalars(select(Workspace).where(
+                    Workspace.state == WorkspaceState.ON,
+                    Workspace.auto_stop_at.isnot(None))):
+                if not svc.due_for_auto_stop(ws):
+                    continue
+                log.info("auto-stopping %s: run reached its %dh limit",
+                         ws.incus_project, CONFIG.auto_stop_hours)
+                try:
+                    await client.stop(ws.instance, ws.incus_project)
+                except IncusError as exc:
+                    # Left armed on purpose: the next pass tries again. A
+                    # machine that failed to stop is still over its limit.
+                    log.error("auto-stop failed for %s: %s", ws.incus_project, exc)
+                    continue
+                # Settle the part-hour before the state changes, exactly as the
+                # customer pressing Stop would - otherwise the elapsed minutes
+                # are billed at the next boundary as though it were still on.
+                svc.settle_elapsed(db, ws, powered_on=True)
+                ws.state = WorkspaceState.OFF
+                ws.desired_on = False
+                ws.period_start = None
+                svc.disarm_auto_stop(ws)
+                db.commit()
+                svc.audit(db, None, "auto_stop", ws.incus_project,
+                          hours=CONFIG.auto_stop_hours)
     finally:
         await client.aclose()
 
@@ -442,6 +493,181 @@ def reserve_service_ports_once() -> None:
         svc.sync_published_ports(db)
 
 
+# --- durable operations -------------------------------------------------
+def _purge_account(db, op: Operation) -> None:
+    """Remove one account only after every external resource is gone.
+
+    Ordering is the safety property: revoke spend, remove public reachability,
+    destroy compute, then erase database identity. A failure before the last
+    step leaves enough state for the next worker pass to retry.
+    """
+    user = db.get(User, op.user_id) if op.user_id else None
+    if user is None:
+        db.delete(op)
+        db.commit()
+        return
+    ws = db.scalar(select(Workspace).where(Workspace.user_id == user.id))
+
+    if ws and ws.hermes_key_hash:
+        oplib.progress(db, op, "revoking_ai")
+        if not CONFIG.openrouter_key:
+            raise RuntimeError("OpenRouter management key unavailable")
+        with OpenRouter(CONFIG.openrouter_key) as client:
+            hermes.revoke_key(db, ws, client, strict=True)
+        db.commit()
+
+    if ws:
+        oplib.progress(db, op, "removing_addresses")
+        fw = svc.sync_published_ports(db, exclude_workspace_id=ws.id)
+        if not fw.get("ok"):
+            raise RuntimeError("could not remove published-port rules")
+
+        oplib.progress(db, op, "destroying_machine")
+        resp = svc.call_provisioner({"verb": "destroy", "idx": ws.idx})
+        if not resp.get("ok"):
+            raise RuntimeError("could not destroy workspace")
+
+    oplib.progress(db, op, "erasing_account")
+    ticket_ids = list(db.scalars(select(Ticket.id).where(Ticket.user_id == user.id)))
+    if ticket_ids:
+        db.execute(delete(TicketMessage).where(TicketMessage.ticket_id.in_(ticket_ids)))
+    # An administrator may have written in somebody else's thread. The user's
+    # request is full erasure, so authorship is removed there as well.
+    db.execute(delete(TicketMessage).where(TicketMessage.author_id == user.id))
+    db.execute(delete(Ticket).where(Ticket.user_id == user.id))
+
+    if ws:
+        for model in (UsageSample, ExposedPort, SshKey, AiUsageMark):
+            db.execute(delete(model).where(model.workspace_id == ws.id))
+        db.execute(delete(CreditTransaction).where(
+            CreditTransaction.workspace_id == ws.id))
+    db.execute(delete(CreditTransaction).where(CreditTransaction.user_id == user.id))
+    db.execute(delete(CreditAccount).where(CreditAccount.user_id == user.id))
+
+    targets = [user.email]
+    if ws:
+        targets.append(ws.incus_project)
+    db.execute(delete(AuditLog).where(or_(
+        AuditLog.actor_id == user.id, AuditLog.target.in_(targets))))
+    # A deleted administrator must not remain as another account's approver.
+    db.execute(update(User).where(User.approved_by == user.id).values(approved_by=None))
+
+    # Operations are operational state, not a historical tombstone. Delete all
+    # of them, including this one, before deleting the workspace and account.
+    db.execute(delete(Operation).where(Operation.user_id == user.id))
+    if ws:
+        db.execute(delete(Operation).where(Operation.workspace_id == ws.id))
+        db.delete(ws)
+        db.flush()
+    db.delete(user)
+    db.commit()
+
+
+async def _factory_reset(db, op: Operation, ws: Workspace) -> None:
+    oplib.progress(db, op, "rebuilding_machine")
+    detail = op.detail or {}
+    resp = svc.call_provisioner({
+        "verb": "reset", "idx": ws.idx,
+        "cores": detail.get("cores", max(1, round(ws.cpu_milli / 1000))),
+        "mem_mib": detail.get("mem_mib", ws.mem_mib),
+        "root_gib": detail.get("root_gib", ws.root_gib),
+        "docker_gib": detail.get("docker_gib", ws.docker_gib)}, timeout=1800)
+    if not resp.get("ok"):
+        ws.state = WorkspaceState.ERROR
+        ws.error = (resp.get("error") or resp.get("output", ""))[-500:]
+        oplib.fail(db, op, "reset_failed", svc.now())
+        svc.audit(db, op.actor_id, "reset_failed", ws.incus_project)
+        return
+
+    oplib.progress(db, op, "stopping_machine")
+    client = _incus()
+    try:
+        await client.stop(ws.instance, ws.incus_project)
+    except Exception:  # noqa: BLE001
+        ws.state = WorkspaceState.ERROR
+        ws.error = "post-reset stop did not complete"
+        oplib.fail(db, op, "reset_stop_failed", svc.now())
+        return
+    finally:
+        await client.aclose()
+
+    ws.state = WorkspaceState.OFF
+    ws.desired_on = False
+    ws.period_start = None
+    ws.started_at = None
+    ws.last_activity = None
+    svc.disarm_auto_stop(ws)
+    ws.ssh_enabled = False
+    ws.ssh_keys = None
+    ws.rdp_enabled = False
+    ws.rdp_installed = False
+    ws.hermes_installed = False
+    ws.error = None
+    db.commit()
+    svc.audit(db, op.actor_id, "reset_done", ws.incus_project)
+    oplib.finish(db, op, svc.now())
+
+
+def _install_packages(db, op: Operation, ws: Workspace) -> None:
+    if ws.state != WorkspaceState.ON:
+        oplib.fail(db, op, "machine_off", svc.now())
+        return
+    packages = list((op.detail or {}).get("packages") or [])
+    oplib.progress(db, op, "installing_packages")
+    resp = svc.call_provisioner({"verb": "install_packages", "idx": ws.idx,
+                                 "packages": packages}, timeout=900)
+    if not resp.get("ok"):
+        oplib.fail(db, op, "install_failed", svc.now())
+        return
+    svc.audit(db, op.actor_id, "packages_installed", ws.incus_project,
+              presets=(op.detail or {}).get("presets") or [], count=len(packages))
+    oplib.finish(db, op, svc.now())
+
+
+async def operations_once() -> None:
+    """Advance one durable operation; running work is safe to retry."""
+    with SessionLocal() as db:
+        # Failed account erasure is special: unlike a failed reset, it cannot be
+        # abandoned because external resources may still exist. Retry it, but
+        # only after ordinary queued work so one unavailable upstream does not
+        # hold every customer's operation behind it forever.
+        retryable_cleanup = (Operation.kind == "account_delete") & (
+            Operation.status == "failed")
+        op = db.scalar(select(Operation).where(or_(
+            Operation.status.in_(("queued", "running")), retryable_cleanup))
+            .order_by(case((Operation.status == "failed", 1), else_=0),
+                      Operation.id).limit(1))
+        if op is None:
+            return
+        try:
+            if op.kind == "account_delete":
+                _purge_account(db, op)
+                return                    # the operation is erased with account
+            ws = db.get(Workspace, op.workspace_id) if op.workspace_id else None
+            if ws is None:
+                oplib.fail(db, op, "no_workspace", svc.now())
+                return
+            if op.kind == "factory_reset":
+                await _factory_reset(db, op, ws)
+                return
+            if op.kind == "install_packages":
+                _install_packages(db, op, ws)
+                return
+            oplib.fail(db, op, "unknown_operation", svc.now())
+        except Exception as exc:  # noqa: BLE001
+            db.rollback()
+            current = db.get(Operation, op.id)
+            if current is not None:
+                # Failed cleanups stay visible to the admin and are retried
+                # after ordinary queued work. The progress code says where the
+                # failure occurred without exposing exception prose.
+                current.status = "failed"
+                current.error_code = "cleanup_failed"
+                current.finished_at = svc.now()
+                db.commit()
+            log.exception("operation %s (%s) failed", op.id, op.kind)
+
+
 async def reconcile_once() -> None:
     """Make the database and Incus agree about what is running."""
     client = _incus()
@@ -480,13 +706,19 @@ async def reconcile_once() -> None:
                     if not actually_on:
                         ws.period_start = None
                     db.commit()
-                    continue
-                if actually_on and ws.state == WorkspaceState.OFF:
+                if actually_on and (ws.state == WorkspaceState.OFF
+                                    or not ws.desired_on):
                     # Running but the ledger says off - it is being billed as
-                    # off. Stop it rather than give away compute.
-                    log.warning("%s running but marked off; stopping", ws.incus_project)
+                    # off, or a requested stop failed. Stop it rather than give
+                    # away compute or leave a reset/provision machine running.
+                    log.warning("%s running against desired state; stopping",
+                                ws.incus_project)
                     try:
                         await client.stop(ws.instance, ws.incus_project)
+                        ws.state = WorkspaceState.OFF
+                        ws.period_start = None
+                        svc.disarm_auto_stop(ws)
+                        db.commit()
                     except IncusError:
                         pass
                 elif not actually_on and ws.state == WorkspaceState.ON:
@@ -498,6 +730,11 @@ async def reconcile_once() -> None:
                         log.info("restoring %s after downtime", ws.incus_project)
                         try:
                             await client.start(ws.instance, ws.incus_project)
+                            # A restored machine is a NEW run, so it gets a new
+                            # deadline. Without this a machine that was opted
+                            # out before a host reboot would come back with no
+                            # deadline at all and never stop.
+                            svc.arm_auto_stop(ws)
                         except IncusError:
                             ws.state = WorkspaceState.OFF
                     else:
@@ -517,6 +754,7 @@ async def main() -> None:
     await reconcile_once()
     while True:
         try:
+            await operations_once()
             await meter_once()
             if tick % AI_EVERY == 0:
                 meter_ai_once()
@@ -526,6 +764,10 @@ async def main() -> None:
                 hermes_once(sync_policy=(tick % POLICY_EVERY == 0))
             else:
                 hermes_once(meter_usage=False)
+            # Every tick, not every settlement: a machine that should have
+            # stopped at 12h00m must not keep billing until the next five-minute
+            # boundary. The query is indexed and matches almost nothing.
+            await auto_stop_once()
             if tick % SETTLE_EVERY == 0:
                 await settle_once()
                 await lifecycle_once()

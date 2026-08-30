@@ -64,9 +64,9 @@ export async function toolsPage() {
         presets: [...chosen],
         packages: $("#custom").value.trim().split(/\s+/).filter(Boolean),
       });
-      $("#msg").innerHTML = note("ok",
-        `${t("tools.done", fmtFa(r.packages.length))}<br><span class="mono ltr tiny">${esc(r.packages.join(" "))}</span>`);
-      toast(t("tools.done", fmtFa(r.packages.length)), "ok");
+      $("#msg").innerHTML = note("info",
+        `${t("tools.queued", fmtFa(r.packages.length))}<br><span class="mono ltr tiny">${esc(r.packages.join(" "))}</span>`);
+      toast(t("tools.queued", fmtFa(r.packages.length)), "ok");
     } catch (err) {
       $("#msg").innerHTML = note("bad", esc(err.message));
     }

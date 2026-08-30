@@ -295,7 +295,7 @@ def ensure_key(db, ws: Workspace, client: OpenRouter, platform: Platform,
     return True
 
 
-def revoke_key(db, ws: Workspace, client: OpenRouter) -> None:
+def revoke_key(db, ws: Workspace, client: OpenRouter, *, strict: bool = False) -> None:
     """Delete the key upstream and forget it locally.
 
     Deleted rather than disabled: a disabled key is still a live secret sitting
@@ -309,6 +309,11 @@ def revoke_key(db, ws: Workspace, client: OpenRouter) -> None:
         except OpenRouterError as e:
             # A key already gone upstream must still be cleared locally, or the
             # workspace is stuck holding a hash that can never be reconciled.
+            if strict and "HTTP 404" not in str(e):
+                # Account deletion promises that no spend-capable credential is
+                # left behind. A transient supplier failure must therefore
+                # retry, not erase the only identity we can use to revoke it.
+                raise
             log.warning("hermes revoke ws %s: %s", ws.id, e)
     ws.hermes_key = None
     ws.hermes_key_hash = None

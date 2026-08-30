@@ -109,6 +109,16 @@ def test_reserved_ports_are_not_deletable(env):
     assert r.json()["detail"]["code"] == "port_reserved"
 
 
+def test_a_failed_firewall_removal_keeps_the_reservation(env, monkeypatch):
+    """Forgetting the row first leaves an unowned DNAT rule nobody can clean."""
+    client, db, ws, _ = env
+    row = PORTS.allocate(db, ws.id, 8080, "both", kind=PortKind.USER)
+    monkeypatch.setattr(svc, "sync_published_ports", lambda db, **kw: {"ok": False})
+    r = client.delete(f"/api/workspace/ports/{row.id}")
+    assert r.status_code == 500
+    assert db.get(ExposedPort, row.id) is not None
+
+
 # --- RDP password ----------------------------------------------------------
 def test_switching_the_desktop_on_without_a_password_is_refused(env):
     client, *_ = env
