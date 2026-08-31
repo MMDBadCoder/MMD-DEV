@@ -25,7 +25,8 @@ _VALID = re.compile(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?$")
 # whether or not those hosts exist yet, because taking one back later means
 # renaming a live customer's dashboard.
 RESERVED = {
-    "www", "api", "admin", "root", "hermes", "claude", "mail", "smtp", "imap",
+    "www", "api", "admin", "root", "hermes", "claude", "codex", "openclaw",
+    "mail", "smtp", "imap",
     "ftp", "ns", "ns1", "ns2", "dns", "mx", "cdn", "static", "assets", "app",
     "dashboard", "console", "panel", "support", "help", "docs", "status",
     "billing", "pay", "payment", "account", "accounts", "login", "signin",
@@ -110,3 +111,15 @@ def make_unique(candidate: str, taken: set[str]) -> str:
 def hermes_host(username: str, domain: str) -> str:
     """Where this customer's Hermes dashboard lives."""
     return f"hermes.{normalise(username)}.{domain}"
+
+
+def openclaw_host(username: str, domain: str) -> str:
+    """Where this customer's OpenClaw gateway lives.
+
+    One definition because FOUR things have to agree on it: the API reports it,
+    the vhost reconciler serves it, the worker sends it to the provisioner, and
+    the gateway itself rejects any browser origin that does not match - so a
+    disagreement is not a cosmetic mismatch, it is a dashboard that loads and
+    then refuses to connect.
+    """
+    return f"openclaw.{normalise(username)}.{domain}"

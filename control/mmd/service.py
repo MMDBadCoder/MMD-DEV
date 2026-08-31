@@ -254,6 +254,13 @@ def audit(db: Session, actor_id: int | None, action: str,
 
 # --- AI token metering ----------------------------------------------------
 AI_SERVICE = "claude"
+CODEX_SERVICE = "codex"
+
+# Which ledger kind each service posts under. NOT one shared kind: the ledger's
+# idempotency key is (workspace, period, kind), so two services charging the
+# same five-minute bucket under one kind would collide and the second would be
+# silently dropped.
+AI_TX_KIND = {AI_SERVICE: TxKind.CHARGE_AI, CODEX_SERVICE: TxKind.CHARGE_CODEX}
 AI_PERIOD_SECONDS = 300          # the charge bucket; matches the worker's cadence
 
 _MARK_FIELDS = {
@@ -265,17 +272,27 @@ _MARK_FIELDS = {
 }
 
 
-def ai_prices(db: Session) -> dict[str, aipricing.ModelPrice]:
-    """The price table, seeding itself on first use so a fresh host bills
-    correctly before anyone has visited the admin panel."""
-    rows = list(db.scalars(select(AiModelPrice).where(AiModelPrice.service == AI_SERVICE)))
-    if not rows:
-        for model, (i, w5, w1h, r, o) in aipricing.SEED_PRICES.items():
-            db.add(AiModelPrice(service=AI_SERVICE, model=model, input_usd=i,
+def ai_prices(db: Session, service: str = AI_SERVICE) -> dict[str, aipricing.ModelPrice]:
+    """The price table for one service, seeding itself on first use so a fresh
+    host bills correctly before anyone has visited the admin panel.
+
+    Both suppliers seed now. Codex started empty on purpose while its rates
+    were unknown - an unpriced model is held UNCOUNTED rather than given away,
+    so the failure mode of an unconfigured supplier was "not yet billed" rather
+    than "billed wrongly". The rates are known and recorded now, so the same
+    reasoning that seeds Claude applies: a fresh host should bill correctly
+    before anyone has visited the admin panel.
+
+    A model still unmatched by any row is still held uncounted, and still
+    listed in the admin panel as unpriced."""
+    rows = list(db.scalars(select(AiModelPrice).where(AiModelPrice.service == service)))
+    if not rows and service in aipricing.SEED_BY_SERVICE:
+        for model, (i, w5, w1h, r, o) in aipricing.SEED_BY_SERVICE[service].items():
+            db.add(AiModelPrice(service=service, model=model, input_usd=i,
                                 cache_write_5m_usd=w5, cache_write_1h_usd=w1h,
                                 cache_read_usd=r, output_usd=o))
         db.commit()
-        rows = list(db.scalars(select(AiModelPrice).where(AiModelPrice.service == AI_SERVICE)))
+        rows = list(db.scalars(select(AiModelPrice).where(AiModelPrice.service == service)))
     return {r.model: aipricing.ModelPrice(r.model, r.input_usd, r.cache_write_5m_usd,
                                           r.cache_write_1h_usd, r.cache_read_usd,
                                           r.output_usd) for r in rows}
@@ -314,7 +331,8 @@ def ai_settings(db: Session, service: str = AI_SERVICE) -> tuple[float, float]:
     return usd, g(key, default)
 
 
-def meter_ai_usage(db: Session, ws: Workspace, report: dict) -> dict:
+def meter_ai_usage(db: Session, ws: Workspace, report: dict,
+                   service: str = AI_SERVICE) -> dict:
     """Charge for whatever tokens are new since the last pass.
 
     `report` is the scanner's CUMULATIVE totals per session per model. What gets
@@ -330,13 +348,13 @@ def meter_ai_usage(db: Session, ws: Workspace, report: dict) -> dict:
     uncounted so they bill correctly once someone sets a price, instead of being
     silently given away.
     """
-    prices = ai_prices(db)
-    usd_rate, discount = ai_settings(db, AI_SERVICE)
+    prices = ai_prices(db, service)
+    usd_rate, discount = ai_settings(db, service)
     period = _ai_period(now())
 
     marks = {(m.session_id, m.model): m for m in db.scalars(
         select(AiUsageMark).where(AiUsageMark.workspace_id == ws.id,
-                                  AiUsageMark.service == AI_SERVICE))}
+                                  AiUsageMark.service == service))}
 
     total_micro = 0
     per_model: dict[str, dict] = {}
@@ -355,7 +373,7 @@ def meter_ai_usage(db: Session, ws: Workspace, report: dict) -> dict:
                 # The counters are set here rather than left to the column
                 # defaults: those apply at INSERT, so an unflushed object reads
                 # back None and the first delta would raise instead of billing.
-                mark = AiUsageMark(workspace_id=ws.id, service=AI_SERVICE,
+                mark = AiUsageMark(workspace_id=ws.id, service=service,
                                    session_id=session_id[:96], model=model[:96],
                                    billed_micro=0,
                                    **{f: 0 for f in _MARK_FIELDS.values()})
@@ -388,9 +406,9 @@ def meter_ai_usage(db: Session, ws: Workspace, report: dict) -> dict:
     # to post would hand the customer free tokens; posting first and failing to
     # advance would bill them twice on the next pass.
     tx = post_transaction(db, user_id=ws.user_id, workspace_id=ws.id,
-                          kind=TxKind.CHARGE_AI, amount_micro=-total_micro,
+                          kind=AI_TX_KIND[service], amount_micro=-total_micro,
                           period_start=period,
-                          detail={"service": AI_SERVICE,
+                          detail={"service": service,
                                   "usd_to_toman": usd_rate,
                                   "discount_percent": discount,
                                   "models": {m: {"tokens": v["tokens"],

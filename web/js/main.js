@@ -24,6 +24,9 @@ import { aiPage } from "./pages/ai.js";
 import { supportPage } from "./pages/support.js";
 import { adminTicketsPage } from "./pages/admintickets.js";
 import { aiPricingPage } from "./pages/aipricing.js";
+import { adminStoragePage } from "./pages/adminstorage.js";
+import { adminOpenClawPage } from "./pages/adminopenclaw.js";
+import { adminBackupPage } from "./pages/adminbackup.js";
 
 export const state = { me: null, operations: [], notifications: [], notificationUnread: 0 };
 
@@ -119,7 +122,7 @@ function chrome(bodyHtml) {
            short of editing the URL, and clicking the logo is what they tried. -->
       <a href="/" class="brand" style="color:inherit;text-decoration:none">
         <span class="logo">${icon.machine}</span><span>${t("brand")}</span>
-        <small class="app-version" dir="ltr">v${me?.version || "1.5.0"}</small></a>
+        <small class="app-version" dir="ltr">v${me?.version || "1.6.0"}</small></a>
       <nav class="nav">${nav}</nav>
       <div class="spacer"></div>
       <div class="header-right">
@@ -210,6 +213,11 @@ route("/console/admin/monitoring", { title: "تعرفه‌ها و سیاست ظ�
 route("/console/admin/openrouter", { title: "OpenRouter", view: adminOpenRouterPage, admin: true });
 route("/console/admin/hermes", { title: "Hermes", view: adminHermesPage, admin: true });
 route("/console/admin/claude", { title: "قیمت‌گذاری Claude", view: aiPricingPage, admin: true });
+route("/console/admin/openclaw", { title: "OpenClaw", view: adminOpenClawPage, admin: true });
+route("/console/admin/storage", { title: "فضای ذخیره‌سازی", view: adminStoragePage, admin: true });
+route("/console/admin/backup", { title: "پشتیبان‌گیری", view: adminBackupPage, admin: true });
+route("/console/admin/codex", { title: "قیمت‌گذاری Codex", admin: true,
+                                view: () => aiPricingPage({ service: "codex" }) });
 // The old address, kept so a bookmark or an open tab does not 404.
 route("/console/admin/ai-pricing", { title: "قیمت‌گذاری Claude", view: aiPricingPage, admin: true });
 route("/console/admin/tickets/:id", { title: "تیکت‌ها", view: adminTicketsPage, admin: true });

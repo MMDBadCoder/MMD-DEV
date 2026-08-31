@@ -49,6 +49,36 @@ SEED_PRICES: dict[str, tuple[float, float, float, float, float]] = {
     "claude-haiku-3-5":   ( 0.80,  1.00,    1.60,   0.08,    4.00),
 }
 
+# OpenAI list prices, USD per million tokens. Same shape as SEED_PRICES above
+# and resolved the same way - by LONGEST MATCHING PREFIX - so `gpt-5.6` covers
+# `gpt-5.6-sol` and any later suffix, and a specific row beats a general one.
+#
+# Cache accounting differs from Anthropic's and the difference is not cosmetic:
+# OpenAI charges cache READS at 10% of input and cache WRITES at 1.25x input,
+# with no separate 5-minute and 1-hour tiers. There is only one write rate, so
+# both write columns carry it - the scanner never reports a 1h write for Codex,
+# and a zero there would silently make any that appeared free.
+#
+# Sourced from OpenAI's published rates (Aug 2026), not estimated: sol
+# $5.00 in / $0.50 cached / $6.25 write / $30.00 out.
+CODEX_SEED_PRICES: dict[str, tuple[float, float, float, float, float]] = {
+    # model prefix        input   write5m  write1h  read    output
+    "gpt-5.6-cyber":      (12.50, 15.625, 15.625,  1.25,   75.00),
+    "gpt-5.6-sol":        ( 5.00,  6.25,   6.25,   0.50,   30.00),
+    "gpt-5.6-terra":      ( 2.00,  2.50,   2.50,   0.20,   12.00),
+    "gpt-5.6-luna":       ( 0.20,  0.25,   0.25,   0.02,    1.20),
+    # The family fallback: a new suffix bills at the flagship rate rather than
+    # going unpriced and therefore free. Deliberately the EXPENSIVE end - the
+    # cost of guessing high is a customer query, the cost of guessing low is
+    # revenue that cannot be recovered.
+    "gpt-5.6":            ( 5.00,  6.25,   6.25,   0.50,   30.00),
+    # Codex's own review model. No separate published rate; it runs on the same
+    # family, so it is priced there rather than left to accrue for nothing.
+    "codex-":             ( 5.00,  6.25,   6.25,   0.50,   30.00),
+}
+
+SEED_BY_SERVICE = {"claude": SEED_PRICES, "codex": CODEX_SEED_PRICES}
+
 # Admin-set, stored in the settings table.
 #
 # Discount exists only for Claude. The two suppliers have opposite cost
@@ -64,7 +94,7 @@ SEED_PRICES: dict[str, tuple[float, float, float, float, float]] = {
 #
 # The exchange rate stays shared: it converts a currency, and a dollar is a
 # dollar whichever supplier it goes to.
-SERVICES = ("claude",)
+SERVICES = ("claude", "codex")
 
 DEFAULT_AI_SETTINGS: dict[str, float] = {
     "usd_to_toman": 200_000.0,
@@ -72,6 +102,12 @@ DEFAULT_AI_SETTINGS: dict[str, float] = {
     # because that is what an operator says out loud, and converting it in one
     # place is safer than everyone remembering which is which.
     "claude_discount_percent": 90.0,
+    # Codex is billed against the platform's own OpenAI plan, the same shape as
+    # Claude - so the same reasoning applies and the same default is a sane
+    # starting point. It is a SEPARATE number because the two plans can change
+    # independently, and one rate covering both is the failure that loses money
+    # quietly, per token.
+    "codex_discount_percent": 90.0,
 }
 
 

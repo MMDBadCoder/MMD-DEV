@@ -261,17 +261,50 @@ sudo systemctl restart mmd-api        # required after changing it
 
 ## Backups
 
-**Not yet automated.** What matters, in order:
+### PostgreSQL — automated, to Telegram
 
-1. **PostgreSQL** — accounts, ledger, tickets. Everything about money.
-   ```bash
-   sudo -u postgres pg_dump mmd | gzip > mmd-$(date +%F).sql.gz
-   ```
-2. **`/etc/mmd/api.env`** — losing the session key logs everyone out; losing the
+**Admin → پشتیبان‌گیری** (`/console/admin/backup`) runs a full `pg_dump` on a
+schedule and sends the file to an administrator's Telegram chat. Off-host is the
+point: the platform runs on one host, and a dump on that host's disk survives a
+dropped table and nothing else.
+
+Configuration is a bot token, a chat id and an interval in minutes (5 minutes to
+7 days). Use a **dedicated** bot and your own private chat — this file contains
+password hashes, provider keys and every customer's ledger. Do not reuse the bot
+customers wire to Hermes or OpenClaw; those are attached to agents with a shell
+in someone's workspace.
+
+Operational notes:
+
+- The interval is measured from the last **success**, so a failing backup is
+  retried on the normal cadence rather than skipped.
+- The page leads with **last successful delivery** and **last error**, because
+  "enabled" does not mean "arriving". Check those two, not the toggle.
+- **Send one now** tests the token and chat id immediately — do this after any
+  change rather than finding out days later.
+- Telegram caps bot uploads at **50 MB**. The size is checked before the upload
+  and reported as a size error. The dump was 1.8 MB as of 1.6.0; if it ever
+  approaches the cap, move to an off-host object store.
+- The token is stored in `settings` and is never sent to the browser — the page
+  shows only its last four characters.
+- Format is `pg_dump --format=custom`, already compressed. Restore with:
+  ```bash
+  pg_restore -d mmd --clean --if-exists mmd-YYYYmmdd-HHMMSS.dump
+  ```
+
+Manual equivalent, if the worker is down:
+
+```bash
+sudo -u postgres pg_dump mmd | gzip > mmd-$(date +%F).sql.gz
+```
+
+### Still manual
+
+1. **`/etc/mmd/api.env`** — losing the session key logs everyone out; losing the
    database password locks the app out of its own data.
-3. **`/var/lib/mmd/certs/`** — regenerable, but regenerating means re-trusting
+2. **`/var/lib/mmd/certs/`** — regenerable, but regenerating means re-trusting
    with Incus.
-4. **Workspace filesystems** — ZFS snapshots exist as a mechanism; there is no
+3. **Workspace filesystems** — ZFS snapshots exist as a mechanism; there is no
    off-host copy. This is the largest known gap.
 
 ```bash

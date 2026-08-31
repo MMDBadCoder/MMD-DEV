@@ -109,5 +109,23 @@ class Config:
     auto_stop_hours: int = field(default_factory=lambda: int(
         _env("MMD_AUTO_STOP_HOURS", "12")))
 
+    # --- disk -----------------------------------------------------------
+    # Percentage of its own allowance at which a workspace is warned. A leading
+    # indicator: `refquota` stops it overrunning, so the customer's experience
+    # of a full disk is writes failing inside their machine, and a warning
+    # before that is worth more than a report after it.
+    disk_warn_percent: int = field(default_factory=lambda: int(
+        _env("MMD_DISK_WARN_PERCENT", "85")))
+
+    # The pool floor, in GiB. THIS is the real protection once reservations are
+    # gone: every workspace keeps a hard cap of its own, but the caps sum to
+    # more than the pool holds, so the failure that matters is aggregate. Below
+    # this, the guard stops the largest consumers until the pool recovers -
+    # because a full ZFS pool does not fail politely for one tenant, it fails
+    # for every tenant at once, and the control plane's own database lives on
+    # the same host.
+    pool_floor_gib: float = field(default_factory=lambda: float(
+        _env("MMD_POOL_FLOOR_GIB", "8")))
+
 
 CONFIG = Config()

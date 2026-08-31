@@ -42,7 +42,7 @@
 : "${TIER_DEFAULT_CORES:=1}"
 : "${TIER_DEFAULT_MEM_MIB:=1024}"
 : "${TIER_DEFAULT_ROOT_GIB:=6}"
-: "${TIER_DEFAULT_DOCKER_GIB:=4}"
+: "${TIER_DEFAULT_DOCKER_GIB:=8}"
 
 # --- Golden image ----------------------------------------------------------
 : "${BASE_IMAGE:=images:ubuntu/24.04/cloud}"

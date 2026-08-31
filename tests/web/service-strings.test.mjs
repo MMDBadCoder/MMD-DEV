@@ -20,7 +20,7 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const read = (p) => fs.readFileSync(path.join(ROOT, p), "utf8");
-const { t } = await import(path.join(ROOT, "web/js/i18n.js"));
+const { t, hasKey } = await import(path.join(ROOT, "web/js/i18n.js"));
 
 const AI = read("web/js/pages/ai.js");
 // The Hermes half of the page: from its click handler to the end of the block.
@@ -83,73 +83,134 @@ test("the Hermes secrets are laid out one per row", () => {
   const AI = read("web/js/pages/ai.js");
   const hermes = AI.slice(AI.indexOf("function renderHermes"),
                           AI.indexOf("function usageCard"));
-  // Only the secrets block. The explanatory card below it legitimately uses
-  // an auto-fit grid - that one holds prose, not values to be copied.
-  const grid = hermes.slice(hermes.indexOf("h.ready ?"), hermes.indexOf('class="btn-row"'));
+  // Only the `details` section. The explanatory cards legitimately use an
+  // auto-fit grid - those hold prose, not values to be copied. The credentials
+  // used to sit above the action button; they are their own card now, so this
+  // slices the section rather than a position on the page.
+  const grid = hermes.slice(hermes.indexOf("details:"), hermes.indexOf("billing:"));
   assert.ok(grid.includes("grid-template-columns:1fr"), grid.slice(0, 400));
   assert.ok(!grid.includes("minmax(260px"), "still packing secrets into narrow columns");
 });
 
-/* ---- the Telegram channel documentation ---------------------------------
+/* ---- the Telegram walkthrough, removed ----------------------------------
  *
- * Documented in the product rather than linked away, because the two things
- * that decide whether it works at all are properties of this platform: the
- * workspace must be running, and it must reach api.telegram.org. Measured on
- * the host - it answers from a workspace in 24 ms - and `--channels` is
- * accepted by the installed CLI even though `claude --help` does not list it.
+ * The Claude Code tab used to carry a six-step guide to wiring the CLI up to a
+ * Telegram bot. It was accurate, and it was still the wrong thing to ship:
+ * every step ran inside the customer's own machine using a third-party plugin,
+ * so the platform was teaching a workflow it does not provide, cannot support
+ * and does not control. Hermes has a Telegram gateway the platform actually
+ * manages; that is where the feature belongs.
+ *
+ * The six tests that pinned the walkthrough went with it. This one replaces
+ * them, because a deleted section is easy to reintroduce by accident.
  */
 const AI_SRC = read("web/js/pages/ai.js");
 
-test("the Telegram section sits under the sign-in card, not at the end", () => {
-  // It is a follow-on from being signed in; below the usage and privacy cards
-  // it would read as unrelated.
-  const tg = AI_SRC.indexOf("${telegramCard()}");
-  const usage = AI_SRC.indexOf("${usageCard(usage)}");
-  assert.ok(tg > 0 && usage > 0, "both cards must render");
-  assert.ok(tg < usage, "the Telegram card must come before the usage card");
-});
-
-test("every documented step carries the exact command", () => {
-  for (const cmd of [
-    "/plugin install telegram@claude-plugins-official",
-    "/telegram:configure <TOKEN>",
-    "claude --channels plugin:telegram@claude-plugins-official",
-    "/telegram:access pair <CODE>",
-    "/telegram:access policy allowlist",
-  ]) {
-    assert.ok(AI_SRC.includes(cmd), `missing: ${cmd}`);
+test("the Claude tab no longer teaches Telegram setup", () => {
+  for (const marker of ["telegramCard", "TG_STEPS", "claude-plugins-official",
+                        "/telegram:configure"]) {
+    assert.ok(!AI_SRC.includes(marker), `${marker} is back on the AI page`);
+  }
+  // ...and its strings went with it, rather than lingering as dead catalogue.
+  for (const key of ["tg.title", "tg.s1", "tg.prereq"]) {
+    assert.ok(!hasKey(key), `${key} is still in the catalogue`);
   }
 });
 
-test("the lock-down step is documented, not left as an afterthought", () => {
-  // Until the policy is `allowlist`, anyone who knows the bot can pair with it.
-  assert.ok(AI_SRC.includes("/telegram:access policy allowlist"));
-  assert.ok(/allowlist/.test(t("tg.s6")) === false, "the command belongs in markup");
-  assert.ok(t("tg.s6").length > 20, "the step must explain WHY, not just show a command");
-});
-
-test("each step has a Persian sentence to go with its command", () => {
-  for (const k of ["tg.s1", "tg.s2", "tg.s3", "tg.s4", "tg.s5", "tg.s6"]) {
-    const v = t(k);
-    assert.ok(v && v !== k, `${k} is missing`);
-    assert.ok(/[؀-ۿ]/.test(v), `${k} is not Persian: ${v}`);
+/* Every AI tab explains what the thing IS before offering controls. */
+test("every AI tab has a 'what is this' card", () => {
+  for (const key of ["openrouter", "claude", "codex", "hermes", "openclaw"]) {
+    assert.ok(AI.includes(`aboutCard("${key}")`), `${key} has no about card`);
+    // A title is a few words ("Codex چیست" is ten characters); a body has to
+    // actually explain something.
+    assert.ok(t(`ai.about.${key}.title`), `ai.about.${key}.title is missing`);
+    assert.ok(String(t(`ai.about.${key}.body`)).length > 80,
+              `ai.about.${key}.body does not explain anything`);
   }
 });
 
-test("the prerequisites are stated before the steps", () => {
-  // Nobody should work through six steps to find out the machine had to be on.
-  // Scoped to telegramCard: `${rows}` appears in usageCard too, which sits
-  // earlier in the file, so a whole-file indexOf compares the wrong things.
-  const card = AI_SRC.slice(AI_SRC.indexOf("function telegramCard"),
-                            AI_SRC.indexOf("function renderClaude"));
-  const prereq = card.indexOf('t("tg.prereq")');
-  const steps = card.indexOf("${rows}");
-  assert.ok(prereq > 0 && steps > 0, "both must render inside the card");
-  assert.ok(prereq < steps, "prerequisites must precede the steps");
-  assert.ok(/[؀-ۿ]/.test(t("tg.prereq")));
+test("a tab waiting on the worker does not drag the customer back to it", () => {
+  // The re-render timer keeps running after the customer navigates away.
+  // Reported as "when you go to another page it turns you back to the OpenClaw
+  // tab", so the poll must check where they are before re-rendering.
+  assert.ok(AI.includes("currentPath() ==="), "repoll does not check the path");
+  assert.ok(!/setTimeout\(\(\) => aiPage\(/.test(AI),
+            "an unguarded self-poll is back");
 });
 
-test("it links to the upstream README", () => {
-  assert.ok(AI_SRC.includes(
-    "github.com/anthropics/claude-plugins-official/blob/main/external_plugins/telegram/README.md"));
+
+/* ---- one order for all five tabs ----------------------------------------
+ *
+ * Reported as: the explainer is second on Claude Code and last elsewhere, the
+ * usage table swaps places with it between two tabs, and the dashboard address
+ * is the first thing on OpenClaw but buried mid-card on Hermes. Each was
+ * defensible alone; the set was not.
+ */
+test("every tab renders through the shared section order", () => {
+  for (const fn of ["renderOpenRouter", "renderClaude", "renderCodex",
+                    "renderHermes", "renderOpenClaw"]) {
+    const body = AI_SRC.slice(AI_SRC.indexOf(`function ${fn}`));
+    const call = body.slice(0, body.indexOf("`);"));
+    assert.ok(call.includes("sections({"),
+              `${fn} builds its own layout instead of using sections()`);
+  }
+});
+
+test("the order is declared once, and puts controls before reference", () => {
+  const m = AI_SRC.match(/const SECTION_ORDER = \[([^\]]+)\]/);
+  assert.ok(m, "SECTION_ORDER is gone");
+  const order = m[1].split(",").map((s) => s.trim().replace(/"/g, "")).filter(Boolean);
+  assert.deepEqual(order,
+    ["status", "details", "usage", "billing", "about", "privacy"]);
+});
+
+test("no tab hand-places the cards the order controls", () => {
+  // A tab that emits `${aboutCard(...)}` outside the sections() object has
+  // opted out of the order without saying so.
+  for (const key of ["status", "details", "usage", "billing", "about", "privacy"]) {
+    void key;
+  }
+  const stray = AI_SRC.match(/\n\s+\$\{(aboutCard|usageCard)\(/g) || [];
+  assert.deepEqual(stray, [], "a card is placed outside sections()");
+});
+
+test("the billing explainer sits with the supplier that does the billing", () => {
+  // It describes how OpenRouter meters and charges, and BOTH Hermes and
+  // OpenClaw spend that same key - so on the Hermes tab it was one supplier's
+  // rules filed under one of its two consumers.
+  const or = AI_SRC.slice(AI_SRC.indexOf("function renderOpenRouter"),
+                          AI_SRC.indexOf("function renderHermes"));
+  assert.ok(or.includes('t("ai.hermes.how.title")'),
+            "the billing card did not move to the OpenRouter tab");
+  const hermes = AI_SRC.slice(AI_SRC.indexOf("function renderHermes"),
+                              AI_SRC.indexOf("function usageCard"));
+  assert.ok(!hermes.includes('t("ai.hermes.how.body")'),
+            "the billing card is still duplicated on the Hermes tab");
+});
+
+
+/* ---- the two Telegram sections are one feature --------------------------
+ *
+ * Hermes and OpenClaw offer the same thing over the same bot, built weeks
+ * apart, and had drifted into different headers, pill wording and button
+ * icons - which invites a customer to wonder what the difference is when
+ * there is none.
+ */
+test("both services render the Telegram section through one shell", () => {
+  assert.ok(AI_SRC.includes("function telegramSection("), "no shared section");
+  const calls = (AI_SRC.match(/telegramSection\(\{/g) || []).length;
+  assert.equal(calls, 2, `expected Hermes and OpenClaw to use it, found ${calls}`);
+  // ...and neither hand-rolls its own header any more.
+  assert.ok(!AI_SRC.includes('t("ai.openclaw.telegram.title")'),
+            "OpenClaw still has its own heading");
+});
+
+test("the Telegram buttons carry Telegram's own mark", () => {
+  // `chat` is a generic speech bubble - it reads as "messages", not as the one
+  // service the section is about.
+  const uiSrc = read("web/js/ui.js");
+  assert.ok(uiSrc.includes("telegram: P("), "no telegram icon defined");
+  const tg = AI_SRC.slice(AI_SRC.indexOf("function telegramSection"));
+  const section = tg.slice(0, tg.indexOf("function repoll"));
+  assert.ok(!section.includes("icon.chat"), "still using the generic chat bubble");
 });

@@ -29,6 +29,8 @@ from sqlalchemy.orm import Session, aliased
 from . import hermes
 from . import operations as oplib
 from . import notifications as notifylib
+from . import backup as backuplib
+from . import openclaw as oclib
 from . import ports as portalloc
 from . import sshkeys
 from . import service as svc
@@ -47,6 +49,10 @@ from .security import hash_password, verify_password
 from . import usernames as unames
 from .tickets import is_unread
 from .version import APP_VERSION
+
+# The OpenClaw gateway's fixed port inside a workspace. Must agree with
+# provisioner.OPENCLAW_PORT and the vhost reconciler.
+OPENCLAW_PORT = 18789
 
 log = logging.getLogger("mmd.api")
 
@@ -201,7 +207,10 @@ class ResetRequest(BaseModel):
 
 
 class AiPriceRow(BaseModel):
+    """A price row. `service` names which supplier it belongs to; it defaults to
+    Claude so an older admin page that never sent the field keeps working."""
     model: str = Field(min_length=1, max_length=96)
+    service: str | None = None
     input_usd: float = Field(ge=0, le=10_000)
     cache_write_5m_usd: float = Field(ge=0, le=10_000)
     cache_write_1h_usd: float = Field(ge=0, le=10_000)
@@ -795,6 +804,11 @@ def _port_view(p: ExposedPort, username: str | None) -> dict:
     Only the customer's own published ports get it. The reserved SSH and RDP
     rows keep exactly the address they have always had.
     """
+    # Whether the hostname route can exist at all is decided by the vhost
+    # reconciler, not here: it skips any port the host itself listens on,
+    # because nginx cannot bind one and a failed bind abandons the whole
+    # reload. `web_ready` carries that answer back, so this reports the name
+    # and lets the interface gate the LINK on readiness.
     host = (unames.application_host(username, p.internal_port, CONFIG.domain)
             if username and p.kind is PortKind.USER else None)
     protos = portalloc.expand(p.protocol)
@@ -1243,11 +1257,212 @@ def _hermes_state(ws: Workspace) -> dict:
             "error": bool(ws.hermes_error)}
 
 
+def _codex_state(ws: Workspace) -> dict:
+    """Codex, read the same way Claude Code is: probed live, nothing stored.
+
+    Both are host-authenticated CLIs whose only workspace state is a
+    credentials file, so there is nothing worth keeping a column for - and a
+    stored copy would be a second thing that could disagree with the machine.
+    """
+    if ws.state != WorkspaceState.ON:
+        return {"machine_running": False, "installed": False, "version": None,
+                "linked": False, "available": True, "expires_at": None}
+    resp = svc.call_provisioner({"verb": "ai_codex", "idx": ws.idx,
+                                 "action": "status"}, timeout=180)
+    if not resp.get("ok"):
+        log.error("codex status failed for %s: %s", ws.incus_project, resp)
+        fail(502, "ai_status_failed", "The AI tool status could not be read.")
+    return {"machine_running": True,
+            "installed": bool(resp.get("installed")),
+            "version": resp.get("version"),
+            "linked": bool(resp.get("linked")),
+            "available": bool(resp.get("available")),
+            "expires_at": resp.get("expires_at")}
+
+
+def _openclaw_state(ws: Workspace) -> dict:
+    """What the customer may see about their OpenClaw gateway.
+
+    Reported from the database rather than probed, because this is a
+    worker-reconciled service like Hermes: `enabled` is intent, `installed` is
+    what the worker has actually achieved, and the gap between them is the
+    "preparing" state the page shows.
+    """
+    host = (unames.openclaw_host(ws.user.username, CONFIG.domain)
+            if ws.user and ws.user.username else None)
+    user = ws.user
+    return {"enabled": bool(ws.openclaw_enabled),
+            "installed": bool(ws.openclaw_installed),
+            "ready": bool(ws.openclaw_installed and ws.openclaw_password),
+            "telegram_enabled": bool(ws.openclaw_telegram_enabled),
+            "telegram_ready": bool(ws.openclaw_telegram_installed),
+            "telegram_error": bool(ws.openclaw_telegram_error),
+            # Whether the ACCOUNT has a token saved. The token itself is never
+            # returned - only whether one exists, so the page can offer the
+            # toggle instead of a field the customer has already filled in.
+            "telegram_profile_configured": bool(
+                user and user.telegram_bot_token and user.telegram_user_id),
+            # OpenClaw has no allowlist of its own - it always uses the
+            # account's saved id - but the page shows the same two facts for
+            # both services, so both have to report them under the same names.
+            "telegram_profile_user_id": user.telegram_user_id if user else None,
+            "telegram_users": user.telegram_user_id if user else None,
+            "password": ws.openclaw_password,
+            "host": host,
+            "port": OPENCLAW_PORT,
+            "machine_running": ws.state == WorkspaceState.ON,
+            # Requires the customer's managed OpenRouter key: OpenClaw spends
+            # it, which is what keeps this inside the cap and the metering that
+            # already exist rather than opening a second way to spend money.
+            "needs_openrouter": not bool(ws.hermes_key),
+            # A FLAG, not the text. The stored value is whatever npm or systemd
+            # said, in English, with paths in it - useful to an operator,
+            # meaningless and alarming to a customer reading a Persian page.
+            "error": bool(ws.openclaw_error)}
+
+
 @app.get("/api/workspace/ai")
 def ai_status(user: User = Depends(current_user),
               db: Session = Depends(get_session)) -> dict:
     ws = my_workspace(db, user)
-    return {"claude": _ai_state(ws), "hermes": _hermes_state(ws)}
+    return {"claude": _ai_state(ws), "hermes": _hermes_state(ws),
+            "codex": _codex_state(ws), "openclaw": _openclaw_state(ws)}
+
+
+@app.post("/api/workspace/ai/codex")
+def ai_codex(body: AiAction, user: User = Depends(current_user),
+             db: Session = Depends(get_session)) -> dict:
+    """Install and sign in, or remove the link. Mirrors /ai/claude exactly.
+
+    The sign-in itself is the platform's, performed once on the host; this
+    copies the allowlisted half of that grant into the customer's machine. The
+    customer never authenticates to OpenAI and never sees a token.
+    """
+    ws = my_workspace(db, user)
+    if ws.state != WorkspaceState.ON:
+        fail(409, "machine_off", "The machine must be running to change this.")
+
+    resp = svc.call_provisioner({"verb": "ai_codex", "idx": ws.idx,
+                                 "action": body.action}, timeout=1200)
+    if not resp.get("ok"):
+        log.error("codex %s failed for %s: %s", body.action, ws.incus_project, resp)
+        err = resp.get("error") or ""
+        if "not signed in" in err:
+            fail(409, "ai_host_unlinked",
+                 "The platform account is not signed in on this host.")
+        fail(500, "ai_failed", "The AI tool could not be set up.",
+             output=(resp.get("output") or err)[-300:])
+
+    svc.audit(db, user.id, f"ai_codex_{body.action}", ws.incus_project)
+    return {"ok": True, "codex": _codex_state(ws)}
+
+
+@app.post("/api/workspace/ai/openclaw")
+def ai_openclaw(body: HermesAction, user: User = Depends(current_user),
+                db: Session = Depends(get_session)) -> dict:
+    """Record the customer's intent. The worker reconciles it.
+
+    Enabling does not install here: it is an npm download and a service start,
+    minutes of work that must not be held open on an HTTP request. The customer
+    sees "preparing" instead - which is also what makes a failed install
+    self-healing rather than a dead toggle.
+    """
+    ws = my_workspace(db, user)
+    if not user.username:
+        fail(409, "no_username", "This account has no username yet.")
+    if body.action == "enable" and not ws.hermes_key:
+        # It spends the managed OpenRouter key. Without one there is nothing to
+        # configure it with, and a gateway that cannot reach a model is a
+        # dashboard that only produces errors.
+        fail(409, "needs_openrouter",
+             "The managed OpenRouter key must be active first.")
+
+    ws.openclaw_enabled = (body.action == "enable")
+    if not ws.openclaw_enabled:
+        # Cleared here so the interface stops showing a secret the moment the
+        # customer switches it off, rather than until the worker catches up.
+        ws.openclaw_password = None
+    ws.openclaw_error = None
+    db.commit()
+    svc.audit(db, user.id, f"ai_openclaw_{body.action}", ws.incus_project)
+    return {"ok": True, "openclaw": _openclaw_state(ws)}
+
+
+@app.post("/api/workspace/ai/openclaw/telegram")
+def ai_openclaw_telegram(body: HermesAction, user: User = Depends(current_user),
+                         db: Session = Depends(get_session)) -> dict:
+    """Turn the Telegram channel on or off for this customer's gateway.
+
+    Intent only, like every other OpenClaw switch: the worker reconciles it,
+    because putting the token in place means writing a file inside a workspace
+    and restarting a service.
+
+    The token is NOT taken from this request. It is the one the customer saved
+    against their account, which Hermes already reuses - so a customer sets a
+    bot up once and both services can use it, and no token ever travels through
+    a second endpoint that would have to be trusted with it.
+    """
+    ws = my_workspace(db, user)
+    if body.action == "enable":
+        if not ws.openclaw_installed:
+            fail(409, "openclaw_not_ready", "OpenClaw is not running yet.")
+        if not (user.telegram_bot_token and user.telegram_user_id):
+            fail(409, "telegram_not_configured",
+                 "Save a Telegram bot token on the account first.")
+        # ONE BOT, ONE AGENT. Telegram allows a single `getUpdates` poller per
+        # bot token, so two services sharing one bot do not both work - the
+        # second one connects and is then terminated by the first:
+        #
+        #   Conflict: terminated by other getUpdates request; make sure that
+        #   only one bot instance is running.
+        #
+        # Observed live with Hermes and OpenClaw both enabled on one token. The
+        # channel reported "enabled, configured, running, DISCONNECTED", which
+        # is the worst kind of broken - it looks switched on. Refusing here is
+        # the honest answer; a customer who wants both makes a second bot.
+        if ws.hermes_telegram_enabled:
+            fail(409, "telegram_bot_in_use",
+                 "That Telegram bot is already connected to Hermes.")
+    ws.openclaw_telegram_enabled = (body.action == "enable")
+    ws.openclaw_error = None
+    # A retry starts clean, exactly as the Hermes toggle does - otherwise the
+    # last failure keeps showing while the new attempt is still running.
+    ws.openclaw_telegram_error = None
+    db.commit()
+    svc.audit(db, user.id, f"openclaw_telegram_{body.action}", ws.incus_project)
+    return {"ok": True, "openclaw": _openclaw_state(ws)}
+
+
+@app.post("/api/workspace/ai/openclaw/devices")
+def ai_openclaw_devices(user: User = Depends(current_user),
+                        db: Session = Depends(get_session)) -> dict:
+    """Approve whatever is waiting to pair with this customer's gateway.
+
+    OpenClaw treats a browser reaching its Control UI as a device, and one it
+    does not consider local must be approved before it may talk - even with the
+    right password. The usual path avoids this entirely (`trustedProxies` makes
+    connections through our proxy count as local); this exists so the answer to
+    a pairing prompt is a button rather than "SSH in and run a command".
+
+    Safe to approve in bulk because of who is asking: this endpoint is reached
+    only by a customer signed in to their own dashboard, about their own
+    workspace, and a request pending there is one they just caused.
+    """
+    ws = my_workspace(db, user)
+    if ws.state != WorkspaceState.ON:
+        fail(409, "machine_off", "The machine must be running to change this.")
+    if not ws.openclaw_installed or not ws.openclaw_password:
+        fail(409, "openclaw_not_ready", "OpenClaw is not running yet.")
+
+    resp = svc.call_provisioner({"verb": "ai_openclaw", "idx": ws.idx,
+                                 "action": "approve_devices",
+                                 "password": ws.openclaw_password}, timeout=300)
+    if not resp.get("ok"):
+        log.error("openclaw device approval failed for %s: %s",
+                  ws.incus_project, resp)
+        fail(500, "openclaw_approve_failed", "The devices could not be approved.")
+    svc.audit(db, user.id, "ai_openclaw_devices_approved", ws.incus_project)
+    return {"ok": True}
 
 
 @app.post("/api/workspace/ai/hermes")
@@ -1273,6 +1488,9 @@ def ai_hermes(body: HermesAction, user: User = Depends(current_user),
                 fail(400, "telegram_bad_token", "The Telegram bot token is invalid.")
             if not re.fullmatch(r"[1-9][0-9]{4,14}(,[1-9][0-9]{4,14})*", users):
                 fail(400, "telegram_bad_users", "The Telegram user allowlist is invalid.")
+            if ws.openclaw_telegram_enabled:
+                fail(409, "telegram_bot_in_use",
+                     "That Telegram bot is already connected to OpenClaw.")
             ws.hermes_telegram_enabled = True
             ws.hermes_telegram_token = token
             ws.hermes_telegram_users = users
@@ -2057,7 +2275,15 @@ def admin_users(_: User = Depends(require_admin),
             "workspace": None if w is None else {
                 "id": w.id, "state": w.state.value, "cpu_milli": w.cpu_milli,
                 "cpu_cores": w.cpu_cores, "memory_mb": w.mem_mib,
-                "disk_gb": w.disk_gib},
+                "disk_gb": w.disk_gib,
+                # Observed, not promised. `disk_gb` is the allowance; these are
+                # what the machine has actually written, sampled on a timer -
+                # the number that matters once allowances are overcommitted.
+                "disk_used_mib": w.disk_used_mib,
+                "disk_percent": (round(w.disk_used_mib / (w.disk_gib * 1024) * 100)
+                                 if w.disk_used_mib and w.disk_gib else None),
+                "disk_checked_at": (w.disk_checked_at.isoformat()
+                                    if w.disk_checked_at else None)},
         })
     return out
 
@@ -2384,8 +2610,11 @@ def admin_get_settings(_: User = Depends(require_admin),
 def admin_put_settings(body: dict[str, str], admin: User = Depends(require_admin),
                        db: Session = Depends(get_session)) -> dict:
     from .scheduler.admission import DEFAULTS as CAP_DEFAULTS
-    allowed = set(pricing.DEFAULT_RATES) | set(CAP_DEFAULTS) | {
-        aipricing.discount_key(svc.AI_SERVICE)}
+    # Every service's discount key, not just Claude's. A settings panel that
+    # silently refuses the key it just rendered is worse than one that never
+    # offered it.
+    allowed = (set(pricing.DEFAULT_RATES) | set(CAP_DEFAULTS)
+               | {aipricing.discount_key(sv) for sv in aipricing.SERVICES})
     unknown = sorted(set(body) - allowed)
     if unknown:
         fail(400, "invalid_setting", "This setting does not belong to this panel.")
@@ -2398,6 +2627,187 @@ def admin_put_settings(body: dict[str, str], admin: User = Depends(require_admin
     db.commit()
     svc.audit(db, admin.id, "settings_update", None, keys=sorted(body))
     return svc.get_settings(db)
+
+
+class OpenClawConfig(BaseModel):
+    default_model: str = Field(min_length=1, max_length=128)
+
+
+@app.get("/api/admin/openclaw")
+def admin_openclaw_get(_: User = Depends(require_admin),
+                       db: Session = Depends(get_session)) -> dict:
+    """OpenClaw's own product setting, and how far it has been adopted.
+
+    Only the model. Everything commercial - the exchange rate, the spend cap,
+    the guardrail - belongs to OpenRouter, whose key OpenClaw spends, and is
+    configured there. Duplicating any of it here would create a second place to
+    change a number that has one correct value.
+    """
+    enabled = db.scalar(select(func.count(Workspace.id))
+                        .where(Workspace.openclaw_enabled.is_(True))) or 0
+    running = db.scalar(select(func.count(Workspace.id))
+                        .where(Workspace.openclaw_installed.is_(True))) or 0
+    telegram = db.scalar(select(func.count(Workspace.id))
+                         .where(Workspace.openclaw_telegram_installed.is_(True))) or 0
+    return {"default_model": oclib.default_model(db),
+            "model_prefix": oclib.MODEL_PREFIX,
+            "fallback_model": oclib.DEFAULT_MODEL,
+            "enabled_count": enabled,
+            "running_count": running,
+            "telegram_count": telegram}
+
+
+@app.put("/api/admin/openclaw")
+def admin_openclaw_put(body: OpenClawConfig, admin: User = Depends(require_admin),
+                       db: Session = Depends(get_session)) -> dict:
+    """Set the default model every new gateway is configured with.
+
+    Existing gateways are NOT rewritten. Changing a running agent's model out
+    from under a customer mid-conversation is not an admin setting, it is an
+    incident; they pick it up on their next install or repair.
+    """
+    value = oclib.set_default_model(db, body.default_model)
+    db.commit()
+    svc.audit(db, admin.id, "admin_openclaw_config", None, default_model=value)
+    return admin_openclaw_get(admin, db)
+
+
+class BackupConfig(BaseModel):
+    enabled: bool = False
+    interval_minutes: int = Field(default=backuplib.DEFAULT_INTERVAL, ge=1, le=100000)
+    chat_id: str = Field(default="", max_length=32)
+    # Absent means "keep the stored token". The panel is never sent the token,
+    # so a blank field on an unrelated save must not erase it.
+    bot_token: str | None = Field(default=None, max_length=128)
+
+
+@app.get("/api/admin/backup")
+def admin_backup_get(_: User = Depends(require_admin),
+                     db: Session = Depends(get_session)) -> dict:
+    """The backup schedule, and whether it is actually delivering.
+
+    `last_ok_at` and `last_error` are returned together on purpose: "enabled"
+    says what was asked for, and only those two say whether any backup has
+    arrived. An operator who cannot tell the difference has no backups.
+    """
+    return backuplib.config(db)
+
+
+@app.put("/api/admin/backup")
+def admin_backup_put(body: BackupConfig, admin: User = Depends(require_admin),
+                     db: Session = Depends(get_session)) -> dict:
+    """Configure where the database is sent, and how often.
+
+    A dump is every credential and every customer's ledger in one file, so this
+    is admin-only, off until switched on, and audited - without the token,
+    which is the one thing an audit row must not carry.
+    """
+    try:
+        state = backuplib.save(db, enabled=body.enabled,
+                               interval_minutes=body.interval_minutes,
+                               chat_id=body.chat_id, bot_token=body.bot_token)
+    except backuplib.BackupError as e:
+        fail(400, "backup_invalid", str(e))
+    db.commit()
+    svc.audit(db, admin.id, "admin_backup_config", None,
+              enabled=state["enabled"], interval=state["interval_minutes"],
+              chat_id=state["chat_id"])
+    return state
+
+
+@app.post("/api/admin/backup/run")
+def admin_backup_run(admin: User = Depends(require_admin),
+                     db: Session = Depends(get_session)) -> dict:
+    """Send one backup now.
+
+    Configuring a backup and finding out days later that the token was wrong is
+    the failure this avoids: the admin presses it once and either the file
+    arrives in their Telegram or the page says why it did not.
+    """
+    svc.audit(db, admin.id, "admin_backup_run", None)
+    result = backuplib.run_once(db)
+    return {**result, "config": backuplib.config(db)}
+
+
+@app.get("/api/admin/storage")
+def admin_storage(_: User = Depends(require_admin),
+                  db: Session = Depends(get_session)) -> dict:
+    """Where the pool has actually gone, and how far it is overcommitted.
+
+    Three different quantities that are easy to conflate, so all three are
+    returned rather than one derived number:
+
+      * ALLOWANCE - what each workspace may use. Hard: `refquota` enforces it.
+      * USED      - what it has written. Sampled by the worker.
+      * COMMITTED - the allowances summed. Deliberately larger than the pool
+                    since reservations were dropped, which is the whole point
+                    and also the whole risk.
+
+    `unattributed` closes the books: the pool holds the golden images and
+    Incus's own datasets as well as the workspaces, so the per-workspace rows
+    do NOT add up to pool usage on their own. A distribution chart whose parts
+    silently fail to sum to the whole is a chart that misleads.
+    """
+    resp = svc.call_provisioner({"verb": "disk_usage", "idx": 1}, timeout=120)
+    pool_raw = (resp.get("pool") or {}) if resp.get("ok") else {}
+    live = (resp.get("workspaces") or {}) if resp.get("ok") else {}
+
+    gib = 1024 ** 3
+    pool_used = (pool_raw.get("used") or 0) / gib
+    pool_free = (pool_raw.get("available") or 0) / gib
+
+    rows = []
+    for ws in db.scalars(select(Workspace).order_by(Workspace.idx)):
+        user = ws.user
+        # Prefer the reading just taken; fall back to the stored sample so the
+        # page still works when the provisioner is briefly unreachable.
+        d = live.get(str(ws.idx)) or {}
+        used_mib = ws.disk_used_mib
+        if d:
+            used_mib = (int(d.get("root_used") or 0)
+                        + int(d.get("docker_used") or 0)) // (1024 * 1024)
+        cap_gib = ws.disk_gib
+        rows.append({
+            "username": user.username if user else None,
+            "email": user.email if user else None,
+            "user_id": ws.user_id,
+            "idx": ws.idx,
+            "state": ws.state.value,
+            "cap_gib": cap_gib,
+            "root_gib": ws.root_gib,
+            "docker_gib": ws.docker_gib,
+            "used_gib": round((used_mib or 0) / 1024, 2),
+            "percent": (round((used_mib or 0) / (cap_gib * 1024) * 100)
+                        if cap_gib else 0),
+            "measured": used_mib is not None,
+            "checked_at": (ws.disk_checked_at.isoformat()
+                           if ws.disk_checked_at else None),
+        })
+
+    workspace_used = sum(r["used_gib"] for r in rows)
+    committed = sum(r["cap_gib"] for r in rows)
+    total = pool_used + pool_free
+
+    return {
+        "pool": {
+            "total_gib": round(total, 2),
+            "used_gib": round(pool_used, 2),
+            "free_gib": round(pool_free, 2),
+            "percent": round(pool_used / total * 100) if total else 0,
+        },
+        "workspace_used_gib": round(workspace_used, 2),
+        # Everything in the pool that is not a customer's data: the golden
+        # images every workspace is cloned from, and Incus's own datasets.
+        "unattributed_gib": round(max(pool_used - workspace_used, 0), 2),
+        "committed_gib": committed,
+        # >1 means the allowances promise more than the pool holds. That is
+        # intended, and it is exactly what the pool guard exists to survive.
+        "overcommit": round(committed / total, 2) if total else 0,
+        "warn_percent": CONFIG.disk_warn_percent,
+        "pool_floor_gib": CONFIG.pool_floor_gib,
+        "pool_at_risk": pool_free < CONFIG.pool_floor_gib,
+        "workspaces": sorted(rows, key=lambda r: -r["used_gib"]),
+    }
 
 
 @app.get("/api/admin/capacity")
@@ -2662,17 +3072,25 @@ def admin_openrouter_put(body: OpenRouterConfig,
 
 # --- AI pricing -----------------------------------------------------------
 @app.get("/api/workspace/ai/usage")
-def workspace_ai_usage(user: User = Depends(current_user),
+def workspace_ai_usage(service: str = svc.AI_SERVICE,
+                       user: User = Depends(current_user),
                        db: Session = Depends(get_session)) -> dict:
-    """What this account has spent on AI tokens, and on what.
+    """What this account has spent on ONE supplier's tokens, and on what.
 
     Read from the marks rather than recomputed, so it survives the customer
     destroying their workspace - which is the whole reason the totals live here
     and not in the machine.
+
+    Filtered by service, which it was not when Claude was the only one. Summing
+    every mark would have added Codex tokens to the Claude tab, priced at the
+    wrong supplier's rate, the moment a second service started writing marks.
     """
+    if service not in aipricing.SERVICES:
+        fail(400, "bad_service", "Unknown AI service.")
     ws = my_workspace(db, user)
     rows = db.scalars(select(AiUsageMark).where(
-        AiUsageMark.workspace_id == ws.id)).all()
+        AiUsageMark.workspace_id == ws.id,
+        AiUsageMark.service == service)).all()
 
     by_model: dict[str, dict] = {}
     for m in rows:
@@ -2686,9 +3104,10 @@ def workspace_ai_usage(user: User = Depends(current_user),
         acc["cache_read"] += m.cache_read_tokens or 0
         acc["output"] += m.output_tokens or 0
 
-    usd_rate, discount = svc.ai_settings(db, svc.AI_SERVICE)
+    usd_rate, discount = svc.ai_settings(db, service)
     models = sorted(by_model.values(), key=lambda m: -m["toman"])
     return {
+        "service": service,
         "models": models,
         "total_toman": round(sum(m["toman"] for m in models), 2),
         "sessions": len({m.session_id for m in rows}),
@@ -2701,7 +3120,8 @@ def workspace_ai_usage(user: User = Depends(current_user),
 
 
 @app.get("/api/admin/ai-pricing")
-def admin_ai_pricing(_: User = Depends(require_admin),
+def admin_ai_pricing(service: str = svc.AI_SERVICE,
+                     _: User = Depends(require_admin),
                      db: Session = Depends(get_session)) -> dict:
     """The whole chain a customer's AI bill is computed from.
 
@@ -2709,20 +3129,27 @@ def admin_ai_pricing(_: User = Depends(require_admin),
     editable, because Anthropic changes its rates and this host should not need
     a deploy to keep up.
     """
-    prices = svc.ai_prices(db)
-    usd_rate, discount = svc.ai_settings(db, svc.AI_SERVICE)
+    if service not in aipricing.SERVICES:
+        fail(400, "bad_service", "Unknown AI service.")
+    prices = svc.ai_prices(db, service)
+    usd_rate, discount = svc.ai_settings(db, service)
 
     rows = db.scalars(select(AiModelPrice)
-                      .where(AiModelPrice.service == svc.AI_SERVICE)
+                      .where(AiModelPrice.service == service)
                       .order_by(AiModelPrice.model)).all()
 
     # Models seen in real usage that nothing prices. Their tokens are being held
-    # uncounted rather than given away, so this needs to be visible.
-    seen = {m.model for m in db.scalars(select(AiUsageMark))}
+    # uncounted rather than given away, so this needs to be visible - and it is
+    # the ONLY thing standing between an unconfigured supplier and a customer
+    # using it for free, so it is scoped to the service being configured rather
+    # than showing every supplier's models under each.
+    seen = {m.model for m in db.scalars(
+        select(AiUsageMark).where(AiUsageMark.service == service))}
     unpriced = sorted(m for m in seen if aipricing.resolve(m, prices) is None)
 
     return {
-        "service": svc.AI_SERVICE,
+        "service": service,
+        "services": list(aipricing.SERVICES),
         "usd_to_toman": usd_rate,
         "discount_percent": discount,
         # Every service's rate, so the panel can show them apart. One number for
@@ -2759,7 +3186,10 @@ def admin_ai_price_update(price_id: int, body: AiPriceRow,
 def admin_ai_price_add(body: AiPriceRow, admin: User = Depends(require_admin),
                        db: Session = Depends(get_session)) -> dict:
     """Adding a price is what releases tokens that were held uncounted."""
-    row = AiModelPrice(service=svc.AI_SERVICE, model=body.model,
+    service = body.service or svc.AI_SERVICE
+    if service not in aipricing.SERVICES:
+        fail(400, "bad_service", "Unknown AI service.")
+    row = AiModelPrice(service=service, model=body.model,
                        input_usd=body.input_usd,
                        cache_write_5m_usd=body.cache_write_5m_usd,
                        cache_write_1h_usd=body.cache_write_1h_usd,

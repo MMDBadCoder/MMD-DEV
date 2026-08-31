@@ -59,6 +59,9 @@ PREFIX = "mmd-vhost-"
 OLD_PREFIX = "mmd-hermes-"     # what mmd-hermes-vhosts.py wrote; cleaned up
 
 HERMES_PORT = 9119
+# The OpenClaw gateway's fixed port inside a workspace. Must agree with
+# provisioner.OPENCLAW_PORT and app.OPENCLAW_PORT.
+OPENCLAW_PORT = 18789
 
 # A failed issuance is retried on a growing delay. Let's Encrypt's limit is per
 # registered domain, so one customer whose DNS is wrong could otherwise spend
@@ -86,6 +89,61 @@ SAFE = re.compile(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?$")
 def sh(*args: str, timeout: int = 300) -> tuple[int, str]:
     p = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
     return p.returncode, (p.stdout + p.stderr).strip()
+
+
+# The platform's own ports, listed rather than detected.
+#
+# Detection alone is not enough, and the reason is worth recording. The control
+# plane binds 127.0.0.1:8000; nginx binds 0.0.0.0:8000 for a customer who
+# published internal port 8000. Both SUCCEED - each sets SO_REUSEADDR, and a
+# wildcard and a loopback bind can coexist - and loopback keeps reaching the API
+# only because the more specific bind wins. That is luck, not design: it depends
+# on which process started first, and if the API ever restarted into a taken
+# socket its own requests would be proxied into a customer's workspace.
+#
+# So these are refused outright, whoever happens to hold them at the time.
+PLATFORM_PORTS = {
+    22,     # the operator's sshd - the way back into the host
+    53,     # the bridge's DNS
+    80, 443,  # the dashboard itself
+    5432,   # PostgreSQL
+    8000,   # mmd-api (uvicorn, loopback)
+    8443,   # the Incus API
+    9101,   # Incus metrics
+}
+
+
+def foreign_listeners() -> set[int]:
+    """TCP ports held by something OTHER than nginx.
+
+    The distinction matters and a plain bind probe cannot make it. nginx
+    already listens on every application port this reconciler has published,
+    so "is the port busy" answers yes for exactly the ports that are working -
+    and skipping those withdraws the routes it just created. Measured: a first
+    version of this check removed two customers' live addresses on the pass
+    that introduced it.
+
+    What must be skipped is a port some OTHER service holds - uvicorn on 8000,
+    sshd on 22, Postgres on 5432 - because nginx cannot bind it, and a failed
+    bind makes nginx abandon the entire reload rather than that one server
+    block, freezing every later change including certbot's renewal hook.
+    """
+    rc, out = sh("ss", "-tlnpH")
+    if rc != 0:
+        return set()
+    busy: set[int] = set()
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) < 4:
+            continue
+        local = parts[3]
+        try:
+            port = int(local.rsplit(":", 1)[1])
+        except (IndexError, ValueError):
+            continue
+        if "nginx" not in line:
+            busy.add(port)
+    return busy
 
 
 def load_env(path: str = "/etc/mmd/api.env") -> None:
@@ -308,6 +366,10 @@ def desired(db, CONFIG, usernames) -> dict[str, list[tuple[str, str, int, int | 
     from mmd.models import ExposedPort, PortKind, Workspace
     from sqlalchemy import select
 
+    # Computed ONCE per pass rather than probed per port: one `ss` call instead
+    # of a bind attempt each, and - the part that matters - it can tell nginx's
+    # own listeners from another service's.
+    busy = PLATFORM_PORTS | foreign_listeners()
     out: dict[str, list[tuple[str, str, int]]] = {}
     domain = CONFIG.domain
 
@@ -323,9 +385,27 @@ def desired(db, CONFIG, usernames) -> dict[str, list[tuple[str, str, int, int | 
             host = usernames.hermes_host(user.username, domain)
             out.setdefault(user.username, []).append(
                 (host, f"10.42.0.{ws.idx + 10}", HERMES_PORT, None))
+        # OpenClaw: the same rule as Hermes, and for the same reason. `enabled`
+        # is only the customer's intent; `installed` is the worker having
+        # actually started the gateway, and the password is what makes the
+        # address usable at all. Publishing on intent alone would serve a 502
+        # at a name we had just told the customer was ready.
+        if (ws.openclaw_enabled and ws.openclaw_installed
+                and ws.openclaw_password):
+            out.setdefault(user.username, []).append(
+                (f"openclaw.{user.username}.{domain}",
+                 f"10.42.0.{ws.idx + 10}", OPENCLAW_PORT, None))
         for port in db.execute(select(ExposedPort).where(
                 ExposedPort.workspace_id == ws.id,
                 ExposedPort.kind == PortKind.USER)).scalars():
+            # Never emit `listen <port>;` for a port the host already holds.
+            # nginx cannot bind it, and a failed bind abandons the ENTIRE
+            # reload - freezing every later configuration change, certbot's
+            # renewal hook included, not merely losing this one address.
+            if port.internal_port in busy:
+                print(f"  skipping {user.username}:{port.internal_port}"
+                      f" - reserved by the host or already in use")
+                continue
             host = usernames.application_host(
                 user.username, port.internal_port, domain)
             out.setdefault(user.username, []).append(
@@ -429,7 +509,15 @@ def main() -> int:
         print(f"  nginx -t FAILED, rolled back and did not reload:\n{out}")
         return 1
 
-    sh("systemctl", "reload", "nginx")
+    # CHECKED, not fired and forgotten. `nginx -t` validates syntax without
+    # binding anything, so a configuration that cannot take a port passes the
+    # test and then fails the reload - and this used to print "nginx reloaded"
+    # and mark the addresses ready regardless, which is how a broken reload
+    # went unnoticed for days on the live host.
+    rc, out = sh("systemctl", "reload", "nginx")
+    if rc != 0:
+        print(f"  nginx reload FAILED, addresses left unpublished:\n{out[-500:]}")
+        return 1
     with SessionLocal() as db:
         mark_readiness(db, published_hosts, CONFIG.domain, usernames)
     print("  nginx reloaded")

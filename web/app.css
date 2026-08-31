@@ -657,3 +657,95 @@ a.card.attn:hover { border-color: var(--brand); }
   .toast-wrap{inset-inline:10px;bottom:76px}.toast{max-width:none}
   .tabs2{overflow-x:auto;scrollbar-width:none}.tabs2 a{min-height:44px}
 }
+
+/* --- disk usage chip (admin users list) --------------------------------
+   Four bands rather than a gradient: an operator scanning a column wants to
+   spot the row that needs attention, not read a shade. The thresholds match
+   the ones the worker acts on, so the colour here and the warning the customer
+   receives are the same fact. */
+.diskchip {
+  display: inline-flex; align-items: baseline; gap: 3px;
+  padding: 2px 8px; border-radius: 999px;
+  font-size: 12px; font-variant-numeric: tabular-nums;
+  border: 1px solid transparent;
+}
+.diskchip b { font-weight: 600; }
+.diskchip.ok   { background: color-mix(in srgb, var(--ok, #15803d) 12%, transparent);
+                 border-color: color-mix(in srgb, var(--ok, #15803d) 35%, transparent); }
+.diskchip.mid  { background: color-mix(in srgb, var(--brand, #2563eb) 12%, transparent);
+                 border-color: color-mix(in srgb, var(--brand, #2563eb) 35%, transparent); }
+.diskchip.warn { background: color-mix(in srgb, var(--warn, #b45309) 16%, transparent);
+                 border-color: color-mix(in srgb, var(--warn, #b45309) 45%, transparent); }
+.diskchip.bad  { background: color-mix(in srgb, var(--bad, #b91c1c) 18%, transparent);
+                 border-color: color-mix(in srgb, var(--bad, #b91c1c) 55%, transparent);
+                 font-weight: 600; }
+
+/* --- storage distribution ----------------------------------------------
+   Marks are thin and the grid is absent: with a name beside every bar and the
+   value printed at its end, gridlines would be decoration competing with the
+   data. Data-ends are rounded 4px and anchored flat to the baseline, so length
+   still reads honestly from zero. */
+.distchart { display: grid; gap: 8px; }
+.distrow {
+  display: grid; align-items: center; gap: 12px;
+  grid-template-columns: minmax(90px, 150px) 1fr auto auto;
+}
+.distname { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.distname a { color: var(--ink); }
+.disttrack {
+  height: 12px; border-radius: 6px; overflow: hidden;
+  background: var(--surface-2);
+}
+.distbar {
+  height: 100%; border-radius: 0 4px 4px 0; min-width: 3px;
+  background: var(--brand);
+  transition: width .2s ease;
+}
+/* One hue for the series; status recolours a bar only where there IS a status,
+   and never carries the meaning alone - the chip beside it has an icon and the
+   number. */
+.distbar.warn { background: var(--warn); }
+.distbar.bad  { background: var(--bad); }
+.distval { font-size: 12.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* The pool as one bar. A 2px surface gap separates the segments so two filled
+   areas never touch and read as one. */
+.poolbar {
+  display: flex; height: 22px; border-radius: 8px; overflow: hidden;
+  background: var(--surface-2); gap: 2px;
+}
+.poolbar .seg { height: 100%; min-width: 2px; }
+.poolbar .seg.data  { background: var(--brand); }
+.poolbar .seg.data.warn { background: var(--warn); }
+.poolbar .seg.data.bad  { background: var(--bad); }
+.poolbar .seg.other { background: color-mix(in srgb, var(--ink) 28%, transparent); }
+.poolkey { display: flex; flex-wrap: wrap; gap: 14px; margin: 8px 0 12px; color: var(--muted); }
+.poolkey .sw {
+  display: inline-block; width: 10px; height: 10px; border-radius: 3px;
+  margin-inline-end: 6px; vertical-align: -1px;
+}
+.poolkey .sw.data  { background: var(--brand); }
+.poolkey .sw.other { background: color-mix(in srgb, var(--ink) 28%, transparent); }
+.poolkey .sw.free  { background: var(--surface-2); border: 1px solid var(--border); }
+
+/* The chip gains an icon in the two states colour alone cannot separate:
+   validate_palette.js scores warn against bad at DeltaE 12.8 for normal vision
+   and 3.3 for deuteranopia, both under the floor. */
+.diskchip svg { width: 12px; height: 12px; margin-inline-end: 3px; vertical-align: -2px; }
+
+@media (max-width: 640px) {
+  .distrow { grid-template-columns: minmax(70px, 1fr) 1fr auto; }
+  .distrow > :last-child { grid-column: 2 / -1; }
+}
+
+/* Both Telegram sections share one shell, so the header spacing lives here
+   rather than being set twice with slightly different numbers. */
+.telegram-option h3 {
+  display: flex; align-items: center; gap: 7px; margin: 0;
+}
+.telegram-option h3 svg { flex: 0 0 auto; opacity: .8; }
+.telegram-option .btn svg { flex: 0 0 auto; }
+/* The action sits the same distance below the body on both tabs, whatever
+   that body happens to be - a note, a form, or the allowlist line. Previously
+   each tab spaced its own button and they did not match. */
+.telegram-option .tg-actions { margin-top: 14px; }

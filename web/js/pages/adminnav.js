@@ -15,10 +15,14 @@ export const SECTIONS = [
   { key: "",            path: "/console/admin",            ic: "sliders" },
   { key: "users",       path: "/console/admin/users",      ic: "users" },
   { key: "policy",      path: "/console/admin/policy",     ic: "chart" },
+  { key: "storage",     path: "/console/admin/storage",    ic: "folder" },
   { key: "openrouter",  path: "/console/admin/openrouter", ic: "plug" },
-  { key: "claude",      path: "/console/admin/claude",     ic: "sparkle" },
-  { key: "hermes",      path: "/console/admin/hermes",     ic: "shield" },
+  { key: "claude",      path: "/console/admin/claude",     ic: "claude" },
+  { key: "codex",       path: "/console/admin/codex",      ic: "codex" },
+  { key: "hermes",      path: "/console/admin/hermes",     ic: "hermes" },
+  { key: "openclaw",    path: "/console/admin/openclaw",   ic: "openclaw" },
   { key: "tickets",     path: "/console/admin/tickets",    ic: "chat" },
+  { key: "backup",      path: "/console/admin/backup",     ic: "archive" },
 ];
 
 /* `active` is the section key, not a path, so a detail route like

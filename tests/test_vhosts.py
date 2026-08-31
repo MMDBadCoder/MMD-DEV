@@ -84,8 +84,12 @@ def test_a_customer_with_no_username_is_skipped(vh, db):
     assert vh.desired(s, _cfg(), usernames) == {}
 
 
-def test_each_published_port_gets_a_distinct_https_hostname(vh, db):
+def test_each_published_port_gets_a_distinct_https_hostname(vh, db, monkeypatch):
     from mmd import usernames
+    # Stated rather than inherited from whatever this machine happens to be
+    # running: `desired` skips ports another service holds, and 8080 is a very
+    # ordinary thing for a host to be using.
+    monkeypatch.setattr(vh, "foreign_listeners", lambda: set())
     s, ws, _ = db
     s.add(ExposedPort(workspace_id=ws.id, internal_port=8080,
                       external_port=22418, protocol="both", kind=PortKind.USER,
@@ -95,6 +99,34 @@ def test_each_published_port_gets_a_distinct_https_hostname(vh, db):
     wanted = vh.desired(s, _cfg(), usernames)
 
     assert wanted["ali"] == [("ali.mmd-ai.ir", "10.42.0.13", 8080, 8080)]
+
+
+def test_a_port_the_host_itself_listens_on_gets_no_hostname(vh, db, monkeypatch):
+    """nginx serves these with `listen <internal_port>;`. It cannot bind a port
+    the host already holds - and a failed bind makes nginx ABANDON THE WHOLE
+    RELOAD, keeping the previous configuration and silently freezing every
+    later change, certbot's renewal hook included.
+
+    Measured on the live host: a customer published internal port 8000, which
+    is uvicorn's, and every reload from that moment failed with
+    `bind() to 0.0.0.0:8000 failed (98: Address already in use)`.
+
+    The port itself is untouched - it still works by number through its DNAT
+    rule. Only the second, hostname address is withheld.
+    """
+    from mmd import usernames
+    monkeypatch.setattr(vh, "foreign_listeners", lambda: {8000})
+    s, ws, _ = db
+    s.add(ExposedPort(workspace_id=ws.id, internal_port=8000,
+                      external_port=22418, protocol="both", kind=PortKind.USER,
+                      device="", note=None))
+    s.add(ExposedPort(workspace_id=ws.id, internal_port=5173,
+                      external_port=22419, protocol="both", kind=PortKind.USER,
+                      device="", note=None))
+    s.commit()
+
+    wanted = vh.desired(s, _cfg(), usernames)
+    assert wanted["ali"] == [("ali.mmd-ai.ir", "10.42.0.13", 5173, 5173)]
 
 
 def test_web_readiness_follows_the_exact_application_hostname(vh, db):
@@ -197,3 +229,73 @@ def test_a_config_that_parses_is_written_and_reloaded(vh, tmp_path, monkeypatch)
 
 def test_the_weekly_issuance_budget_stays_under_the_lets_encrypt_limit(vh):
     assert vh.ISSUE_BUDGET < 50
+
+
+def test_a_reload_that_fails_is_not_reported_as_success(vh, tmp_path, monkeypatch):
+    """`nginx -t` validates syntax WITHOUT binding anything, so a configuration
+    that cannot take a port passes the test and then fails the reload. This
+    used to print "nginx reloaded" and mark the addresses ready regardless,
+    which is how a broken reload went unnoticed for days on the live host.
+    """
+    monkeypatch.setattr(vh, "NGINX_DIR", tmp_path)
+    monkeypatch.setattr(vh, "STATE_DIR", tmp_path / "state")
+    monkeypatch.setattr(vh, "desired",
+                        lambda db, cfg, u: {"ali": [("hermes.ali.x", "10.42.0.13", 9119, None)]})
+    monkeypatch.setattr(vh, "obtain_wildcard", lambda *a: "wildcard-ali")
+
+    marked = []
+    monkeypatch.setattr(vh, "mark_readiness",
+                        lambda *a, **k: marked.append(True))
+
+    def fake_sh(*args, **kw):
+        # `nginx -t` passes; the reload does not.
+        if args[:2] == ("nginx", "-t"):
+            return (0, "")
+        if args[:2] == ("systemctl", "reload"):
+            return (1, "bind() to 0.0.0.0:8000 failed (98: Address already in use)")
+        return (0, "")
+
+    monkeypatch.setattr(vh, "sh", fake_sh)
+
+    assert vh.main() == 1
+    assert marked == [], "addresses were marked ready after a failed reload"
+
+
+def test_nginxs_own_listeners_are_not_mistaken_for_a_conflict(vh, monkeypatch):
+    """nginx already listens on every application port this reconciler has
+    published, so "is the port busy" answers yes for exactly the ports that are
+    WORKING. A first version of this check skipped those and withdrew two
+    customers' live addresses on the pass that introduced it."""
+    sample = (
+        'LISTEN 0 511 0.0.0.0:8080 0.0.0.0:* users:(("nginx",pid=1,fd=13))\n'
+        'LISTEN 0 2048 127.0.0.1:8000 0.0.0.0:* users:(("uvicorn",pid=2,fd=14))\n'
+        'LISTEN 0 4096 [::]:22 [::]:* users:(("sshd",pid=3,fd=4))\n'
+    )
+    monkeypatch.setattr(vh, "sh", lambda *a, **k: (0, sample))
+    busy = vh.foreign_listeners()
+    assert 8000 in busy and 22 in busy
+    assert 8080 not in busy, "nginx's own listener was treated as a conflict"
+
+
+def test_an_unreadable_listener_table_blocks_nothing(vh, monkeypatch):
+    """If `ss` cannot be run there is no evidence of a conflict, and inventing
+    one would withdraw every customer's address at once."""
+    monkeypatch.setattr(vh, "sh", lambda *a, **k: (1, "ss: not found"))
+    assert vh.foreign_listeners() == set()
+
+
+def test_the_platforms_own_ports_are_refused_whoever_holds_them(vh, db, monkeypatch):
+    """Detection alone is not enough. The control plane binds 127.0.0.1:8000 and
+    nginx binds 0.0.0.0:8000 for a customer who published 8000 - both SUCCEED,
+    because each sets SO_REUSEADDR, and loopback keeps reaching the API only
+    because the more specific bind wins. Observed on the live host. These ports
+    are therefore refused outright rather than probed for."""
+    from mmd import usernames
+    monkeypatch.setattr(vh, "foreign_listeners", lambda: set())
+    s, ws, _ = db
+    for i, port in enumerate((8000, 443, 22, 5432)):
+        s.add(ExposedPort(workspace_id=ws.id, internal_port=port,
+                          external_port=23000 + i, protocol="both",
+                          kind=PortKind.USER, device="", note=None))
+    s.commit()
+    assert vh.desired(s, _cfg(), usernames) == {}

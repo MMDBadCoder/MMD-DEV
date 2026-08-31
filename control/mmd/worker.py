@@ -20,11 +20,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import secrets
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import case, delete, or_, select, update
 
+from . import backup as backuplib
 from . import hermes
+from . import notifications
 from . import operations as oplib
 from . import ports as portalloc
 from . import service as svc
@@ -299,6 +302,44 @@ def meter_ai_once() -> None:
                             "until one is", ws.incus_project, ", ".join(out["unpriced"]))
 
 
+def meter_codex_once() -> None:
+    """The same pass as meter_ai_once, for the other host-authenticated CLI.
+
+    Separate rather than a loop over both services because the two can fail
+    independently: a Codex scanner error must not stop Claude being billed, and
+    the log line has to name which supplier went wrong.
+
+    Codex starts with NO prices configured, so until an operator sets them this
+    charges nothing and reports the models it saw as unpriced. That is the
+    deliberate direction to fail in - tokens are held uncounted and bill
+    correctly once a price exists, rather than being billed at a rate nobody
+    chose or given away silently.
+    """
+    with SessionLocal() as db:
+        for ws in db.scalars(select(Workspace).where(
+                Workspace.state == WorkspaceState.ON)):
+            resp = svc.call_provisioner({"verb": "codex_usage", "idx": ws.idx},
+                                        timeout=300)
+            if not resp.get("ok"):
+                log.warning("codex usage scan failed for %s: %s",
+                            ws.incus_project, str(resp.get("error"))[:200])
+                continue
+            try:
+                out = svc.meter_ai_usage(db, ws, resp, service=svc.CODEX_SERVICE)
+            except Exception:  # noqa: BLE001
+                log.exception("codex metering failed for %s", ws.incus_project)
+                db.rollback()
+                continue
+            if out.get("charged_micro"):
+                log.info("%s: Codex usage %.2f Toman (%s)", ws.incus_project,
+                         out["charged_micro"] / MICRO,
+                         ", ".join(f"{m} {v:.2f}" for m, v in out["models"].items()))
+            if out.get("unpriced"):
+                log.warning("%s: no Codex price set for model(s) %s - tokens left "
+                            "uncounted until one is", ws.incus_project,
+                            ", ".join(out["unpriced"]))
+
+
 HERMES_EVERY = 60          # 60 x 5s = 5 minutes, same cadence as Claude metering
 POLICY_EVERY = 360         # 360 x 5s = 30 minutes; the catalogue changes slowly
 
@@ -489,6 +530,232 @@ def _hermes_install(db, ws: Workspace) -> None:
     db.commit()
 
 
+GIB = 1024 ** 3
+
+
+async def disk_once() -> None:
+    """Sample every workspace's real disk use, warn its owner, guard the pool.
+
+    Three jobs, one ZFS pass, because they need the same numbers.
+
+    Why the pool guard exists at all
+    --------------------------------
+    Every workspace has a hard `refquota`, so none of them can overrun its own
+    allowance - a customer who fills up gets write errors inside their own
+    machine and nobody else notices. What the quota does NOT bound is the SUM:
+    once reservations are dropped the allowances are deliberately overcommitted,
+    and enough customers filling up at once exhausts the pool.
+
+    A full ZFS pool is not a polite failure. It does not fall on the tenant who
+    caused it - every workspace loses writes simultaneously, and on this host
+    the control plane's own PostgreSQL is on the same disk. So the guard stops
+    the largest consumers to buy space back, which is a bad outcome deliberately
+    chosen over a worse one.
+
+    Stopping is ordered by CONSUMPTION, not by who grew last: the point is to
+    free the most space with the fewest machines stopped, and "most recently
+    grown" would punish activity rather than size.
+    """
+    resp = svc.call_provisioner({"verb": "disk_usage", "idx": 1}, timeout=120)
+    if not resp.get("ok"):
+        log.warning("disk usage scan failed: %s", str(resp.get("error"))[:200])
+        return
+
+    per_ws = resp.get("workspaces") or {}
+    pool = resp.get("pool") or {}
+    free_gib = (pool.get("available") or 0) / GIB
+
+    with SessionLocal() as db:
+        rows = list(db.scalars(select(Workspace)))
+        by_idx = {str(w.idx): w for w in rows}
+
+        for idx, d in per_ws.items():
+            ws = by_idx.get(idx)
+            if ws is None:
+                continue
+            used = int(d.get("root_used") or 0) + int(d.get("docker_used") or 0)
+            ws.disk_used_mib = used // (1024 * 1024)
+            ws.disk_checked_at = svc.now()
+
+            limit_mib = ws.disk_gib * 1024
+            pct = (ws.disk_used_mib / limit_mib * 100) if limit_mib else 0
+            key = f"disk:{ws.id}"
+            if pct >= CONFIG.disk_warn_percent:
+                notifications.emit(
+                    db, user_id=ws.user_id, kind="disk", code="disk_nearly_full",
+                    severity="warn" if pct < 100 else "error",
+                    detail={"percent": round(pct), "used_mib": ws.disk_used_mib,
+                            "limit_gib": ws.disk_gib},
+                    href="/console/files", dedupe_key=key)
+            else:
+                notifications.resolve(db, ws.user_id, key, svc.now())
+        db.commit()
+
+        if free_gib >= CONFIG.pool_floor_gib:
+            return
+
+        # --- the pool is low ------------------------------------------------
+        log.error("pool free %.1f GiB is below the %.1f GiB floor - stopping "
+                  "the largest running workspaces", free_gib, CONFIG.pool_floor_gib)
+        running = sorted(
+            (w for w in rows if w.state == WorkspaceState.ON),
+            key=lambda w: -(w.disk_used_mib or 0))
+
+        client = _incus()
+        try:
+            for ws in running:
+                if free_gib >= CONFIG.pool_floor_gib:
+                    break
+                try:
+                    await client.stop(ws.instance, ws.incus_project)
+                except IncusError as exc:
+                    log.error("pool guard could not stop %s: %s",
+                              ws.incus_project, exc)
+                    continue
+                svc.settle_elapsed(db, ws, powered_on=True)
+                ws.state = WorkspaceState.OFF
+                ws.desired_on = False
+                ws.period_start = None
+                svc.disarm_auto_stop(ws)
+                notifications.emit(
+                    db, user_id=ws.user_id, kind="disk", code="stopped_pool_full",
+                    severity="error",
+                    detail={"used_mib": ws.disk_used_mib, "limit_gib": ws.disk_gib},
+                    href="/console/files", dedupe_key=f"poolstop:{ws.id}")
+                svc.audit(db, None, "disk_pool_stop", ws.incus_project,
+                          used_mib=ws.disk_used_mib, pool_free_gib=round(free_gib, 1))
+                db.commit()
+                log.warning("stopped %s to protect the pool (%d MiB used)",
+                            ws.incus_project, ws.disk_used_mib or 0)
+                # Stopping does not itself free space; it stops the machine
+                # WRITING more. Re-read rather than assume a figure.
+                again = svc.call_provisioner({"verb": "disk_usage", "idx": 1},
+                                             timeout=120)
+                free_gib = ((again.get("pool") or {}).get("available") or 0) / GIB
+        finally:
+            await client.aclose()
+
+
+def openclaw_once() -> None:
+    """Make each workspace match what its customer asked for.
+
+    The same shape as the Hermes pass and for the same reason: installing means
+    an npm download and a service start inside the workspace, which is minutes
+    of work. Retried every pass, so a customer who enables it while powered off
+    gets it the moment they power on, and a failed install heals itself.
+    """
+    with SessionLocal() as db:
+        for ws in db.scalars(select(Workspace)):
+            want = bool(ws.openclaw_enabled)
+            if not want and not ws.openclaw_installed:
+                continue
+            if ws.state != WorkspaceState.ON:
+                continue
+
+            if not want:
+                resp = svc.call_provisioner({"verb": "ai_openclaw", "idx": ws.idx,
+                                             "action": "disable"}, timeout=300)
+                if resp.get("ok"):
+                    ws.openclaw_installed = False
+                    ws.openclaw_password = None
+                    ws.openclaw_telegram_installed = False
+                    ws.openclaw_error = None
+                    ws.openclaw_telegram_error = None
+                    log.info("openclaw removed for ws %s", ws.id)
+                    db.commit()
+                continue
+
+            # The password is part of "installed", not a detail beside it: it is
+            # what the config was written with and what the customer signs in
+            # with, so a row that has one without the other is not finished.
+            #
+            # These two CAN disagree. Disabling clears the password immediately
+            # so the interface stops showing a secret, while `installed` is only
+            # cleared once the worker has actually removed the service - so a
+            # customer who switches off and straight back on lands here with
+            # installed=True and no password. Checking `installed` alone made
+            # that state skip forever: the gateway was never reinstalled, no
+            # password was ever generated, and the page said "installing" for
+            # good.
+            if (ws.openclaw_installed and ws.openclaw_password
+                    and not ws.openclaw_error
+                    # A Telegram toggle changes the config, so it has to
+                    # reconcile like any other intent rather than being skipped
+                    # as "already installed".
+                    and ws.openclaw_telegram_installed == bool(ws.openclaw_telegram_enabled)):
+                continue
+            if not ws.hermes_key:
+                # It spends the managed OpenRouter key. Waiting is right: the
+                # key arrives on its own reconciler and this pass runs again.
+                continue
+
+            # Generated once and kept, so the address a customer wrote down
+            # keeps working across a repair or a re-install.
+            if not ws.openclaw_password:
+                ws.openclaw_password = secrets.token_urlsafe(18)
+                db.commit()
+
+            try:
+                from . import openclaw as oclib
+                from . import usernames as unames
+                resp = svc.call_provisioner({
+                    "verb": "ai_openclaw", "idx": ws.idx, "action": "install",
+                    "openrouter_key": ws.hermes_key,
+                    "password": ws.openclaw_password,
+                    # Without a default model the gateway starts and quietly
+                    # answers with whatever OpenClaw's own default is, which
+                    # may not be reachable with this customer's key.
+                    "model": oclib.default_model(db),
+                    "telegram_enabled": bool(ws.openclaw_telegram_enabled),
+                    # The account-level token, the same one Hermes reuses. A
+                    # customer sets it once under Account and both services
+                    # take it from there.
+                    "telegram_token": (ws.user.telegram_bot_token
+                                       if ws.user else None),
+                    # Who may talk to the bot. Without it the provisioner
+                    # refuses to enable the channel rather than configuring a
+                    # bot that answers any Telegram user who finds it - and
+                    # this one is wired to an agent with a shell in the
+                    # customer's workspace.
+                    "telegram_users": (ws.user.telegram_user_id
+                                       if ws.user else None),
+                    # The gateway rejects any browser Origin it was not told
+                    # about, so the address we publish and the address it
+                    # accepts have to be the same string.
+                    "origin": "https://" + unames.openclaw_host(
+                        ws.user.username, CONFIG.domain)},
+                    timeout=1800)
+            except Exception as e:  # noqa: BLE001
+                log.warning("openclaw install ws %s: %s", ws.id, e)
+                continue
+
+            if resp.get("ok"):
+                ws.openclaw_installed = True
+                # Reported by the machine, not assumed from the request: the
+                # difference between "we asked for Telegram" and "Telegram is
+                # running" is the whole reason this is a separate column.
+                ws.openclaw_telegram_installed = bool(resp.get("telegram"))
+                ws.openclaw_error = None
+                # The gateway came up but the channel did not. Left unsaid,
+                # this reconciles forever behind a "preparing" pill, because
+                # enabled and installed never converge and nothing explains
+                # why. Hermes reports this; so does OpenClaw now.
+                ws.openclaw_telegram_error = (
+                    (resp.get("telegram_error") or "telegram channel failed")[-300:]
+                    if ws.openclaw_telegram_enabled
+                    and not ws.openclaw_telegram_installed else None)
+                log.info("openclaw gateway up for ws %s", ws.id)
+            else:
+                # Surfaced to the customer rather than only logged: "enabled but
+                # the dashboard never appeared" is otherwise indistinguishable
+                # from a hang.
+                ws.openclaw_installed = False
+                ws.openclaw_error = (resp.get("error") or resp.get("output")
+                                     or "install failed")[-300:]
+                log.warning("openclaw install ws %s failed: %s", ws.id, ws.openclaw_error)
+            db.commit()
+
+
 def prune_samples_once() -> None:
     cutoff = svc.now() - timedelta(days=SAMPLE_RETENTION_DAYS)
     with SessionLocal() as db:
@@ -614,6 +881,15 @@ async def _factory_reset(db, op: Operation, ws: Workspace) -> None:
     # image rebuild later succeeds. Clear intent first so another worker pass
     # cannot mint a replacement key after this one has been revoked.
     ws.hermes_enabled = False
+    # OpenClaw goes with it, and for a sharper reason: it lives entirely inside
+    # the filesystem about to be destroyed, and it holds a copy of the
+    # OpenRouter key that is revoked below. Leaving the flags set would have the
+    # worker reinstall it on the rebuilt machine with a key that no longer
+    # exists, and present the result as ready.
+    ws.openclaw_enabled = False
+    ws.openclaw_installed = False
+    ws.openclaw_password = None
+    ws.openclaw_error = None
     db.commit()
     if ws.hermes_key_hash:
         oplib.progress(db, op, "removing_ai")
@@ -809,6 +1085,27 @@ async def reconcile_once() -> None:
         await client.aclose()
 
 
+async def backup_once() -> None:
+    """Send a database backup if one is owed.
+
+    The due check is a settings read, so it runs every tick and the configured
+    interval is honoured to within a tick rather than rounded up to the next
+    settlement. The backup itself is a dump plus an upload - seconds to minutes
+    of blocking work - so it goes to a thread; running it inline would stall
+    metering, auto-stop and every reconciler behind it.
+    """
+    with SessionLocal() as db:
+        if not backuplib.due(db):
+            return
+    # A fresh session inside the thread: this one is used from another thread
+    # and outlives the check above by however long the upload takes.
+    def _run() -> None:
+        with SessionLocal() as db:
+            backuplib.run_once(db)
+
+    await asyncio.to_thread(_run)
+
+
 async def main() -> None:
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -824,16 +1121,30 @@ async def main() -> None:
                 await meter_once()
             if tick % AI_EVERY == 0:
                 meter_ai_once()
+                meter_codex_once()
             # Provisioning is checked every tick so a toggle takes seconds;
             # metering stays on the five-minute cadence money moves at.
             if tick % HERMES_EVERY == 0:
                 hermes_once(sync_policy=(tick % POLICY_EVERY == 0))
             else:
                 hermes_once(meter_usage=False)
+            # Same cadence as the Hermes provisioning check: a toggle should
+            # take seconds to be picked up, and the pass is a no-op for every
+            # workspace that has not asked for it.
+            openclaw_once()
             # Every tick, not every settlement: a machine that should have
             # stopped at 12h00m must not keep billing until the next five-minute
             # boundary. The query is indexed and matches almost nothing.
             await auto_stop_once()
+            # Every tick for the same reason as auto-stop: the interval is the
+            # admin's, and a backup set to 15 minutes should not wait for a
+            # five-minute settlement boundary. Almost every call returns
+            # immediately from the due check.
+            await backup_once()
+            # Every settlement, not every tick: a ZFS pass over the pool is
+            # cheap but not free, and disk fills over minutes, not seconds.
+            if tick % SETTLE_EVERY == 0:
+                await disk_once()
             if tick % SETTLE_EVERY == 0:
                 await settle_once()
                 await lifecycle_once()

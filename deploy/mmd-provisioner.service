@@ -40,6 +40,20 @@ Environment=INCUS_CONF=/run/mmd/incus-conf
 BindReadOnlyPaths=/root/.claude:/var/lib/mmd/host-claude/.claude
 Environment=MMD_CLAUDE_HOST_HOME=/var/lib/mmd/host-claude
 
+# --- the platform's Codex sign-in ------------------------------------------
+# Identical arrangement, identical reasoning. Missing this is not a subtle
+# failure: with /root hidden the provisioner simply finds no auth.json and the
+# page tells the customer the platform is not signed in, while `codex` works
+# perfectly for the operator one shell away.
+#
+# The whole ~/.codex directory rather than the single file, again because the
+# CLI refreshes its token by writing a new file and renaming over the old one -
+# a bind mount of a FILE would keep pointing at the replaced inode and serve a
+# stale token forever. What may be read out of it is narrowed in code: see
+# CODEX_AUTH_FILE and CODEX_NEVER_COPY in provisioner.py.
+BindReadOnlyPaths=/root/.codex:/var/lib/mmd/host-codex/.codex
+Environment=MMD_CODEX_HOST_HOME=/var/lib/mmd/host-codex
+
 ExecStart=/usr/bin/python3 /opt/mmd/control/provisioner/provisioner.py
 Restart=on-failure
 RestartSec=3

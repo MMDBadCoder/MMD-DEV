@@ -84,6 +84,38 @@ def _host_port_free(port: int) -> bool:
     return True
 
 
+def host_binds_tcp(port: int) -> bool:
+    """Does something on this host already listen on this TCP port?
+
+    Asked about a customer's INTERNAL port, and only to decide whether the
+    hostname route can exist. `mmd-vhosts` serves that route with
+    `listen <port>;`, so if the host already holds the port nginx cannot bind
+    it - and an nginx that cannot bind ABANDONS THE WHOLE RELOAD, keeping the
+    previous configuration. That does not just lose one customer's address: it
+    silently freezes every later configuration change, including certbot's
+    renewal hook.
+
+    Measured on the live host: a customer published internal port 8000, which
+    is uvicorn's, and every reload from that moment failed with
+    `bind() to 0.0.0.0:8000 failed (98: Address already in use)`.
+
+    TCP only, deliberately. `_host_port_free` also probes UDP because a
+    reservation forwards both, but nginx only ever needs the TCP half, and
+    refusing a hostname over a busy UDP port would be a false negative.
+    """
+    for family, addr in ((socket.AF_INET, ("0.0.0.0", port)),
+                         (socket.AF_INET6, ("::", port))):
+        s = socket.socket(family, socket.SOCK_STREAM)
+        try:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s.bind(addr)
+        except OSError:
+            return True
+        finally:
+            s.close()
+    return False
+
+
 def reserved_external(db: Session) -> set[int]:
     return set(db.scalars(select(ExposedPort.external_port)))
 

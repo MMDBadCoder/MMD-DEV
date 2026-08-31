@@ -65,12 +65,23 @@ storage_pools:
     # Applied to every volume in the pool:
     #   use_refquota  -> limit the volume's own data, not its snapshots, so a
     #                    snapshot cannot silently consume a tenant's quota
-    #   reserve_space -> set refreservation alongside refquota. THIS is what
-    #                    makes storage genuinely "reserved and theirs": a quota
-    #                    alone caps the owner but lets other tenants eat the
-    #                    pool's free space out from under them.
+    #   reserve_space -> whether to ALSO set a refreservation, holding the
+    #                    space empty whether or not the tenant uses it
+    #
+    # reserve_space is FALSE, which reverses an earlier decision. The reasoning
+    # then was that a quota alone caps the owner while letting other tenants eat
+    # the pool's free space from under them - still true, and the price of it
+    # was measured: ten workspaces held 60 GiB of a 67.5 GiB pool while writing
+    # 9.4 GiB between them. 50 GiB reserved to stay empty, and no eleventh
+    # customer could be created.
+    #
+    # What makes thin provisioning safe here is not optimism, it is that
+    # use_refquota stays TRUE - every workspace keeps a hard cap it cannot
+    # overrun - plus the pool guard in mmd-worker, which watches free space and
+    # stops the largest consumers before the pool can fill. Overcommitting
+    # without that guard would be the failure this comment used to warn about.
     volume.zfs.use_refquota: "true"
-    volume.zfs.reserve_space: "true"
+    volume.zfs.reserve_space: "false"
 networks:
 - name: ${INCUS_BRIDGE}
   type: bridge

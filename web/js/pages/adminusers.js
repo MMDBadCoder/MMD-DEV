@@ -11,6 +11,7 @@ import { get, post, del } from "../api.js";
 import { $, $$, icon, esc, fmtMoney, fmtNum, fmtFa, note, toast, stamp,
          confirmDialog, destructiveDialog, statePill } from "../ui.js";
 import { t, CURRENCY } from "../i18n.js";
+import { band } from "../disk.js";
 import { render, state } from "../main.js";
 import { adminHead } from "./adminnav.js";
 
@@ -43,6 +44,27 @@ export async function adminUsersPage() {
   const counts = Object.fromEntries(STATUSES.map((s) =>
     [s, s === "all" ? users.length : users.filter((u) => u.status === s).length]));
 
+  // Disk, coloured by how close a workspace is to its own allowance.
+  //
+  // The thresholds are the same ones the worker acts on, so the colour an
+  // operator sees and the point at which the customer gets warned are the same
+  // fact - a panel showing green while the worker is emailing about a full disk
+  // would be worse than showing nothing.
+  //
+  // Grey means "not sampled yet", which is different from zero and is worth
+  // distinguishing: a workspace that has never been measured is not a workspace
+  // that is empty.
+  const diskCell = (w) => {
+    if (!w) return `<span class="dim">—</span>`;
+    if (w.disk_used_mib == null) return `<span class="dim tiny">${t("adm.disk.unknown")}</span>`;
+    const pct = w.disk_percent ?? 0;
+    const b = band(pct);
+    const gib = w.disk_used_mib / 1024;
+    return `<span class="diskchip ${b.key}" title="${esc(t("adm.disk.of", fmtNum(gib, 1), w.disk_gb))}">
+      ${b.ic ? icon[b.ic] : ""}${fmtNum(gib, 1)}<span class="dim">/${fmtFa(w.disk_gb)}</span>
+      <b>${fmtFa(pct)}٪</b></span>`;
+  };
+
   const row = (u) => `<tr>
     <td><a class="ltr mono" style="font-size:13px"
         href="/console/admin/users/${u.id}">${esc(u.email)}</a>
@@ -59,6 +81,7 @@ export async function adminUsersPage() {
            fmtNum(u.workspace.cpu_cores, 1)} vCPU · ${
            fmtNum(u.workspace.memory_mb / 1024, 1)} GB</div>`
       : `<span class="dim">${t("adm.none")}</span>`}</td>
+    <td class="num nowrap">${diskCell(u.workspace)}</td>
     <td class="num">${fmtMoney(u.credits)}</td>
     <td class="num nowrap">
       ${u.status === "pending"
@@ -92,6 +115,7 @@ export async function adminUsersPage() {
       ${shown.length ? `<div class="table-wrap"><table>
         <thead><tr><th>${t("adm.account")}</th><th>${t("adm.status")}</th>
           <th>${t("adm.machine")}</th>
+          <th class="num">${t("adm.disk")}</th>
           <th class="num">${t("adm.credit")} <span class="dim">(${CURRENCY})</span></th>
           <th></th></tr></thead>
         <tbody>${shown.map(row).join("")}</tbody></table></div>`

@@ -152,6 +152,8 @@ is denied the file API. Paths are validated server-side.
 | Method | Path | Notes |
 |---|---|---|
 | `GET` | `/api/workspace/ai` | Claude Code state: installed, version, signed in, expiry |
+| `POST` | `/api/workspace/ai/codex` | `{action}` — `install` or `unlink`. Copies the host's allowlisted Codex grant into the workspace. `ai_host_unlinked` when the platform is not signed in |
+| `POST` | `/api/workspace/ai/openclaw` | `{action}` — `enable` or `disable`. Records intent; the worker installs. `needs_openrouter` until the managed key exists |
 | `POST` | `/api/workspace/ai/claude` | `{action: "install"｜"unlink"}`. Installs the CLI and carries the platform sign-in across |
 | `POST` | `/api/workspace/ai/hermes` | `{enabled, telegram_enabled?, telegram_token?, telegram_users?}`. Enables Hermes and optionally its Telegram gateway. A token and comma-separated numeric sender allowlist are required when first enabling Telegram; the token is never returned |
 
@@ -203,6 +205,17 @@ removes the gateway service and Telegram credentials without disabling Hermes.
 | `GET` | `/api/admin/metrics` | `?minutes=`. Actual usage summed across every workspace, in cores and GB, scaled against sellable capacity |
 | `GET`/`PUT` | `/api/admin/settings` | Rate card, overcommit ratios, host reserve |
 | `GET` | `/api/admin/activity` | Global audit log |
+| `GET` | `/api/admin/metrics/per-user` | Per-customer usage series |
+| `GET` | `/api/admin/operations` | In-flight and recent long operations |
+| `GET` | `/api/admin/storage` | Pool total/used/free, per-workspace usage, overcommit ratio |
+| `GET`/`PUT` | `/api/admin/openrouter` | Exchange rate, per-workspace spend cap, model guardrail |
+| `GET` | `/api/admin/hermes` | Adoption counts and the managed-key state |
+| `PUT` | `/api/admin/hermes` | Hermes' default model |
+| `GET`/`PUT` | `/api/admin/openclaw` | OpenClaw's default model (provider-prefixed) and adoption counts |
+| `GET` | `/api/admin/ai-pricing` | Per-service price tables; `?service=claude｜codex` |
+| `POST`/`PUT`/`DELETE` | `/api/admin/ai-pricing[/{id}]` | Add, change or remove a model price |
+| `GET`/`PUT` | `/api/admin/backup` | Database-backup schedule. The bot token is **never returned** — only `bot_token_set` and the last four characters |
+| `POST` | `/api/admin/backup/run` | Dump and send one backup immediately; returns `{ok, error?, config}` |
 | `GET` | `/api/admin/tickets` | Queue, filterable by status, with counts |
 | `GET` | `/api/admin/tickets/{id}` | |
 | `POST` | `/api/admin/tickets/{id}/messages` | Reply; marks the ticket answered |
@@ -231,3 +244,4 @@ Selected; each has Persian text in `web/js/i18n.js` under `err.<code>`.
 | `reset_confirm_mismatch`, `reset_bad_state`, `reset_failed` | Factory reset |
 | `ai_host_unlinked`, `ai_failed`, `ai_status_failed` | AI tools |
 | `no_such_ticket`, `too_many_tickets` | Support |
+| `backup_invalid` | Backup token, chat id, or enabling with neither stored |

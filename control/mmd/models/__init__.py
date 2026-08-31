@@ -72,6 +72,12 @@ class TxKind(str, enum.Enum):
     # with the first and be silently discarded as a duplicate. The customer
     # would simply never be billed for it, with nothing in the logs.
     CHARGE_HERMES = "charge_hermes"
+    # Codex, for the same reason and it is worth restating: the ledger's
+    # idempotency key is (workspace, period, kind). Billing Codex as CHARGE_AI
+    # would make a Codex charge landing in the same five-minute bucket as a
+    # Claude one collide with it and be silently discarded - the customer would
+    # simply never be billed for one of them, with nothing in the logs.
+    CHARGE_CODEX = "charge_codex"
     ADJUSTMENT = "adjustment"
 
 
@@ -125,7 +131,13 @@ class Workspace(Base):
     cpu_milli: Mapped[int] = mapped_column(Integer, default=1000)
     mem_mib: Mapped[int] = mapped_column(Integer, default=1024)
     root_gib: Mapped[int] = mapped_column(Integer, default=6)
-    docker_gib: Mapped[int] = mapped_column(Integer, default=4)
+    # 8, not 4. The volume is a thin zvol - `volsize` is a cap, not an
+    # allocation - so nine of them together occupied about a gigabyte while
+    # capped at four each. Four was small for real work: one `python:3.12` plus
+    # a couple of build layers reaches it, and the customer sees "no space left
+    # on device" from Docker while their root disk looks fine. Doubling it cost
+    # 0.5 MB per workspace, measured.
+    docker_gib: Mapped[int] = mapped_column(Integer, default=8)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -191,6 +203,40 @@ class Workspace(Base):
     # A key being ready is earlier than the hostname being safe to open.
     hermes_vhost_ready: Mapped[bool] = mapped_column(Boolean, default=False)
     hermes_error: Mapped[str | None] = mapped_column(Text)
+
+    # --- OpenClaw ----------------------------------------------------------
+    # Reconciled by the worker exactly like Hermes, and for the same reason:
+    # installing it means an npm download and a service start inside the
+    # workspace, which is minutes of work that must not be held open on a
+    # customer's HTTP request. The customer records intent here; the worker
+    # makes the machine match it.
+    # --- disk, observed ----------------------------------------------------
+    # What this workspace has ACTUALLY written, sampled on a timer. Stored so
+    # the admin panel and the pool guard can both read it without shelling out
+    # to ZFS on every page load, and so "when did we last look" is answerable.
+    disk_used_mib: Mapped[int | None] = mapped_column(Integer)
+    disk_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    openclaw_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    openclaw_installed: Mapped[bool] = mapped_column(Boolean, default=False)
+    # The dashboard password, generated here and shown to its owner. The
+    # gateway requires auth by default and refuses to serve without it, so this
+    # is what makes the address usable - and like the Hermes dashboard
+    # password, withholding it from the person it belongs to would protect
+    # nothing while making the product harder to use.
+    openclaw_password: Mapped[str | None] = mapped_column(String(64))
+    openclaw_error: Mapped[str | None] = mapped_column(Text)
+    # Telegram, on the same arrangement Hermes uses: the customer asks for it
+    # here, the token comes from their account settings, and the worker puts it
+    # into the workspace. `installed` is what the machine reports back, so
+    # "asked for" and "actually running" stay distinguishable.
+    openclaw_telegram_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    openclaw_telegram_installed: Mapped[bool] = mapped_column(Boolean, default=False)
+    # As for Hermes. Without it a Telegram channel that fails to come up leaves
+    # the two columns disagreeing, which the reconciler retries forever while
+    # the page shows "preparing" and never says what went wrong.
+    openclaw_telegram_error: Mapped[str | None] = mapped_column(Text)
+
     hermes_telegram_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     hermes_telegram_installed: Mapped[bool] = mapped_column(Boolean, default=False)
     # Temporary delivery state only: cleared immediately after the worker has

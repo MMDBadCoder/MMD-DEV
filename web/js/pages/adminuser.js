@@ -20,7 +20,8 @@ const savedWin = () => Number(localStorage.getItem(KEY)) || 10080;
 const KIND_KEY = {
   grant: "adm.tx.grant", charge_hour: "adm.tx.hour",
   charge_partial: "adm.tx.partial", charge_ai: "adm.tx.ai",
-  charge_hermes: "adm.tx.hermes", adjustment: "adm.tx.adjustment",
+  charge_hermes: "adm.tx.hermes", charge_codex: "adm.tx.codex",
+  adjustment: "adm.tx.adjustment",
 };
 
 export async function adminUserPage(params) {

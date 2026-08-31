@@ -57,9 +57,24 @@ test("Hermes activation offers an optional Telegram gateway with an allowlist", 
 });
 
 test("Telegram can be enabled later or disabled without disabling Hermes", () => {
-  assert.match(ai, /id="tg-enable"/);
-  assert.match(ai, /id="tg-disable"/);
+  assert.match(ai, /id="\$\{o\.btnId\}"/);
+  assert.match(ai, /btnId: "tg-toggle"/);
   assert.match(ai, /action: "enable", \.\.\.payload/);
+});
+
+// The two tabs render one section. What made them drift before was each call
+// site passing its own `body:` markup, so the check is that neither does: both
+// hand over data, and every visible part is built once in telegramSection.
+test("the Hermes and OpenClaw Telegram sections are the same section", () => {
+  for (const field of ["profileConfigured", "profileUserId", "allowedUsers"])
+    assert.equal((ai.match(new RegExp(`${field}:`, "g")) || []).length, 2,
+                 `${field} should be passed by both tabs`);
+  assert.doesNotMatch(ai, /\n\s*body: /);
+  assert.match(ai, /btnId: "oc-tg"/);
+  // Both confirm before disconnecting, and both say the same thing.
+  assert.equal((ai.match(/ai\.telegram\.disable\.confirm/g) || []).length, 2);
+  // One margin rule, applied to the one action row.
+  assert.equal((ai.match(/class="tg-actions"/g) || []).length, 1);
 });
 
 test("Hermes reuses account Telegram defaults and waits for a published dashboard", () => {

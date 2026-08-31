@@ -61,6 +61,18 @@ export const icon = {
   claude: P('<path d="M12 2v20M2 12h20M4.9 4.9l14.2 14.2M19.1 4.9L4.9 19.1"/><circle cx="12" cy="12" r="3"/>'),
   openrouter: P('<path d="M3 7h13l-3-3M16 7l-3 3M21 17H8l3-3M8 17l3 3"/>'),
   hermes: P('<path d="M12 3v18M8 6c-3-2-5 0-5 2 3 0 5 1 5 4M16 6c3-2 5 0 5 2-3 0-5 1-5 4"/><path d="M9 15c0 2 6 2 6 4"/>'),
+  // OpenAI's mark, in the same stylised spirit as `claude` above: the
+  // hexagonal outline with the three-fold interior knot, drawn in strokes
+  // rather than reproduced. Recognisable beside the product name, which is
+  // what a tab needs it to be.
+  codex: P('<path d="M12 2.6l8.1 4.7v9.4L12 21.4 3.9 16.7V7.3z"/>'
+           + '<path d="M12 7.4v9.2M8.1 9.7l7.8 4.6M15.9 9.7l-7.8 4.6"/>'),
+  // A claw, for the product named after one. Three talons over a palm reads at
+  // 16px where a literal crab pincer turns to mush.
+  openclaw: P('<path d="M6.5 3.2c-1 4.8-.2 8.4 2.4 11.3"/>'
+              + '<path d="M12 2.2c-.5 5.6-.3 9.6 0 12.3"/>'
+              + '<path d="M17.5 3.2c1 4.8.2 8.4-2.4 11.3"/>'
+              + '<path d="M6.6 14.6c1.7 3.5 9.1 3.5 10.8 0"/>'),
   lock: P('<rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/>'),
   save: P('<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/>'),
   arrow: P('<path d="M5 12h14M13 6l6 6-6 6"/>'),
@@ -74,6 +86,10 @@ export const icon = {
   monitor: P('<rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8M12 17v4"/><path d="M6 8h6M6 11h4"/>'),
   chart: P('<path d="M3 3v18h18"/><path d="M7 15l4-5 3 3 5-7"/>'),
   chat: P('<path d="M21 15a2 2 0 0 1-2 2H8l-5 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>'),
+  // Telegram's paper plane. `chat` was standing in for it on the Hermes
+  // button, which is a generic speech bubble and reads as "messages" rather
+  // than as the one service the section is about.
+  telegram: P('<path d="M22 2 15 22l-4-9-9-4z"/><path d="M22 2 11 13"/>'),
   bell: P('<path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21h4"/>'),
   link: P('<path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/>'),
 };

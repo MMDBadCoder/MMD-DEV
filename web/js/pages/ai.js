@@ -12,13 +12,26 @@ import { $, $$, icon, esc, note, toast, stamp, confirmDialog,
          fmtMoney, fmtFa, secretRow, wireSecrets } from "../ui.js";
 import { t, CURRENCY } from "../i18n.js";
 import { render } from "../main.js";
+import { currentPath } from "../router.js";
 
 const TABS = [{ key: "openrouter", ic: "openrouter" }, { key: "claude", ic: "claude" },
-              { key: "hermes", ic: "hermes" }];
+              { key: "codex", ic: "codex" }, { key: "hermes", ic: "hermes" },
+              { key: "openclaw", ic: "openclaw" }];
+
+// What "ready" means differs per supplier, so each tab says so for itself
+// rather than sharing one guess. Claude and Codex are signed in or not;
+// Hermes and OpenClaw are provisioned or not.
+const READY = {
+  openrouter: (d) => d.hermes.ready,
+  claude: (d) => d.claude.linked,
+  codex: (d) => d.codex.linked,
+  hermes: (d) => d.hermes.ready,
+  openclaw: (d) => d.openclaw.ready,
+};
 
 function tabBar(active, d) {
   return `<div class="tabs2">${TABS.map((tb) => {
-    const on = tb.key === "claude" ? d.claude.linked : d.hermes.ready;
+    const on = READY[tb.key](d);
     return `<a href="/console/ai/${tb.key}"
       class="${tb.key === active ? "active" : ""}">${icon[tb.ic]}
       ${t("ai.tab." + tb.key)}
@@ -26,14 +39,115 @@ function tabBar(active, d) {
   }).join("")}</div>`;
 }
 
+/* THE ORDER OF AN AI TAB, defined once.
+ *
+ * Five tabs had five different orders: the explainer was second on Claude Code
+ * and last on three others, the usage table came before it on one tab and after
+ * it on another, and the dashboard address was the first thing on OpenClaw and
+ * buried mid-card on Hermes. Each was reasonable alone and the set was not - a
+ * customer who learns one tab should be able to predict the next.
+ *
+ * So the sequence lives here rather than in five templates, and a tab supplies
+ * only the parts it has:
+ *
+ *   1 status   what state is it in, and the button that changes that
+ *   2 details  the addresses and credentials you actually use
+ *   3 usage    what it has cost so far
+ *   4 billing  how that cost is worked out
+ *   5 about    what this thing is
+ *   6 privacy  what crosses from the platform into your machine
+ *
+ * `about` sits second-to-last on purpose. It is reference material: the tab bar
+ * has already named the service, and someone who came to press a button should
+ * not have to scroll past a description to reach it. Someone who came to find
+ * out what the service IS still finds it in the same place on every tab.
+ */
+const SECTION_ORDER = ["status", "details", "usage", "billing", "about", "privacy"];
+
+function sections(parts) {
+  return SECTION_ORDER.map((k) => parts[k] || "").filter(Boolean).join("\n");
+}
+
+// What the thing IS, in plain language. Every tab has one, in the same place -
+// a page of five unexplained brand names is worse than one.
+function aboutCard(key) {
+  return `<div class="card">
+    <h2>${t(`ai.about.${key}.title`)}</h2>
+    <p class="muted small">${t(`ai.about.${key}.body`)}</p>
+  </div>`;
+}
+
+/* The Telegram section, shared by Hermes and OpenClaw.
+ *
+ * Two services offer the same feature over the same bot, so they had better
+ * look like the same feature. They were built weeks apart and had drifted into
+ * different headers, different pill wording and different button icons - which
+ * invites a customer to wonder what the difference is, when there is none.
+ *
+ * The BODY still differs, because the two genuinely differ: Hermes can collect
+ * a token inline for an account that has not saved one, OpenClaw always uses
+ * the account's. The shell around it does not. */
+function telegramSection(o) {
+  const state = o.ready ? t("ai.hermes.telegram.ready")
+    : o.enabled ? t("ai.hermes.telegram.preparing") : t("conn.off");
+
+  // Off, and the account already has credentials: say which id will be allowed
+  // and where to change it. Off, without credentials: Hermes can take them
+  // inline (`o.fields`), OpenClaw can only send the customer to their account.
+  // That single line is now the ONLY difference between the two tabs.
+  const credentials = o.profileConfigured
+    ? note("ok", `${t("ai.hermes.telegram.saved", esc(o.profileUserId || ""))}
+        <a href="/console/account">${t("ai.hermes.telegram.edit")}</a>`)
+    : (o.fields || note("info", t("ai.telegram.needstoken")));
+
+  // On: the allowlist is the useful fact, and it is stated the same way on
+  // both tabs rather than only on the one that happened to implement it.
+  const body = o.enabled
+    ? `<p class="small">${t("ai.hermes.telegram.allowed")}
+         <span class="mono ltr">${esc(o.allowedUsers || "\u2014")}</span></p>`
+    : credentials;
+
+  // Nothing to turn on with: no saved credentials and no way to enter any.
+  const blocked = !o.enabled && !o.profileConfigured && !o.fields;
+
+  return `<div class="telegram-option">
+    <div class="between">
+      <div><h3>${icon.telegram}${t("ai.telegram.title")}</h3>
+        <p class="tiny dim">${o.sub}</p></div>
+      <span class="pill"><span class="dot ${
+        o.ready ? "on" : o.enabled ? "busy" : ""}"></span>${state}</span>
+    </div>
+    ${o.error ? note("bad", t("ai.hermes.telegram.error")) : ""}
+    ${body}
+    <div class="tg-actions">
+      <button class="btn sm ${o.enabled ? "danger ghost" : "primary"}"
+        id="${o.btnId}"${blocked ? " disabled" : ""}>${icon.telegram}${
+        t(o.enabled ? "ai.hermes.telegram.disable"
+                    : "ai.hermes.telegram.enable")}</button>
+    </div>
+  </div>`;
+}
+
+// A tab waiting on the worker re-renders itself until it is ready. It must
+// FIRST check the customer is still looking at it: the timer keeps running
+// after they navigate away, and re-rendering then yanks them back to a page
+// they deliberately left. Reported as "when you go to another page it turns you
+// back to the OpenClaw tab".
+function repoll(tab, ms) {
+  setTimeout(() => {
+    if (currentPath() === `/console/ai/${tab}`) aiPage({ tab });
+  }, ms);
+}
+
 export async function aiPage(params) {
   const tab = params?.tab && TABS.some((x) => x.key === params.tab) ? params.tab : "claude";
 
-  let d, usage;
+  let d, usage, codexUsage;
   try {
-    [d, usage] = await Promise.all([
+    [d, usage, codexUsage] = await Promise.all([
       get("/api/workspace/ai"),
       get("/api/workspace/ai/usage").catch(() => null),
+      get("/api/workspace/ai/usage?service=codex").catch(() => null),
     ]);
   }
   catch (e) {
@@ -47,22 +161,254 @@ export async function aiPage(params) {
     ${d.claude.machine_running ? "" : note("warn", t("ai.machineoff"))}`;
 
   if (tab === "openrouter") return renderOpenRouter(head, d.hermes);
-  return tab === "hermes" ? renderHermes(head, d.hermes)
-                          : renderClaude(head, d.claude, usage);
+  if (tab === "hermes") return renderHermes(head, d.hermes);
+  if (tab === "codex") return renderCodex(head, d.codex, codexUsage);
+  if (tab === "openclaw") return renderOpenClaw(head, d.openclaw);
+  return renderClaude(head, d.claude, usage);
+}
+
+
+/* Codex. Deliberately the same page as Claude Code, because it is the same
+   arrangement: a CLI the platform signs in on its own host, whose grant is
+   copied into the customer's machine. Presenting it differently would imply a
+   difference that does not exist. */
+function renderCodex(head, c, usage) {
+  const busy = !c.machine_running;
+
+  render(`${head}${sections({
+    status: `<div class="card">
+      <div class="between" style="margin-bottom:14px">
+        <div><h2>Codex</h2>
+          <p class="muted small" style="margin:4px 0 0">${t("ai.codex.desc")}</p></div>
+        <span class="pill"><span class="dot ${c.linked ? "on" : ""}"></span>${
+          c.linked ? t("ai.state.ready") : c.installed ? t("ai.state.installed")
+                                                       : t("ai.state.absent")}</span>
+      </div>
+
+      <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">
+        <div class="stat"><div class="k">${t("ai.f.installed")}</div>
+          <div class="v">${c.installed ? t("common.yes") : t("common.no")}</div></div>
+        <div class="stat"><div class="k">${t("ai.f.version")}</div>
+          <div class="v ltr mono" style="font-size:17px">${c.version ? esc(c.version) : "—"}</div></div>
+        <div class="stat"><div class="k">${t("ai.f.signedin")}</div>
+          <div class="v">${c.linked ? t("common.yes") : t("common.no")}</div></div>
+        <div class="stat"><div class="k">${t("ai.f.expires")}</div>
+          <div class="v" style="font-size:15px">${
+            c.expires_at ? stamp(new Date(c.expires_at * 1000).toISOString()) : "—"}</div></div>
+      </div>
+
+      ${c.available ? "" : note("warn", t("ai.hostunlinked"))}
+
+      <div class="btn-row" style="margin-top:16px">
+        <button class="btn primary" id="codex-go"
+          ${busy || !c.available ? "disabled" : ""}>
+          ${icon.codex}${c.linked ? t("ai.resync") : t("ai.install")}</button>
+        ${c.linked ? `<button class="btn danger ghost" id="codex-unlink" ${busy ? "disabled" : ""}>
+          ${icon.trash}${t("ai.unlink")}</button>` : ""}
+      </div>
+
+      ${c.linked ? note("ok", t("ai.codex.run")) : ""}
+      <div id="codex-msg"></div>
+    </div>`,
+
+    usage: usageCard(usage),
+    about: aboutCard("codex"),
+    privacy: `<div class="card">
+      <h2>${t("ai.privacy.title")}</h2>
+      <p class="muted small">${t("ai.codex.privacy")}</p>
+      ${note("info", t("ai.shared"))}
+    </div>`,
+  })}`);
+
+  const go = async (act, btn, label) => {
+    const b = $(btn);
+    if (!b) return;
+    b.disabled = true;
+    b.innerHTML = `<span class="spinner"></span>${label}`;
+    try {
+      await post("/api/workspace/ai/codex", { action: act });
+      toast(act === "unlink" ? t("ai.unlinked") : t("ai.codex.done"), "ok");
+    } catch (err) { $("#codex-msg").innerHTML = note("bad", esc(err.message)); }
+    aiPage({ tab: "codex" });
+  };
+
+  $("#codex-go").onclick = () => go("install", "#codex-go",
+    c.linked ? t("ai.resyncing") : t("ai.installing"));
+  const un = $("#codex-unlink");
+  if (un) {
+    un.onclick = async () => {
+      if (!await confirmDialog(t("ai.unlink"), t("ai.unlink.confirm"), t("ai.unlink"))) return;
+      go("unlink", "#codex-unlink", t("conn.working"));
+    };
+  }
+}
+
+
+/* OpenClaw. Hermes' shape rather than Claude's: a service the worker installs
+   into the machine, with a dashboard of its own on a name we publish. */
+function renderOpenClaw(head, o) {
+  const waiting = o.enabled && !o.ready;
+
+  render(`${head}${sections({
+    status: `<div class="card">
+      <div class="between" style="margin-bottom:14px">
+        <div><h2>OpenClaw</h2>
+          <p class="muted small" style="margin:4px 0 0">${t("ai.openclaw.desc")}</p></div>
+        <span class="pill"><span class="dot ${o.ready ? "on" : ""}"></span>${
+          o.ready ? t("ai.state.ready") : o.enabled ? t("ai.preparing")
+                                                    : t("ai.state.absent")}</span>
+      </div>
+
+      ${o.needs_openrouter ? note("warn", t("ai.openclaw.needskey")) : ""}
+      ${o.error ? note("bad", t("ai.openclaw.failed")) : ""}
+      ${waiting && !o.error ? note("info", t("ai.openclaw.preparing")) : ""}
+      ${o.machine_running ? "" : note("warn", t("ai.openclaw.machineoff"))}
+
+      <div class="btn-row" style="margin-top:16px">
+        <button class="btn ${o.enabled ? "danger ghost" : "primary"}" id="openclaw-go"
+          ${o.needs_openrouter && !o.enabled ? "disabled" : ""}>
+          ${o.enabled ? icon.trash : icon.openclaw}
+          ${o.enabled ? t("ai.openclaw.disable") : t("ai.openclaw.enable")}</button>
+        ${o.ready ? `<button class="btn ghost" id="openclaw-devices">${
+          icon.check}${t("ai.openclaw.approve")}</button>` : ""}
+      </div>
+      ${o.ready ? `<p class="tiny dim" style="margin:10px 0 0">${
+        t("ai.openclaw.approve.hint")}</p>` : ""}
+      <div id="openclaw-msg"></div>
+
+      ${o.ready ? telegramSection({
+        sub: t("ai.openclaw.telegram.sub"),
+        ready: o.telegram_ready, enabled: o.telegram_enabled,
+        error: o.telegram_error,
+        profileConfigured: o.telegram_profile_configured,
+        profileUserId: o.telegram_profile_user_id,
+        allowedUsers: o.telegram_users,
+        btnId: "oc-tg",
+      }) : ""}
+    </div>`,
+
+    details: o.ready ? `<div class="card">
+      <h2>${t("ai.details.title")}</h2>
+      <div class="grid" style="grid-template-columns:1fr;gap:10px">
+        <!-- An address, not a credential: what a customer wants to do with
+             their dashboard is OPEN it, so this is a link and not a copy box. -->
+        <div class="stat" style="align-items:stretch">
+          <div class="k">${t("ai.openclaw.host")}</div>
+          <a class="v ltr mono" dir="ltr" href="https://${esc(o.host)}"
+             target="_blank" rel="noopener noreferrer"
+             style="font-size:15px;word-break:break-all">${esc(o.host)} ${icon.link}</a>
+        </div>
+        ${secretRow({ label: t("ai.openclaw.password"), value: o.password })}
+      </div>
+    </div>` : "",
+
+    billing: `<div class="card">
+      <h2>${t("ai.billing.title")}</h2>
+      ${note("info", t("ai.openclaw.billing"))}
+    </div>`,
+
+    about: aboutCard("openclaw"),
+  })}`);
+
+  wireSecrets(document, t("conn.copied"));
+
+  const tg = $("#oc-tg");
+  if (tg) {
+    tg.onclick = async () => {
+      const on = o.telegram_enabled;
+      if (on && !await confirmDialog(t("ai.hermes.telegram.disable"),
+                                     t("ai.telegram.disable.confirm"),
+                                     t("ai.hermes.telegram.disable"))) return;
+      tg.disabled = true;
+      tg.innerHTML = `<span class="spinner"></span>${t("conn.working")}`;
+      try {
+        await post("/api/workspace/ai/openclaw/telegram",
+                   { action: on ? "disable" : "enable" });
+        toast(t(on ? "ai.openclaw.telegram.done.off"
+                   : "ai.openclaw.telegram.done.on"), "ok");
+      } catch (err) { $("#openclaw-msg").innerHTML = note("bad", esc(err.message)); }
+      aiPage({ tab: "openclaw" });
+    };
+  }
+
+  const dev = $("#openclaw-devices");
+  if (dev) {
+    dev.onclick = async () => {
+      dev.disabled = true;
+      dev.innerHTML = `<span class="spinner"></span>${t("conn.working")}`;
+      try { await post("/api/workspace/ai/openclaw/devices");
+            toast(t("ai.openclaw.approved"), "ok"); }
+      catch (err) { $("#openclaw-msg").innerHTML = note("bad", esc(err.message)); }
+      aiPage({ tab: "openclaw" });
+    };
+  }
+
+  $("#openclaw-go").onclick = async () => {
+    const on = o.enabled;
+    if (on && !await confirmDialog(t("ai.openclaw.disable"),
+                                   t("ai.openclaw.disable.confirm"),
+                                   t("ai.openclaw.disable"))) return;
+    const b = $("#openclaw-go");
+    b.disabled = true;
+    b.innerHTML = `<span class="spinner"></span>${t("conn.working")}`;
+    try {
+      await post("/api/workspace/ai/openclaw", { action: on ? "disable" : "enable" });
+      toast(t(on ? "ai.openclaw.done.disabled" : "ai.openclaw.done.enabled"), "ok");
+    } catch (err) { $("#openclaw-msg").innerHTML = note("bad", esc(err.message)); }
+    aiPage({ tab: "openclaw" });
+  };
+
+  // The worker installs it, not this request, so the page polls itself into
+  // the ready state instead of making the customer reload.
+  const tgWaiting = o.telegram_enabled && !o.telegram_ready;
+  if ((waiting || tgWaiting) && !o.error) repoll("openclaw", 8000);
 }
 
 function renderOpenRouter(head, h) {
-  render(`${head}<div class="card">
-    <div class="between"><div><h2>OpenRouter</h2>
-      <p class="muted small">${t("ai.openrouter.desc")}</p></div>
-      <span class="pill"><span class="dot ${h.ready ? "on" : ""}"></span>${
-        h.ready ? t("ai.ready") : t("ai.notready")}</span></div>
-    ${h.credit_blocked ? note("warn", t("ai.hermes.creditblocked")) : ""}
-    ${h.ready ? secretRow({ label: t("ai.openrouter.key"), value: h.key,
-                            hint: t("ai.openrouter.key.hint") })
-              : note("info", t("ai.openrouter.enable.hermes"))}
-    <p class="muted small">${t("ai.openrouter.billing")}</p>
-  </div>`);
+  render(`${head}${sections({
+    status: `<div class="card">
+      <div class="between"><div><h2>OpenRouter</h2>
+        <p class="muted small">${t("ai.openrouter.desc")}</p></div>
+        <span class="pill"><span class="dot ${h.ready ? "on" : ""}"></span>${
+          h.ready ? t("ai.ready") : t("ai.notready")}</span></div>
+      ${h.credit_blocked ? note("warn", t("ai.hermes.creditblocked")) : ""}
+      ${h.ready ? "" : note("info", t("ai.openrouter.enable.hermes"))}
+    </div>`,
+
+    details: h.ready ? `<div class="card">
+      <h2>${t("ai.details.title")}</h2>
+      <div class="grid" style="grid-template-columns:1fr;gap:10px">
+        ${secretRow({ label: t("ai.openrouter.key"), value: h.key,
+                      hint: t("ai.openrouter.key.hint") })}
+      </div>
+    </div>` : "",
+
+    // Moved here from the Hermes tab. It describes how OPENROUTER meters and
+    // charges, and both Hermes and OpenClaw spend this same key - so on the
+    // Hermes tab it was one supplier's billing rules filed under one of its
+    // two consumers.
+    billing: `<div class="card">
+      <h2>${t("ai.hermes.how.title")}</h2>
+      <p class="muted small">${t("ai.hermes.how.body")}</p>
+      <p class="muted small">${t("ai.openrouter.billing")}</p>
+      ${note("info", `${t("ai.hermes.discounts")} <a href="https://openrouter.ai/models?discount=true&order=discount-high-to-low"
+        target="_blank" rel="noopener noreferrer">${t("ai.hermes.discounts.link")}${icon.arrow}</a>`)}
+      <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(260px,1fr));margin-top:12px">
+        <div class="copybox ok">
+          <div class="copybox-h">${icon.check}${t("ai.hermes.yours")}</div>
+          <ul>${["ai.hermes.yours.1", "ai.hermes.yours.2", "ai.hermes.yours.3"]
+                .map((k) => `<li>${t(k)}</li>`).join("")}</ul>
+        </div>
+        <div class="copybox bad">
+          <div class="copybox-h">${icon.minus}${t("ai.hermes.limits")}</div>
+          <ul>${["ai.hermes.limits.1", "ai.hermes.limits.2"]
+                .map((k) => `<li>${t(k)}</li>`).join("")}</ul>
+        </div>
+      </div>
+    </div>`,
+
+    about: aboutCard("openrouter"),
+  })}`);
   wireSecrets(document, t("conn.copied"));
 }
 
@@ -94,8 +440,8 @@ function renderHermes(head, h) {
       <a href="https://t.me/BotFather" target="_blank" rel="noopener noreferrer">BotFather ${icon.link}</a></p>`}
   </div>`;
 
-  render(`${head}
-    <div class="card">
+  render(`${head}${sections({
+    status: `<div class="card">
       <div class="between" style="margin-bottom:14px">
         <div><h2>Hermes</h2>
           <p class="muted small" style="margin:4px 0 0">${t("ai.hermes.desc")}</p></div>
@@ -109,50 +455,20 @@ function renderHermes(head, h) {
       ${waiting ? note("info", t("ai.hermes.preparing.body")) : ""}
       ${note("info", t("ai.hermes.openrouter.default"))}
 
-      ${h.ready ? `
-        <!-- ONE column, full width. These are an API key, a URL and a password:
-             values that are read character by character or copied whole, not
-             skimmed. The auto-fit grid used elsewhere packed them into ~260px
-             boxes on a wide screen, so every one of them scrolled sideways
-             inside its own box - which is exactly the wrong shape for a value
-             you have to check. -->
-        <div class="grid" style="grid-template-columns:1fr;gap:10px">
-          ${secretRow({ label: t("ai.hermes.dashuser"), value: h.dashboard_user,
-                        masked: false })}
-          ${secretRow({ label: t("ai.hermes.dashpass"), value: h.dashboard_password })}
-          <!-- An address, not a credential. secretRow gives every value a
-               copy button and a reveal toggle, which is right for the key and
-               the password and wrong here: what a customer wants to do with
-               their dashboard address is OPEN it. So this is a plain link that
-               opens in a new tab, with no copy control at all. -->
-          ${h.host ? `<div class="stat" style="align-items:stretch">
-            <div class="k">${t("ai.hermes.host")}</div>
-            ${h.dashboard_ready ? `<a class="v ltr mono" dir="ltr" href="https://${esc(h.host)}"
-               target="_blank" rel="noopener noreferrer"
-               style="font-size:15px;word-break:break-all">${
-                 esc(h.host)} ${icon.link}</a>` : `<span class="v ltr mono dim"
-               style="font-size:15px;word-break:break-all">${esc(h.host)}</span>
-               ${note("info", t("ai.hermes.host.preparing"))}`}
-            <p class="tiny dim" style="margin:6px 0 0">${t("ai.hermes.host.hint")}</p>
-          </div>` : ""}
-        </div>` : ""}
-
       ${!h.enabled ? `<div class="telegram-option">
         <label class="ack"><input type="checkbox" id="tg-option">
           <span><b>${t("ai.hermes.telegram.option")}</b><br>
           <span class="tiny dim">${t("ai.hermes.telegram.option.sub")}</span></span></label>
-        ${telegramFields(true)}</div>` : `<div class="telegram-option">
-        <div class="between"><div><h3>${t("ai.hermes.telegram.title")}</h3>
-          <p class="tiny dim">${t("ai.hermes.telegram.sub")}</p></div>
-          <span class="pill"><span class="dot ${h.telegram_ready ? "on" : h.telegram_enabled ? "busy" : ""}"></span>${
-            h.telegram_ready ? t("ai.hermes.telegram.ready")
-              : h.telegram_enabled ? t("ai.hermes.telegram.preparing") : t("conn.off")}</span></div>
-        ${h.telegram_error ? note("bad", t("ai.hermes.telegram.error")) : ""}
-        ${h.telegram_enabled ? `<p class="small">${t("ai.hermes.telegram.allowed")}
-          <span class="mono ltr">${esc(h.telegram_users || "—")}</span></p>
-          <button class="btn sm danger ghost" id="tg-disable">${t("ai.hermes.telegram.disable")}</button>`
-          : `${telegramFields()}<button class="btn sm primary" id="tg-enable">${
-              icon.chat}${t("ai.hermes.telegram.enable")}</button>`}</div>`}
+        ${telegramFields(true)}</div>` : telegramSection({
+        sub: t("ai.hermes.telegram.sub"),
+        ready: h.telegram_ready, enabled: h.telegram_enabled,
+        error: h.telegram_error,
+        profileConfigured: h.telegram_profile_configured,
+        profileUserId: h.telegram_profile_user_id,
+        allowedUsers: h.telegram_users,
+        fields: telegramFields(),
+        btnId: "tg-toggle",
+      })}
 
       <div class="btn-row" style="margin-top:16px">
         <button class="btn ${h.enabled ? "danger ghost" : "primary"}" id="hermes-go">
@@ -160,26 +476,41 @@ function renderHermes(head, h) {
           ${h.enabled ? t("ai.hermes.disable") : t("ai.hermes.enable")}</button>
       </div>
       <div id="hermes-msg"></div>
-    </div>
+    </div>`,
 
-    <div class="card">
-      <h2>${t("ai.hermes.how.title")}</h2>
-      <p class="muted small">${t("ai.hermes.how.body")}</p>
-      ${note("info", `${t("ai.hermes.discounts")} <a href="https://openrouter.ai/models?discount=true&order=discount-high-to-low"
-        target="_blank" rel="noopener noreferrer">${t("ai.hermes.discounts.link")}${icon.arrow}</a>`)}
-      <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(260px,1fr));margin-top:12px">
-        <div class="copybox ok">
-          <div class="copybox-h">${icon.check}${t("ai.hermes.yours")}</div>
-          <ul>${["ai.hermes.yours.1", "ai.hermes.yours.2", "ai.hermes.yours.3"]
-                .map((k) => `<li>${t(k)}</li>`).join("")}</ul>
-        </div>
-        <div class="copybox bad">
-          <div class="copybox-h">${icon.minus}${t("ai.hermes.limits")}</div>
-          <ul>${["ai.hermes.limits.1", "ai.hermes.limits.2"]
-                .map((k) => `<li>${t(k)}</li>`).join("")}</ul>
-        </div>
+    details: h.ready ? `<div class="card">
+      <h2>${t("ai.details.title")}</h2>
+      <!-- ONE column, full width. These are an API key, a URL and a password:
+           values that are read character by character or copied whole, not
+           skimmed. The auto-fit grid used elsewhere packed them into ~260px
+           boxes on a wide screen, so every one of them scrolled sideways inside
+           its own box - which is exactly the wrong shape for a value you have
+           to check. -->
+      <div class="grid" style="grid-template-columns:1fr;gap:10px">
+        ${secretRow({ label: t("ai.hermes.dashuser"), value: h.dashboard_user,
+                      masked: false })}
+        ${secretRow({ label: t("ai.hermes.dashpass"), value: h.dashboard_password })}
+        <!-- An address, not a credential: what a customer wants to do with
+             their dashboard is OPEN it, so this is a link and not a copy box. -->
+        ${h.host ? `<div class="stat" style="align-items:stretch">
+          <div class="k">${t("ai.hermes.host")}</div>
+          ${h.dashboard_ready ? `<a class="v ltr mono" dir="ltr" href="https://${esc(h.host)}"
+             target="_blank" rel="noopener noreferrer"
+             style="font-size:15px;word-break:break-all">${esc(h.host)} ${icon.link}</a>`
+            : `<span class="v ltr mono dim" style="font-size:15px;word-break:break-all">${
+                 esc(h.host)}</span>${note("info", t("ai.hermes.host.preparing"))}`}
+          <p class="tiny dim" style="margin:6px 0 0">${t("ai.hermes.host.hint")}</p>
+        </div>` : ""}
       </div>
-    </div>`);
+    </div>` : "",
+
+    billing: `<div class="card">
+      <h2>${t("ai.billing.title")}</h2>
+      ${note("info", t("ai.hermes.billing.openrouter"))}
+    </div>`,
+
+    about: aboutCard("hermes"),
+  })}`);
 
   wireSecrets(document, t("conn.copied"));
   $("#tg-option")?.addEventListener("change", (e) => {
@@ -199,7 +530,7 @@ function renderHermes(head, h) {
       $("#hermes-msg").innerHTML = note("bad", t("ai.hermes.telegram.required"));
       return;
     }
-    const b = enabled ? $("#tg-enable") : $("#tg-disable");
+    const b = $("#tg-toggle");
     b.disabled = true;
     try {
       await post("/api/workspace/ai/hermes", { action: "enable", ...payload });
@@ -210,8 +541,16 @@ function renderHermes(head, h) {
       b.disabled = false;
     }
   };
-  $("#tg-enable")?.addEventListener("click", () => configureTelegram(true));
-  $("#tg-disable")?.addEventListener("click", () => configureTelegram(false));
+  // Turning it off is confirmed on both tabs. It stops a bot the customer may
+  // be relying on, and one accidental click used to do it silently here while
+  // the OpenClaw tab asked - the same action should not have two safeties.
+  $("#tg-toggle")?.addEventListener("click", async () => {
+    const on = h.telegram_enabled;
+    if (on && !await confirmDialog(t("ai.hermes.telegram.disable"),
+                                   t("ai.telegram.disable.confirm"),
+                                   t("ai.hermes.telegram.disable"))) return;
+    configureTelegram(!on);
+  });
 
   $("#hermes-go").onclick = async () => {
     const on = h.enabled;
@@ -241,7 +580,7 @@ function renderHermes(head, h) {
 
   // The key is minted by the worker, not by this request, so the page polls
   // itself into the ready state instead of making the customer reload.
-  if (waiting || telegramWaiting) setTimeout(() => aiPage({ tab: "hermes" }), 5000);
+  if (waiting || telegramWaiting) repoll("hermes", 5000);
 }
 
 /* What the tokens have actually cost. Read from the platform's own records, not
@@ -272,75 +611,14 @@ function usageCard(u) {
   </div>`;
 }
 
-/* Connecting Claude Code to a Telegram bot.
- *
- * Documented here rather than linked away because every step runs INSIDE the
- * customer's machine, and the two things that decide whether it works at all
- * are properties of this platform rather than of the plugin: the workspace has
- * to be running, and it has to be able to reach api.telegram.org. Both are
- * stated up front so nobody works through six steps to find out.
- *
- * Measured on this host: api.telegram.org answers from a workspace (HTTP 302,
- * 24 ms), and `--channels` is accepted by the installed CLI even though it is
- * absent from `claude --help`.
- */
-const TG_STEPS = [
-  ["tg.s1", null],
-  ["tg.s2", "/plugin install telegram@claude-plugins-official"],
-  ["tg.s3", "/telegram:configure <TOKEN>"],
-  ["tg.s4", "claude --channels plugin:telegram@claude-plugins-official"],
-  ["tg.s5", "/telegram:access pair <CODE>"],
-  ["tg.s6", "/telegram:access policy allowlist"],
-];
-
-function telegramCard() {
-  const rows = TG_STEPS.map(([key, cmd], i) => `
-    <li style="margin-bottom:${cmd ? "14px" : "10px"}">
-      <span>${t(key)}</span>
-      ${cmd ? `<div class="row" style="gap:8px;align-items:center;flex-wrap:nowrap;margin-top:6px">
-        <input class="mono ltr" dir="ltr" readonly value="${esc(cmd)}" style="flex:1 1 auto">
-        <button class="btn icon ghost" data-copy="${esc(cmd)}" style="flex:0 0 auto">${icon.copy}</button>
-      </div>` : ""}
-    </li>`).join("");
-
-  return `<div class="card">
-    <h2>${t("tg.title")}</h2>
-    <p class="muted small" style="margin:4px 0 14px;max-width:74ch">${t("tg.sub")}</p>
-    ${note("info", t("tg.prereq"))}
-    <ol style="margin:14px 0 0;padding-inline-start:22px;font-size:14px;line-height:1.9">
-      ${rows}
-    </ol>
-    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(260px,1fr));margin-top:16px">
-      <div class="copybox">
-        <div class="copybox-h">${icon.info}${t("tg.where")}</div>
-        <ul>
-          <li>${t("tg.where.1")}<br><code class="ltr mono"
-            style="font-size:12px">~/.claude/channels/telegram/.env</code></li>
-          <li>${t("tg.where.2")}<br><code class="ltr mono"
-            style="font-size:12px">~/.claude/channels/telegram/inbox/</code></li>
-        </ul>
-      </div>
-      <div class="copybox bad">
-        <div class="copybox-h">${icon.alert}${t("tg.warn")}</div>
-        <ul><li>${t("tg.warn.1")}</li><li>${t("tg.warn.2")}</li></ul>
-      </div>
-    </div>
-    <p class="tiny dim" style="margin:14px 0 0">${t("tg.docs")}
-      <a class="ltr" dir="ltr" target="_blank" rel="noopener noreferrer"
-         href="https://github.com/anthropics/claude-plugins-official/blob/main/external_plugins/telegram/README.md"
-        >claude-plugins-official/external_plugins/telegram</a></p>
-  </div>`;
-}
-
-
 function renderClaude(head, c, usage) {
   const busy = !c.machine_running;
   // Three distinct states, three distinct primary actions. Collapsing them into
   // one "Set up" button hides whether anything would actually change.
   const action = c.linked ? "resync" : "install";
 
-  render(`${head}
-    <div class="card">
+  render(`${head}${sections({
+    status: `    <div class="card">
       <div class="between" style="margin-bottom:14px">
         <div><h2>Claude Code</h2>
           <p class="muted small" style="margin:4px 0 0">${t("ai.claude.desc")}</p></div>
@@ -378,11 +656,12 @@ function renderClaude(head, c, usage) {
       <div id="ai-msg"></div>
     </div>
 
-    ${telegramCard()}
 
-    ${usageCard(usage)}
+`,
 
-    <div class="card">
+    usage: usageCard(usage),
+    about: aboutCard("claude"),
+    privacy: `<div class="card">
       <h2>${t("ai.privacy.title")}</h2>
       <p class="muted small">${t("ai.privacy.body")}</p>
       <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(260px,1fr));margin-top:12px">
@@ -397,7 +676,8 @@ function renderClaude(head, c, usage) {
         </div>
       </div>
       ${note("info", t("ai.shared"))}
-    </div>`);
+    </div>`,
+  })}`);
 
   const go = async (act, btn, label) => {
     const b = $(btn);

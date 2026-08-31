@@ -1870,3 +1870,618 @@ multiplexing plaintext and TLS on every customer-selected port adds a stream
 proxy, dynamic module and certificate lifecycle for little benefit. Customers
 who require end-to-end TLS can still publish their own TLS listener through the
 raw external-port route.
+
+
+## Two more agents, each shaped like the one it resembles
+
+Codex and OpenClaw were asked for together, and the useful decision was to
+refuse to invent a third shape for either. The page already had two:
+
+  * **a signed-in CLI** (Claude Code) - the PLATFORM authenticates once on the
+    host, and an allowlisted slice of that grant is copied into the workspace;
+  * **a provisioned service** (Hermes) - the worker installs something into the
+    machine that runs, listens, and gets a name of its own.
+
+Codex is the first. OpenClaw is the second. Neither needed anything new.
+
+### Codex: the same file discipline as Claude
+
+`~/.codex/auth.json` is read, four keys survive - `auth_mode`,
+`OPENAI_API_KEY`, `tokens`, `last_refresh` - and the document written into the
+workspace is rebuilt from them. Everything a future release adds beside them is
+dropped by construction rather than by remembering to blocklist it.
+
+`CODEX_NEVER_COPY` names what stays: `history.jsonl` is the operator's own
+prompts, `config.toml` their settings, and `cache/`, `log/` and `goals_*.sqlite`
+are working state. On this host `history.jsonl` was 16 kB of real conversation.
+
+Expiry is read from the `exp` claim of the access token, decoded **without**
+verifying the signature - it is only ever printed as a date, the token is the
+host's own, and a forged expiry would mislead nobody but the operator.
+
+`@openai/codex` was already in the golden image, so nothing needed to change
+there.
+
+### OpenClaw: Hermes with a different upstream
+
+OpenClaw (github.com/openclaw/openclaw, formerly Clawdbot/Moltbot) is a
+self-hosted agent with a web dashboard on **18789** and messaging channels. Its
+gateway **requires auth by default** and, helpfully, resolves its bind address
+to `0.0.0.0` inside a container - so it needs a password from us and no bind
+override.
+
+The decision that matters: **it spends the customer's existing managed
+OpenRouter key.** Its config takes a provider `baseUrl` and `apiKey`, so
+OpenRouter is a first-class provider rather than an adapter. That means the
+existing cap and metering cover it exactly as they cover Hermes, and enabling
+it cannot become a second way for a customer to spend money. Enabling is
+therefore refused until the managed key exists.
+
+A **system** unit running as `dev`, not the vendor's `openclaw gateway install`
+user service. A user service needs lingering and a live `XDG_RUNTIME_DIR` -
+which works while a human is logged in and fails on a machine powered on by an
+API call. sshd and xrdp in the same workspace are managed the same way.
+
+Install reports success only once the dashboard **answers on its port**, polled
+for a minute. `systemctl enable --now` returning 0 means systemd accepted a
+unit, which is not the same thing - the identical mistake made the Hermes
+Telegram toggle report success on machines where nothing had started.
+
+Factory reset clears every OpenClaw flag, because the service lives entirely in
+the filesystem about to be destroyed AND holds a copy of the OpenRouter key that
+the reset revokes. Left set, the worker would reinstall it with a dead key and
+present the result as ready.
+
+## A customer published port 8000, and nginx took the API's socket
+
+Found while adding the above, and the more serious of the two.
+
+Hostname-routed web ports serve a customer's app with `listen <internal_port>;`.
+Nothing validated that port, so a customer published **8000** - uvicorn's - and
+`mmd-vhosts` emitted `listen 8000;`.
+
+**What actually happened is stranger than a bind failure.** For a while nginx
+could not take the port and every reload ended in
+
+    bind() to 0.0.0.0:8000 failed (98: Address already in use)
+    still could not bind()
+
+which does not skip that one server block - nginx **abandons the whole reload**
+and keeps the previous configuration. So for four days no nginx change took
+effect at all: no new dashboard vhost, and certbot's renewal hook silently doing
+nothing. Then nginx *did* get it, and the host was left like this:
+
+    LISTEN 0.0.0.0:8000    nginx      <- a customer's application
+    LISTEN 127.0.0.1:8000  uvicorn    <- the control plane
+
+Both bound because each sets `SO_REUSEADDR`, and the API kept working only
+because a specific bind beats a wildcard. That is luck. Had the API restarted
+into that arrangement, its own requests would have been proxied into a
+customer's workspace.
+
+Three changes:
+
+  * `PLATFORM_PORTS` is refused outright - 22, 53, 80, 443, 5432, 8000, 8443,
+    9101 - **whoever holds them at the time**, precisely because detection said
+    "nginx has 8000" and detection was the wrong question.
+  * everything else is checked against `ss`, ignoring **nginx's own** listeners.
+    A first version omitted that and withdrew two customers' working addresses
+    on the pass that introduced it, because nginx holds those ports *because*
+    the routes work.
+  * the reconciler now checks the **result** of `systemctl reload nginx`.
+    `nginx -t` validates syntax without binding anything, so the broken config
+    passed the test and the reconciler printed "nginx reloaded" and marked the
+    addresses ready. That is why this went unnoticed for days.
+
+A refused port is not a refused port: the numeric address keeps working through
+its DNAT rule, which is unaffected. Only the second, hostname address is
+withheld.
+
+
+## What OpenClaw actually needed, and how it told us
+
+The first install failed with "the gateway did not answer on its port" - which
+is exactly the outcome the polling check was written to produce, and the reason
+it was written. `systemctl enable --now` had returned 0 and the unit was
+"started"; only asking the port revealed that it was crash-looping. The journal
+inside the workspace then named both problems precisely.
+
+**`gateway.bind` is a MODE, not an address.** `"0.0.0.0"` is rejected:
+
+    Invalid --bind. Use "loopback", "lan", "tailnet", "auto", or "custom".
+
+Of the valid modes, the docs say `auto` detects a container and widens. In this
+one it did not - measured, `auto` left the gateway on `127.0.0.1:18789` and
+`[::1]:18789`, which nginx cannot reach. **`lan` gives `0.0.0.0:18789`**, and
+the host then reaches it over the bridge. So `lan`, chosen from evidence rather
+than from the sentence in the documentation that sounded right.
+
+**`gateway.mode` is mandatory.** Without it the gateway refuses to start:
+
+    Gateway start blocked: existing config is missing gateway.mode. Treat this
+    as suspicious or clobbered config.
+
+A deliberate guard against a half-written file - and writing the config
+ourselves is precisely the case it is suspicious of. `"local"` satisfies it.
+
+**The unit needed a start limit.** `Restart=on-failure` with no bound retried a
+configuration the gateway was never going to accept, every five seconds, and was
+found at **restart counter 127** - twenty minutes of a workspace's CPU. Now
+`StartLimitBurst=5` / `StartLimitIntervalSec=120`, in `[Unit]`: systemd moved
+those out of `[Service]` in v230 and silently ignores them in the wrong section,
+which would have looked exactly like working.
+
+## A waiting tab dragged the customer back to it
+
+Reported as: leave the OpenClaw tab, and a few seconds later the page returns to
+it. Both self-polling tabs re-rendered on a timer that kept running after the
+customer navigated away, so `aiPage({tab})` re-asserted a page they had
+deliberately left. The timer now checks `currentPath()` first and does nothing
+if they have moved on. Hermes had the same bug and the same fix.
+
+## Every tab says what the thing is
+
+The OpenClaw panel opened with a plain-language "what is this" card because
+nobody could be expected to know the product. The operator's observation was
+that the other tabs need it just as much: a page of four unexplained brand names
+is worse than one. `aboutCard(key)` now renders the same card in the same
+position on all five, and a test asserts each has a title and a body that
+actually explains something rather than restating the name.
+
+
+## The OpenClaw dashboard loaded, then refused to connect
+
+Reported as "Browser origin not allowed". The operator's guess was that the
+address only worked over plain HTTP - reasonable, but wrong: the OpenClaw vhost
+uses the same `server_block` as Hermes, with a real certificate, which is why
+`curl https://...` had already returned 200.
+
+The real cause was a third guard, and behind it a fourth. Each announced itself
+clearly once the gateway was actually asked, which is the argument for the
+polling check that made the first failure visible at all.
+
+**`gateway.controlUi.allowedOrigins`.** The Control UI checks the browser's
+`Origin` against an explicit list - no wildcards - before accepting its
+websocket. A dashboard published under the customer's own name is by definition
+not the gateway's own host, so the origin has to be handed to it. This is why
+`usernames.openclaw_host()` exists: FOUR components have to agree on that
+string - the API reports it, the reconciler serves it, the worker sends it, and
+the gateway compares against it - and a disagreement is not a cosmetic mismatch
+but a dashboard that loads and then will not connect.
+
+**`gateway.trustedProxies`.** With the origin accepted, the connection reached
+`phase=auth_validated` and was still refused:
+
+    Proxy headers detected from untrusted address. Connection will not be
+    treated as local.
+    code=1008 reason=pairing required: device is not approved yet
+
+OpenClaw treats a browser as a DEVICE, and one it does not consider local must
+pair before it may talk - a second factor behind the password. Naming the bridge
+address nginx arrives from (`10.42.0.1`) restores local treatment. Safe to
+trust: nothing DNATs that port and the bridge isolation table drops
+workspace-to-workspace traffic, so our proxy is the only route in.
+
+A button remains for the cases that does not cover, because the alternative
+answer to a pairing prompt is "SSH into your machine and run a command".
+Approving in bulk is defensible from who is asking: the endpoint is reachable
+only by a customer signed in to their own dashboard about their own workspace,
+so a request pending there is one they just caused.
+
+### The config was in the wrong file
+
+Found on the way: the CLI reported `Config: /home/dev/.openclaw/openclaw.json`
+while the running gateway was reading a `config.json` of our own choosing, which
+it only found because the unit sets `OPENCLAW_CONFIG_PATH`. The service worked;
+every `openclaw ...` command the customer typed in their own terminal saw a
+different, empty configuration. Now written to the vendor's default name, with
+the environment variable kept as an explicit pointer at the same file.
+
+
+## Two more ways the OpenClaw install could stall
+
+**"Installing" forever.** `openclaw_installed` and `openclaw_password` can
+disagree: disabling clears the password at once so the interface stops showing a
+secret, while `installed` is only cleared after the worker has actually removed
+the service. A customer who switches off and straight back on therefore lands
+with `installed=True` and no password - and the reconcile guard checked
+`installed` alone, skipped that row forever, and nothing regenerated the
+password. The page said "installing" for good. The guard now treats a missing
+password as an unfinished install, because that is what it is.
+
+**`Restart=on-failure` was the wrong policy.** OpenClaw restarts itself by
+exiting CLEANLY and expecting its supervisor to bring it back:
+
+    [gateway] restart mode: full process restart (supervisor restart)
+    [shutdown] completed cleanly in 250ms
+
+Under `on-failure`, exit code 0 means "finished successfully" and systemd leaves
+it stopped - so any configuration the gateway applies to itself takes the
+dashboard down until something else notices. Found with the unit `inactive` and
+nothing listening. `Restart=always` now, which is safe only because the start
+limit added earlier bounds it.
+
+## Codex is billed like Claude, and separately
+
+The customer asked for the Codex tab to have what the Claude tab has: a usage
+card, per-model prices, the USD conversion, the discount, and money coming off
+the balance. Almost all of it already existed and was already service-aware -
+`AiModelPrice.service`, `AiUsageMark.service`, `ai_settings(db, service)`. What
+was hardcoded was the service NAME in three functions.
+
+**The scanner is the new part.** Codex writes a `token_count` record per turn
+carrying `total_token_usage` (cumulative for the session) and `last_token_usage`
+(that turn). Summing `last` is only correct if no record is ever missed or
+re-read; summing `total` multiplies the session by its turn count. The LAST
+`total_token_usage` is the session's own running figure, which is exactly the
+shape the mark arithmetic already expects - the same contract as the Claude
+scanner, so the billing side needed no new concept.
+
+Two details that would each have overcharged:
+
+  * `input_tokens` INCLUDES `cached_input_tokens` in Codex's accounting, so the
+    uncached remainder is the difference. Billing the whole figure at the input
+    rate would charge cache reads at up to ten times their price.
+  * `reasoning_output_tokens` is a SUBSET of `output_tokens`, not an addition.
+    Adding it bills the same reasoning twice.
+
+**A separate ledger kind.** `CHARGE_CODEX`, not `CHARGE_AI`, for the reason
+`CHARGE_HERMES` already exists: the idempotency key is (workspace, period,
+kind), so two services charging one five-minute bucket under one kind collide
+and the second is silently discarded. A test posts both in the same period and
+asserts both land.
+
+**A separate discount.** Claude and Codex are different plans whose rates move
+independently. One number covering both is the failure that loses money quietly,
+per token.
+
+**No seed prices.** Claude's rates are known and seeded so a fresh host bills
+correctly. Codex's are not known here, and inventing them would bill customers
+at a rate nobody chose. It starts empty; an unpriced model is held UNCOUNTED
+rather than given away, and the admin page lists exactly which models are
+waiting for a price. The failure mode of an unconfigured supplier is "not yet
+billed", never "billed wrongly".
+
+**One thing the split fixed that was already broken:**
+`/api/workspace/ai/usage` summed every mark regardless of service. With Claude
+alone that was correct; the moment Codex wrote a mark it would have added Codex
+tokens to the Claude tab at the wrong supplier's rate. It takes a `service`
+now.
+
+## The Telegram walkthrough is gone
+
+The Claude tab carried a six-step guide to wiring the CLI to a Telegram bot. It
+was accurate and it was still the wrong thing to ship: every step ran inside the
+customer's machine using a third-party plugin, so the platform was teaching a
+workflow it does not provide, cannot support and does not control. Hermes has a
+Telegram gateway the platform actually manages - that is where the feature
+belongs. Six tests went with it, replaced by one asserting it stays gone.
+
+
+## One order for all five AI tabs
+
+Five tabs had grown five different orders. The explainer was second on Claude
+Code and last on three others; the usage table came before it on one tab and
+after it on another; the dashboard address was the first thing on OpenClaw and
+buried in the middle of a card on Hermes. Each was defensible on its own page,
+and the set was not: a customer who learns one tab should be able to predict the
+next.
+
+The sequence is now declared once, in `SECTION_ORDER`, and a tab supplies only
+the parts it has:
+
+| | |
+|---|---|
+| 1 `status` | what state it is in, and the button that changes that |
+| 2 `details` | the addresses and credentials you actually use |
+| 3 `usage` | what it has cost so far |
+| 4 `billing` | how that cost is worked out |
+| 5 `about` | what this thing is |
+| 6 `privacy` | what crosses from the platform into your machine |
+
+`about` sits second-to-last deliberately. It is reference material: the tab bar
+has already named the service, and someone who came to press a button should not
+have to scroll past a description to reach it - while someone who came to find
+out what the service IS still finds it in the same place every time.
+
+Two consequences worth naming:
+
+**Credentials became their own card.** Hermes and OpenClaw both had the address
+and password inline in the status card, above the action button. They are
+`details` now, below it, which is where OpenRouter's key already was.
+
+**The Telegram block stayed in `status`.** It is the one piece that could not
+move: the opt-in checkbox has to sit ABOVE the enable button, because ticking it
+is part of pressing that button. Layout consistency does not outrank a flow that
+reads correctly.
+
+### The billing explainer was on the wrong tab
+
+"این سرویس چگونه حساب می‌شود؟" lived on Hermes, and describes how **OpenRouter**
+meters and charges. Both Hermes and OpenClaw spend that same key, so on the
+Hermes tab it was one supplier's billing rules filed under one of its two
+consumers - and the OpenClaw customer had no way to find them. It is on the
+OpenRouter tab now, with Hermes and OpenClaw each carrying a short note in their
+own `billing` slot pointing at it.
+
+Four tests hold this: every tab renders through `sections()`, the order is the
+declared one, no card is hand-placed outside it, and the billing explainer is on
+OpenRouter and not duplicated on Hermes.
+
+
+## Disk is overcommitted now, and what makes that safe
+
+**This reverses "reserved and theirs".** The earlier decision set
+`volume.zfs.reserve_space=true` so a customer promised 6 GiB got 6 GiB, on the
+reasoning that a quota alone caps the owner while letting other tenants eat the
+pool's free space from under them. That reasoning is still correct. What changed
+is that the price of it was measured:
+
+| | |
+|---|---|
+| pool | 67.5 GiB |
+| held by reservations | **60 GiB** |
+| actually written by all ten workspaces | **9.4 GiB** |
+| free | 2.73 GiB |
+
+Fifty gigabytes reserved to stay empty, and **no eleventh customer could be
+created** - `zfs create` cannot take a 6 GiB reservation out of 2.73 GiB. An
+untouched workspace costs **154 MB**, because containers are ZFS clones of the
+golden image and lz4 compression is already on at 1.79x. The workspaces were
+never heavy; the promise was.
+
+Dropping the reservations reclaimed **44.8 GiB** (8.73 -> 53.5 GiB free) and
+took the wall away.
+
+### What was NOT dropped
+
+`volume.zfs.use_refquota` stays **true**, and this is the part that makes the
+trade defensible rather than reckless. Every workspace keeps `refquota=6G`: a
+customer who fills up gets write errors inside their own machine and nobody else
+is affected. Verified after the change - every dataset still reports
+`refquota 6G, refreservation none`.
+
+So the failure that overcommitment introduces is not one tenant overrunning
+another. It is the SUM: nine allowances of 10 GiB against a 67.5 GiB pool. A per
+workspace cap cannot see that, which is why the guard exists.
+
+### The pool guard
+
+`disk_once()` in the worker samples every workspace in ONE `zfs list` - a
+subprocess per workspace would make the cost of the check scale with the thing
+being checked - and does three things with the same numbers: records usage,
+warns an owner past 85% of their own allowance, and watches pool free space.
+
+Below `MMD_POOL_FLOOR_GIB` (8 GiB) it stops running workspaces, **largest
+first**, until the pool recovers. Ordered by consumption rather than by who grew
+last, because the point is to free the most space with the fewest machines
+stopped; "most recently grown" would punish activity rather than size.
+
+That is a bad outcome deliberately chosen over a worse one. A full ZFS pool does
+not fail politely for the tenant who caused it - every workspace loses writes
+simultaneously, and on this host PostgreSQL sits on the same disk, so the
+control plane loses the ledger at the same moment.
+
+Two measurement details that would each have been wrong:
+
+  * usage is `usedds`, not `used` - `used` includes the refreservation and read
+    as a constant 6 GiB whether a machine was empty or full;
+  * and not `refer` either, which counts the golden-image blocks every workspace
+    shares and would have billed each of them for the same data.
+
+### The admin column
+
+Per-workspace usage in the users list, coloured in four bands at 60 / 85 / 100
+per cent. The thresholds are the ones the worker acts on, so the colour an
+operator sees and the point at which a customer is warned are the same fact - a
+panel showing green while the worker is raising an alarm would be worse than
+showing nothing. Grey means "not sampled yet", which is deliberately distinct
+from zero: a workspace never measured is not a workspace that is empty.
+
+### What this unlocks
+
+Registrations were already unbounded by design - CPU and memory are claimed at
+power-on, so an idle account costs neither. Disk was the only hard wall, and it
+is gone. At 154 MB per fresh workspace and 53.5 GiB free, the pool now holds
+many more customers than the RAM will ever run at once, which is the correct
+place for the constraint to sit.
+
+
+## Codex pricing, and the first real charge
+
+Codex metering shipped with an EMPTY price table on purpose: the rates were not
+known, an unpriced model is held uncounted rather than given away, and the
+failure mode of an unconfigured supplier was "not yet billed" rather than
+"billed wrongly". That was the right default while it lasted, and the moment a
+customer actually used Codex it stopped being tenable - the tokens were real.
+
+OpenAI's published rates for the gpt-5.6 family (Aug 2026), USD per million:
+
+| model | input | cached read | cache write | output |
+|---|---|---|---|---|
+| `gpt-5.6-cyber` | 12.50 | 1.25 | 15.625 | 75.00 |
+| `gpt-5.6-sol` | 5.00 | 0.50 | 6.25 | 30.00 |
+| `gpt-5.6-terra` | 2.00 | 0.20 | 2.50 | 12.00 |
+| `gpt-5.6-luna` | 0.20 | 0.02 | 0.25 | 1.20 |
+
+Three things about that table are decisions rather than transcription:
+
+**One write rate, in both write columns.** Anthropic prices 5-minute and 1-hour
+cache writes differently; OpenAI has a single write rate of 1.25x input. The
+Codex scanner never reports a 1h write, so a zero in that column would be
+harmless right up until something did report one, and then it would be free.
+Both columns carry the same number instead.
+
+**A family fallback.** `resolve()` takes the longest matching prefix, so a bare
+`gpt-5.6` row catches any suffix nobody has priced yet. It is set at the
+FLAGSHIP rate deliberately: guessing high costs a customer query, guessing low
+costs revenue that cannot be recovered.
+
+**`codex-` is priced too.** Codex's own review model has no separate published
+rate and runs on the same family, so it is priced there rather than left to
+accrue for nothing.
+
+### The 90% discount is the Claude argument, not a copy of it
+
+Checked rather than assumed: the host's `~/.codex/auth.json` reports
+`auth_mode: chatgpt` with no API key. Codex here runs on a flat ChatGPT
+subscription, so a customer's marginal token costs the operator essentially
+nothing - the same structure as Claude, and the same reason a tenth of list
+price is margin rather than loss. Had it been a pay-per-token API key, that
+discount would have been collecting ten cents for every dollar spent.
+
+### The first charge
+
+heidary13794, one session, 15 turns on `gpt-5.6-sol`:
+
+    input       18,146 x $5.00  = $0.090730
+    cache read 185,088 x $0.50  = $0.092544
+    output       2,240 x $30.00 = $0.067200
+                                 ---------
+    list                          $0.250474
+    x 10% (90% off) x 230,000 Toman/USD = 5,760.90 Toman
+
+Posted by the worker on its own, as `CHARGE_CODEX`, and matching the figure
+computed by hand beforehand. A second pass posted nothing: the mark had already
+advanced, which is the property that makes this safe to run every five minutes.
+
+Note the cache read is the largest single line - 185k tokens against 18k of
+fresh input. That is what an agent re-reading a large context looks like, and it
+is the reason cached input is tracked as its own category rather than folded
+into input at ten times the price.
+
+## Two ledger kinds had no label
+
+Found while adding `charge_codex`: `billing.kind.charge_hermes` did not exist
+either, so a customer with OpenRouter spend saw the raw key
+`billing.kind.charge_hermes` in their own billing history. The catalogue test
+enumerates the `billing.kind.` variants precisely to prevent that, and its list
+had never been extended past the kinds that existed when it was written. Both
+labels added, and both added to the test.
+
+
+## OpenClaw was installed without a default model
+
+The gateway started, answered, and was not using the customer's supplier. That
+is the worst way for this to fail: nothing errors, the dashboard is green, and
+the model in use may be one the customer's OpenRouter key cannot reach and the
+platform therefore never bills for.
+
+Four things the install was missing, every one of them learned from a working
+installation rather than guessed:
+
+  * `agents.defaults.model.primary` - the default model itself.
+  * `auth.profiles["openrouter:default"]` - having a KEY is not the same as
+    being signed in. The CLI keeps an auth profile per provider, and the
+    documented way to create one (`openclaw models auth paste-api-key`) is
+    interactive, which a provisioner cannot use.
+  * `plugins.entries.openrouter.enabled`.
+  * `gateway.auth.mode: "password"` - the scheme, alongside the password.
+
+The model id is **provider-prefixed**: OpenRouter's `z-ai/glm-5.2` is
+`openrouter/z-ai/glm-5.2` to OpenClaw. An operator will paste the id
+OpenRouter's own site shows, so `openclaw.normalise_model()` adds the prefix if
+it is absent and the admin field accepts either form.
+
+Admin owns exactly one setting - the model. The exchange rate, the spend cap and
+the guardrail belong to OpenRouter, whose key OpenClaw spends; duplicating any
+of them would create a second place to change a number that has one right value.
+Changing it does NOT rewrite running gateways: swapping a model under a customer
+mid-conversation is an incident, not a setting.
+
+## One Telegram bot cannot serve two agents
+
+Hermes and OpenClaw both reuse the token saved on the customer's account, which
+is the right design - a customer sets a bot up once. Enabling both on one token
+is not.
+
+Telegram permits a single `getUpdates` poller per bot. With both enabled the
+channel reported:
+
+    enabled, configured, running, DISCONNECTED
+    error: Conflict: terminated by other getUpdates request; make sure that
+    only one bot instance is running.
+
+Observed live, on the operator's own workspace, with `@hermes_agent_mmd_bot`
+serving Hermes while OpenClaw tried to poll the same token. It looks switched
+on, which is worse than being switched off.
+
+Enabling either service's Telegram channel now refuses while the other holds the
+bot, in both directions, and says which service has it. Disabling is never
+blocked - a guard that can leave both stuck on is a trap. A customer who wants
+both makes a second bot in BotFather.
+
+### Two allowlists, not one
+
+The vendor documentation is explicit and it is the kind of detail that produces
+a support ticket rather than an error:
+
+  * `channels.telegram.allowFrom` decides who may send the bot a direct message
+  * `commands.ownerAllowFrom` separately grants owner-scoped slash commands, and
+    is namespaced by channel (`telegram:<id>`)
+
+"Configuring only one of these can still produce 'You are not authorized to use
+this command.'" - a customer able to talk to their own agent and refused the
+moment they try a command. Both are written, from the Telegram user id already
+stored on the account.
+
+`dmPolicy` is `allowlist` and the channel is REFUSED when the allowlist is
+empty, rather than configured open. A bot with no policy answers any Telegram
+user who finds it, and this one is wired to an agent with a shell in the
+customer's workspace.
+
+---
+
+## Database backups go to Telegram
+
+The platform runs on ONE host. A `pg_dump` written to that host's disk survives
+a dropped table and nothing else — not the disk, not the provider, not the
+machine being reclaimed. The backup that matters is the one that leaves.
+
+Telegram was chosen over an object store because of what it does **not**
+require: no second provider account, no bucket, no credential to rotate, no
+egress rule, no billing relationship. A bot token and a chat id is the entire
+configuration, and the operator already has the app on the phone they carry.
+Delivery is also its own alerting — a backup that stops arriving is visible
+without a monitoring stack that does not yet exist.
+
+Three consequences, each of which shapes the implementation:
+
+**The bot is the admin's, and not one of the customers'.** Hermes and OpenClaw
+reuse a token saved on a customer's account; those bots are wired to agents with
+a shell inside a workspace. The platform's database does not travel through the
+same bot, so this setting is a separate token and chat id with no fallback to
+the account one.
+
+**Telegram caps bot uploads at 50 MB.** That is a hard ceiling, so the size is
+checked locally and reported as a size error rather than discovered as an opaque
+HTTP failure. The dump was 1.8 MB at 1.6.0. If it ever approaches the cap the
+answer is an object store, not compression tricks.
+
+**A dump is every secret at once** — password hashes, session material, provider
+keys, every customer's ledger. So: admin-only, off until deliberately switched
+on, audited when changed, and the page says plainly what is in the file before
+the toggle rather than after it.
+
+### The interval is measured from the last success
+
+Not from the last attempt. Measuring from the attempt means a failing backup is
+retried once and then skipped until the failure ages out — which is exactly when
+retrying matters. A failure leaves the clock where it was, so the next tick
+tries again.
+
+### The token is write-only
+
+The panel is never sent it — only whether one is stored and its last four
+characters, which is enough to recognise which bot. A page that cannot display
+the token must not erase it when it is left blank, so an omitted field means
+*keep*, and only an explicit empty string clears. Otherwise an admin changing
+the interval would silently turn delivery off.
+
+### "Enabled" is not "working"
+
+The status card leads with the last successful delivery and the last error, and
+the toggle is below them. The failure this guards against is not a broken
+backup — it is an operator who believes for a month that they have backups. A
+**send one now** button exists for the same reason: it turns "I configured it"
+into "a file arrived" while the admin is still on the page.

@@ -23,8 +23,12 @@ const numCell = (id, v) =>
   `<td class="num"><input class="pricecell ltr" dir="ltr" id="${id}" type="number"
       step="0.01" min="0" value="${v}"></td>`;
 
-export async function aiPricingPage() {
-  const d = await get("/api/admin/ai-pricing");
+/* One page, two suppliers. `service` selects which price table is being
+   edited; the arithmetic and the columns are identical, so duplicating the page
+   would have meant maintaining the same grid twice and letting them drift. */
+export async function aiPricingPage(params) {
+  const service = params?.service === "codex" ? "codex" : "claude";
+  const d = await get(`/api/admin/ai-pricing?service=${service}`);
 
   const rows = d.prices.map((p) => `<tr data-row="${p.id}">
       <td><input class="ltr mono" dir="ltr" id="m-${p.id}" value="${esc(p.model)}"
@@ -35,7 +39,7 @@ export async function aiPricingPage() {
         <button class="btn sm danger ghost" data-del="${p.id}">${icon.trash}</button>
       </td></tr>`).join("");
 
-  render(`${adminHead("claude", t("adm.ai.title"), t("adm.ai.sub"))}
+  render(`${adminHead(service, t(`adm.ai.title.${service}`), t(`adm.ai.sub.${service}`))}
 
     ${d.unpriced_models.length
       ? note("warn", `${t("adm.ai.unpriced", d.unpriced_models.length)}
@@ -120,7 +124,7 @@ export async function aiPricingPage() {
     const model = $("#new-model").value.trim();
     if (!model) return;
     try {
-      await post("/api/admin/ai-pricing", {
+      await post("/api/admin/ai-pricing", { service,
         model,
         ...Object.fromEntries(COLS.map(([f]) => [f, Number($(`#new-${f}`).value)])),
       });

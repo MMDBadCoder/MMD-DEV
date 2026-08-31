@@ -21,6 +21,7 @@ below except through this socket.
 from __future__ import annotations
 
 import grp
+import base64
 import json
 import logging
 import os
@@ -32,6 +33,7 @@ import struct
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
@@ -39,6 +41,7 @@ WS_CREATE = REPO / "workspace" / "ws-create.sh"
 WS_DESTROY = REPO / "workspace" / "ws-destroy.sh"
 WS_RESET = REPO / "workspace" / "ws-reset.sh"
 AI_USAGE_SCAN = Path(__file__).resolve().parent / "scan_ai_usage.py"
+CODEX_USAGE_SCAN = Path(__file__).resolve().parent / "scan_codex_usage.py"
 APT_FIXUPS = REPO / "image" / "apt-fixups.sh"
 NET_FIXUPS = REPO / "image" / "net-fixups.sh"
 
@@ -100,11 +103,48 @@ RestartSec=5
 WantedBy=multi-user.target
 """
 
+# Hermes ships its own `hermes gateway install`, which writes a *user* unit of
+# the exact same name into ~/.config/systemd/user and turns on lingering so it
+# outlives every logout. Ours is a system unit. Two managers, one unit name -
+# and `systemctl disable --now hermes-gateway` as root reports success having
+# touched only its own copy, so the customer's gateway keeps polling.
+#
+# That is not merely untidy. Telegram's getUpdates serves exactly one poller
+# per bot token; a second one gets HTTP 409 and, from the customer's side, the
+# bot simply stops answering. So whichever gateway we did not start has to be
+# gone before ours comes up, and gone again when the service is turned off.
+#
+# runuser + XDG_RUNTIME_DIR, not `su - dev`: a login shell for a lingering user
+# does not necessarily export the runtime dir, and without it `systemctl --user`
+# cannot find the bus and exits non-zero having done nothing.
+HERMES_USER_GATEWAY_PURGE = (
+    "U=$(id -u dev); "
+    "runuser -u dev -- env XDG_RUNTIME_DIR=/run/user/$U "
+    "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$U/bus "
+    "systemctl --user disable --now hermes-gateway >/dev/null 2>&1 || true; "
+    "rm -f /home/dev/.config/systemd/user/hermes-gateway.service "
+    "/home/dev/.config/systemd/user/default.target.wants/hermes-gateway.service; "
+    "runuser -u dev -- env XDG_RUNTIME_DIR=/run/user/$U "
+    "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$U/bus "
+    "systemctl --user daemon-reload >/dev/null 2>&1 || true; "
+    # `disable --now` on a Restart=always unit leaves it in failed state, and a
+    # failed unit of that name would make a later `is-active` check ambiguous.
+    "runuser -u dev -- env XDG_RUNTIME_DIR=/run/user/$U "
+    "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$U/bus "
+    "systemctl --user reset-failed hermes-gateway >/dev/null 2>&1 || true; "
+    # The vendor unit is Restart=always, so a unit that loses its manager can
+    # still leave the process behind. Its argv is distinct from our system
+    # unit's (`-m hermes_cli.main` vs the `hermes` console script), so this
+    # cannot reap the gateway we are about to start.
+    "pkill -u dev -f 'hermes_cli.main gateway' >/dev/null 2>&1 || true; "
+)
+
 VERBS = {"provision", "archive", "restore", "destroy",
          "expose_port", "unexpose_port",
          "service_ssh", "service_rdp", "service_hermes",
          "fs_list", "fs_pull", "fs_push", "fs_mkdir", "fs_delete",
-         "fs_archive", "apt_repair", "ai_claude", "ai_usage", "reset", "ping"}
+         "fs_archive", "apt_repair", "ai_claude", "ai_codex", "ai_openclaw",
+         "ai_usage", "codex_usage", "disk_usage", "reset", "ping"}
 
 # ---------------------------------------------------------------------------
 # Claude Code sign-in propagation
@@ -549,6 +589,587 @@ def _claude_expiry() -> int | None:
     return int(v) if isinstance(v, (int, float)) else None
 
 
+# --- Codex ----------------------------------------------------------------
+# Same shape as the Claude block above and for the same reasons: ONE file is
+# read, only named keys survive, and everything else the CLI keeps beside it is
+# never opened.
+#
+# What lives in ~/.codex and must never leave the host: history.jsonl is the
+# operator's own prompts, config.toml their settings, and cache/, log/ and
+# goals_*.sqlite are working state. None of it is needed to be signed in.
+CODEX_HOST_HOME = Path(os.environ.get("MMD_CODEX_HOST_HOME", "/root"))
+CODEX_AUTH_FILE = "auth.json"
+
+# The whole of what signs a machine in. `auth_mode` says which of the two the
+# account uses (a ChatGPT OAuth grant, or a plain API key); `tokens` carries the
+# grant; `last_refresh` is what the CLI compares against to decide when to renew.
+CODEX_AUTH_KEYS = ("auth_mode", "OPENAI_API_KEY", "tokens", "last_refresh")
+
+# Never touched. Listed rather than inferred, so a reviewer can see what was
+# considered - the same discipline as CLAUDE_NEVER_COPY.
+CODEX_NEVER_COPY = (
+    "history.jsonl", "config.toml", "installation_id", "cache", "log",
+    "sessions", ".tmp", "goals_1.sqlite",
+)
+
+
+def _codex_credentials() -> tuple[dict | None, str]:
+    """Build the credential document to place in a workspace.
+
+    Reads exactly one file and rebuilds it from the allowlisted keys, so
+    anything a future Codex release adds beside them is dropped by
+    construction rather than by remembering to add it to a blocklist.
+    """
+    src = CODEX_HOST_HOME / ".codex" / CODEX_AUTH_FILE
+    try:
+        raw = json.loads(src.read_text())
+    except FileNotFoundError:
+        return None, "the platform account is not signed in on this host"
+    except (OSError, ValueError) as e:  # noqa: BLE001
+        return None, f"the platform credentials are unreadable: {e}"
+    if not isinstance(raw, dict):
+        return None, "the platform credentials are malformed"
+
+    out = {k: raw[k] for k in CODEX_AUTH_KEYS if k in raw}
+    tokens = out.get("tokens")
+    has_oauth = isinstance(tokens, dict) and tokens.get("access_token")
+    if not has_oauth and not out.get("OPENAI_API_KEY"):
+        return None, "the platform account is not signed in on this host"
+    return out, ""
+
+
+def _jwt_exp(token: str) -> int | None:
+    """The `exp` claim, read WITHOUT verifying the signature.
+
+    Only ever used to print a date in the interface. The token is not trusted
+    here and is not being authenticated - it is the host's own credential, and
+    a forged expiry would mislead nobody but the operator reading the page.
+    """
+    try:
+        payload = token.split(".")[1]
+        payload += "=" * (-len(payload) % 4)
+        exp = json.loads(base64.urlsafe_b64decode(payload)).get("exp")
+        return int(exp) if isinstance(exp, (int, float)) else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _codex_expiry() -> int | None:
+    creds, _ = _codex_credentials()
+    if not creds:
+        return None
+    tokens = creds.get("tokens")
+    if isinstance(tokens, dict) and tokens.get("access_token"):
+        return _jwt_exp(tokens["access_token"])
+    return None
+
+
+def _codex_status(project: str) -> dict:
+    rc, out, _ = _run_split(
+        ["incus", "exec", "ws", "--project", project, "--", "bash", "-lc",
+         "v=$(su - dev -c 'codex --version' 2>/dev/null | head -1); "
+         "printf 'version=%s\nlinked=%s\n' "
+         "  \"${v:-}\" "
+         "  \"$([ -s /home/dev/.codex/auth.json ] && echo yes || echo no)\""],
+        timeout=120)
+    info = dict(ln.split("=", 1) for ln in (out or "").splitlines() if "=" in ln)
+    version = (info.get("version") or "").strip()
+    return {"installed": bool(version), "version": version or None,
+            "linked": info.get("linked", "no").strip() == "yes"}
+
+
+def _verb_ai_codex(project: str, req: dict) -> dict:
+    action = req.get("action")
+    if action not in ("status", "install", "unlink"):
+        return {"ok": False, "error": "action must be status, install or unlink"}
+
+    if action == "status":
+        st = _codex_status(project)
+        creds, why = _codex_credentials()
+        return {"ok": True, **st, "available": creds is not None,
+                "unavailable_reason": why or None,
+                "expires_at": _codex_expiry()}
+
+    if action == "unlink":
+        ok, out = _run(["incus", "exec", "ws", "--project", project, "--", "bash", "-lc",
+                        "rm -f /home/dev/.codex/auth.json"], timeout=120)
+        return {"ok": ok, "output": (out or "")[-300:], **_codex_status(project)}
+
+    # --- install -----------------------------------------------------------
+    creds, why = _codex_credentials()
+    if creds is None:
+        return {"ok": False, "error": why}
+
+    st = _codex_status(project)
+    if not st["installed"]:
+        # The golden image installs it already; this covers machines built
+        # before that, and any customer who removed it.
+        ok, out = _run(["incus", "exec", "ws", "--project", project, "--", "bash", "-lc",
+                        "command -v npm >/dev/null || exit 90; "
+                        "npm install -g --no-fund --no-audit @openai/codex"],
+                       timeout=900)
+        if not ok:
+            return {"ok": False, "error": "install failed",
+                    "output": (out or "")[-800:]}
+
+    # Through stdin, so no token reaches a command line or this process's log.
+    ok, out = _run(["incus", "exec", "ws", "--project", project, "--", "bash", "-lc",
+                    "install -d -m 0700 -o dev -g dev /home/dev/.codex && "
+                    "install -m 0600 -o dev -g dev /dev/null "
+                    "  /home/dev/.codex/auth.json && "
+                    "cat > /home/dev/.codex/auth.json"],
+                   timeout=120, stdin_text=json.dumps(creds))
+    if not ok:
+        return {"ok": False, "error": "could not write credentials",
+                "output": (out or "")[-300:]}
+    return {"ok": True, **_codex_status(project), "expires_at": _codex_expiry()}
+
+
+# --- OpenClaw --------------------------------------------------------------
+# A self-hosted agent with its own web dashboard and messaging channels
+# (github.com/openclaw/openclaw). Architecturally it is Hermes again: it runs
+# INSIDE the customer's workspace, serves a dashboard on a fixed port, and
+# spends the customer's own capped OpenRouter key - so the platform meters and
+# caps it exactly as it already does for Hermes, with no second supplier
+# integration and no second way for a customer to spend money.
+#
+# 18789 is the vendor's default. Fixed rather than allocated, because the vhost
+# reconciler has to know where to proxy and one port per workspace is a number
+# the customer never has to see.
+OPENCLAW_PORT = 18789
+OPENCLAW_HOME = "/home/dev/.openclaw"
+# `openclaw.json`, which is the CLI's OWN default - not a name of our choosing.
+# The gateway can be pointed anywhere with OPENCLAW_CONFIG_PATH, but the CLI the
+# customer types in their terminal reads the default, and a config only the
+# service can see is one the customer cannot manage. Found the hard way:
+# `openclaw devices list` reported `Config: /home/dev/.openclaw/openclaw.json`
+# while the running gateway was using a different file entirely.
+OPENCLAW_CONFIG = f"{OPENCLAW_HOME}/openclaw.json"
+# The bridge address the host reaches the workspace from - nginx's source. The
+# gateway will not treat a proxied connection as local without it, and a
+# non-local Control UI connection is made to pair a device before it may talk.
+# Safe to trust: nothing DNATs this port, and the bridge isolation table drops
+# workspace-to-workspace traffic, so our reverse proxy is the only route in.
+OPENCLAW_TRUSTED_PROXY = "10.42.0.1"
+OPENCLAW_UNIT = "/etc/systemd/system/openclaw-gateway.service"
+# The convention OpenClaw itself uses. A FILE rather than a token in the config,
+# so the credential is not sitting in a document a customer might paste into a
+# support ticket - and so `openclaw channels status` reports `token:tokenFile`
+# rather than an inline secret.
+OPENCLAW_SECRETS = f"{OPENCLAW_HOME}/secrets"
+OPENCLAW_TG_TOKEN = f"{OPENCLAW_SECRETS}/telegram-default.token"
+
+# A SYSTEM unit running as `dev`, rather than the `openclaw gateway install`
+# user service the vendor documents. A user service needs lingering enabled and
+# a live XDG_RUNTIME_DIR - exactly the kind of thing that works while a human is
+# logged in and fails on a machine powered on by an API call. The workspace
+# already runs systemd; sshd and xrdp are managed the same way.
+OPENCLAW_SERVICE = f"""[Unit]
+Description=OpenClaw gateway
+After=network-online.target
+# GIVE UP rather than loop forever. A misconfiguration the gateway rejects at
+# startup is not something a restart can fix, and without a limit systemd
+# retries every five seconds indefinitely - observed at restart counter 127,
+# twenty minutes of a workspace's CPU spent re-reading a config that was never
+# going to be accepted. Five attempts in two minutes rides out a slow boot;
+# past that the failure is real and belongs in the journal.
+#
+# In [Unit], not [Service]: systemd moved these in v230 and silently ignores
+# them in the wrong section, which would look exactly like working.
+StartLimitBurst=5
+StartLimitIntervalSec=120
+
+[Service]
+Type=simple
+User=dev
+Group=dev
+WorkingDirectory=/home/dev
+Environment=HOME=/home/dev
+Environment=OPENCLAW_CONFIG_PATH={OPENCLAW_CONFIG}
+Environment=OPENCLAW_GATEWAY_PORT={OPENCLAW_PORT}
+ExecStart=/usr/bin/env openclaw gateway run
+# ALWAYS, not on-failure. The gateway restarts itself by exiting CLEANLY and
+# expecting its supervisor to bring it back:
+#
+#     [gateway] restart mode: full process restart (supervisor restart)
+#     [shutdown] completed cleanly in 250ms
+#
+# With on-failure that exit code 0 is "finished successfully" and systemd leaves
+# it stopped - so any config change the gateway applies to itself takes the
+# dashboard down until something else notices. The start limit in [Unit] is what
+# keeps this from becoming an infinite loop on a genuine failure.
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+"""
+
+
+def _openclaw_status(project: str) -> dict:
+    probe = (
+        "v=$(su - dev -c 'openclaw --version' 2>/dev/null | head -1); "
+        "a=$(systemctl is-active openclaw-gateway 2>/dev/null); "
+        "h=$(curl -s -o /dev/null -w '%{http_code}' --max-time 4 "
+        f"     http://127.0.0.1:{OPENCLAW_PORT}/ 2>/dev/null); "
+        # The model and Telegram state come from the config the gateway is
+        # actually running, not from what we believe we wrote. A page that
+        # reports our intent rather than the machine's state is how "enabled"
+        # and "working" drift apart.
+        f"m=$(python3 -c \"import json;print(json.load(open('{OPENCLAW_CONFIG}'))"
+        f"      .get('agents',{{}}).get('defaults',{{}}).get('model',{{}}).get('primary',''))\" 2>/dev/null); "
+        f"tg=$(python3 -c \"import json;c=json.load(open('{OPENCLAW_CONFIG}'))"
+        f"      .get('channels',{{}}).get('telegram',{{}});"
+        f"print('yes' if c.get('enabled') and c.get('allowFrom') else 'no')\" 2>/dev/null); "
+        "printf 'version=%s\\nactive=%s\\nhttp=%s\\nconfigured=%s\\nmodel=%s\\ntelegram=%s\\n' "
+        '  "${v:-}" "${a:-}" "${h:-0}" '
+        f'  "$([ -s {OPENCLAW_CONFIG} ] && echo yes || echo no)" '
+        '  "${m:-}" "${tg:-no}"'
+    )
+    _rc, out, _err = _run_split(
+        ["incus", "exec", "ws", "--project", project, "--", "bash", "-lc", probe],
+        timeout=120)
+    info = dict(ln.split("=", 1) for ln in (out or "").splitlines() if "=" in ln)
+    version = (info.get("version") or "").strip()
+    http = (info.get("http") or "0").strip()
+    return {"installed": bool(version), "version": version or None,
+            "configured": info.get("configured", "no").strip() == "yes",
+            "model": (info.get("model") or "").strip() or None,
+            "telegram": info.get("telegram", "no").strip() == "yes",
+            "service_active": info.get("active", "").strip() == "active",
+            # Any HTTP answer counts, including 401: the gateway requires auth
+            # by default, so a challenge means it is up and protecting itself.
+            "responding": http not in ("0", "000", "")}
+
+
+def _openclaw_approve_devices(project: str, password: str) -> dict:
+    """Approve every device waiting to pair with this customer's gateway.
+
+    OpenClaw treats a browser reaching the Control UI as a DEVICE, and a device
+    that is not "local" must be approved out of band before it may talk - even
+    with the right password. `trustedProxies` restores local treatment for
+    connections arriving through our proxy, which is the normal path; this is
+    for the cases it does not cover, so the answer to a pairing prompt is a
+    button rather than "SSH into your machine and run this command".
+
+    Approving in bulk is defensible precisely because of who is asking: the
+    request reaches here only from a customer already signed in to their own
+    dashboard, looking at their own workspace. A request pending on THEIR
+    gateway is one they just caused.
+    """
+    # `approve` takes the REQUEST id. Which field carries it is read
+    # tolerantly rather than guessed: the paired entries use `deviceId`, the
+    # table prints a separate "Request" column, and a pending list was not
+    # available to observe when this was written. Trying the plausible names in
+    # order costs nothing and cannot pick a wrong one - only a missing one.
+    reader = (
+        "import json,sys\\n"
+        "d=json.load(sys.stdin)\\n"
+        "out=[]\\n"
+        "for x in (d.get('pending') or []):\\n"
+        "    v=x.get('requestId') or x.get('id') or x.get('deviceId')\\n"
+        "    if v: out.append(str(v))\\n"
+        "print(' '.join(out))\\n"
+    )
+    script = (
+        f"export OPENCLAW_CONFIG_PATH={OPENCLAW_CONFIG}; "
+        f"printf '%b' \"{reader}\" > /tmp/.oc_pending.py; "
+        "ids=$(openclaw devices list --json --password \"$OC_PW\" 2>/dev/null "
+        "  | python3 /tmp/.oc_pending.py 2>/dev/null); "
+        "rm -f /tmp/.oc_pending.py; "
+        "[ -z \"$ids\" ] && { echo 'none pending'; exit 0; }; "
+        "for i in $ids; do openclaw devices approve \"$i\" --password \"$OC_PW\" "
+        "  2>&1 | tail -1; done"
+    )
+    rc, out, _err = _run_split(
+        ["incus", "exec", "ws", "--project", project,
+         "--env", f"OC_PW={password}", "--",
+         "su", "-", "dev", "-c", script], timeout=180)
+    return {"ok": rc == 0, "output": (out or "")[-500:]}
+
+
+# The ZFS pool the workspaces live on. Read here rather than passed in: it is a
+# property of the host, and the caller has no business naming a pool.
+ZPOOL = os.environ.get("MMD_ZPOOL", "mmdpool")
+
+
+def _verb_disk_usage(_req: dict) -> dict:
+    """Real disk consumption for every workspace, in one pass.
+
+    ONE `zfs list` for all workspaces rather than a call each: this runs on a
+    timer over every workspace on the host, and a subprocess per workspace would
+    make the cost of the check scale with the thing it is checking.
+
+    Two numbers per workspace and they measure different things:
+
+      * root   - USEDDS, the bytes this container has actually written. NOT
+                 `used`, which includes the refreservation and therefore reads
+                 as a constant 6 GiB whether the machine is empty or full, and
+                 NOT `refer`, which counts the golden-image blocks it shares
+                 with every other workspace and would bill each of them for the
+                 same data.
+      * docker - `used` on the zvol, which is thin, so this is real too.
+
+    The quota figures come back alongside so the caller does not have to hold a
+    second opinion about how big a workspace is supposed to be.
+    """
+    out: dict[str, dict] = {}
+
+    rc, text, err = _run_split(
+        ["zfs", "list", "-Hp", "-o", "name,usedds,used,available",
+         "-r", f"{ZPOOL}/containers"], timeout=60)
+    if rc != 0:
+        return {"ok": False, "error": (err or "zfs list failed")[-300:]}
+    for line in (text or "").splitlines():
+        parts = line.split("\t")
+        if len(parts) < 4 or not parts[0].endswith("_ws"):
+            continue
+        name = parts[0].rsplit("/", 1)[-1]          # ws-3_ws
+        idx = name[3:-3]
+        if not idx.isdigit():
+            continue
+        try:
+            out.setdefault(idx, {})["root_used"] = int(parts[1])
+            out[idx]["root_free"] = int(parts[3])
+        except ValueError:
+            continue
+
+    rc, text, _err = _run_split(
+        ["zfs", "list", "-Hp", "-o", "name,used,volsize",
+         "-r", f"{ZPOOL}/custom"], timeout=60)
+    if rc == 0:
+        for line in (text or "").splitlines():
+            parts = line.split("\t")
+            if len(parts) < 3 or not parts[0].endswith("_docker"):
+                continue
+            name = parts[0].rsplit("/", 1)[-1]      # ws-3_docker
+            idx = name[3:-7]
+            if not idx.isdigit():
+                continue
+            try:
+                out.setdefault(idx, {})["docker_used"] = int(parts[1])
+                out[idx]["docker_size"] = int(parts[2])
+            except ValueError:
+                continue
+
+    # Pool-wide headroom. With reservations gone this is the number that decides
+    # whether the host is in trouble, and no per-workspace figure can show it.
+    pool = {}
+    rc, text, _err = _run_split(
+        ["zfs", "list", "-Hp", "-o", "used,available", ZPOOL], timeout=60)
+    if rc == 0 and text.strip():
+        try:
+            used, avail = text.split()[:2]
+            pool = {"used": int(used), "available": int(avail)}
+        except ValueError:
+            pool = {}
+
+    return {"ok": True, "workspaces": out, "pool": pool}
+
+
+def _verb_ai_openclaw(project: str, req: dict) -> dict:
+    action = req.get("action")
+    if action not in ("status", "install", "disable", "approve_devices"):
+        return {"ok": False,
+                "error": "action must be status, install, disable or approve_devices"}
+
+    if action == "status":
+        return {"ok": True, **_openclaw_status(project)}
+
+    if action == "approve_devices":
+        password = (req.get("password") or "").strip()
+        if not password:
+            return {"ok": False, "error": "password is required"}
+        return _openclaw_approve_devices(project, password)
+
+    if action == "disable":
+        # The credential goes with it. Leaving a spendable key in a config file
+        # for a service the customer has just switched off would be careless.
+        ok, out = _run(["incus", "exec", "ws", "--project", project, "--", "bash", "-lc",
+                        "systemctl disable --now openclaw-gateway 2>/dev/null; "
+                        f"rm -f {OPENCLAW_UNIT} {OPENCLAW_CONFIG}; "
+                        "systemctl daemon-reload 2>/dev/null; true"], timeout=180)
+        return {"ok": ok, "output": (out or "")[-300:], **_openclaw_status(project)}
+
+    # --- install ------------------------------------------------------------
+    key = (req.get("openrouter_key") or "").strip()
+    password = (req.get("password") or "").strip()
+    origin = (req.get("origin") or "").strip()
+    model = (req.get("model") or "").strip()
+    telegram_token = (req.get("telegram_token") or "").strip()
+    # Comma-separated numeric Telegram user ids, exactly as Hermes takes them.
+    telegram_users = [u for u in re.split(r"[,\s]+",
+                                          (req.get("telegram_users") or "").strip())
+                      if u.isdigit()]
+    telegram_enabled = (bool(req.get("telegram_enabled")) and bool(telegram_token)
+                        and bool(telegram_users))
+    if not key or not password:
+        return {"ok": False, "error": "openrouter_key and password are required"}
+    if not model:
+        return {"ok": False, "error": "model is required"}
+
+    st = _openclaw_status(project)
+    if not st["installed"]:
+        ok, out = _run(["incus", "exec", "ws", "--project", project, "--", "bash", "-lc",
+                        "command -v npm >/dev/null || exit 90; "
+                        "npm install -g --no-fund --no-audit "
+                        "  --allow-scripts=openclaw openclaw@latest"],
+                       timeout=1800)
+        if not ok:
+            return {"ok": False, "error": "install failed",
+                    "output": (out or "")[-800:]}
+
+    # The config carries a spendable key and a dashboard password, so it goes in
+    # through stdin at 0600 - never a command line, never this process's log.
+    config = {
+        "gateway": {
+            "port": OPENCLAW_PORT,
+            # Both of these were learned from the gateway refusing to start,
+            # and neither is guessable from the address it ends up on.
+            #
+            # `bind` is a MODE, not an address: "loopback", "lan", "tailnet",
+            # "auto" or "custom". Passing "0.0.0.0" is rejected outright. Of the
+            # valid modes only "lan" actually gives 0.0.0.0 here - "auto" is
+            # documented to detect a container and widen, but in this one it
+            # resolved to loopback, which nginx cannot reach. Measured, not
+            # assumed: with "auto" the gateway answered on 127.0.0.1:18789 and
+            # nothing else; with "lan" it answers on 0.0.0.0:18789 and the host
+            # reaches it over the bridge.
+            "bind": "lan",
+            # Without this the gateway refuses to start at all: "existing config
+            # is missing gateway.mode. Treat this as suspicious or clobbered
+            # config." It is a deliberate guard against a half-written file, and
+            # writing the config ourselves is exactly the case it suspects.
+            "mode": "local",
+            # Reachable only from this host regardless: nothing DNATs to this
+            # port, and the bridge isolation table drops workspace-to-workspace
+            # traffic, so the reverse proxy is the only route in.
+            # `mode` alongside the password: the gateway records which auth
+            # scheme is in force, and leaving it to be inferred is how a
+            # config that looks complete behaves as though auth were absent.
+            "auth": {"password": password, "mode": "password"},
+            # Without this the Control UI loads, then refuses to open its
+            # websocket: "The Gateway rejected this page origin". It checks the
+            # browser's Origin against an explicit list - no wildcards - and a
+            # dashboard published under the customer's own name is by
+            # definition not the gateway host.
+            "controlUi": {"allowedOrigins": [origin]} if origin else {},
+            # Restores "local client" treatment behind the reverse proxy.
+            # Without it the gateway logs "Proxy headers detected from
+            # untrusted address" and makes every browser pair as a new device
+            # before it may talk.
+            "trustedProxies": [OPENCLAW_TRUSTED_PROXY],
+        },
+        "models": {
+            "providers": {
+                "openrouter": {
+                    "baseUrl": "https://openrouter.ai/api/v1",
+                    "apiKey": key,
+                }
+            }
+        },
+        # Having a KEY is not the same as being signed in. The CLI keeps an auth
+        # profile per provider, and `openclaw models auth paste-api-key` is the
+        # interactive way to create one - which a provisioner cannot use. This
+        # is the same record, written directly.
+        "auth": {"profiles": {"openrouter:default":
+                              {"provider": "openrouter", "mode": "api_key"}}},
+        # THE DEFAULT MODEL, which was the gap. Without it the gateway starts,
+        # answers, and quietly uses whatever OpenClaw's own default is - which
+        # may not be an OpenRouter model at all, and so may be unreachable with
+        # the customer's key and unbillable to their account. It fails as
+        # working software, which is the worst way to fail.
+        #
+        # Provider-prefixed: OpenRouter's `z-ai/glm-5.2` is
+        # `openrouter/z-ai/glm-5.2` here. See mmd/openclaw.normalise_model.
+        "agents": {"defaults": {
+            "workspace": f"{OPENCLAW_HOME}/workspace",
+            "model": {"primary": model},
+        }},
+        "plugins": {"entries": {
+            "openrouter": {"enabled": True},
+            # Enabled whether or not a token is configured: the plugin being
+            # available is what lets a customer turn Telegram on later without
+            # a reinstall.
+            "telegram": {"enabled": True},
+        }},
+    }
+
+    # Telegram, by the same arrangement Hermes uses: the token comes from the
+    # customer's own account settings, and it is written to a 0600 FILE that the
+    # config points at rather than inlined. OpenClaw supports `tokenFile`
+    # natively, so the token never sits in the config a customer might paste
+    # into a support ticket.
+    if telegram_enabled:
+        config["channels"] = {"telegram": {
+            "enabled": True,
+            "tokenFile": OPENCLAW_TG_TOKEN,
+            # An allowlist, never open. A bot with no policy answers ANY
+            # Telegram user who finds it, and this one is wired to an agent
+            # with a shell in the customer's workspace.
+            "dmPolicy": "allowlist",
+            "allowFrom": telegram_users,
+        }}
+        # BOTH lists, and this is the one that is easy to miss. `allowFrom`
+        # decides who may send a direct message; `ownerAllowFrom` separately
+        # decides who may use owner-scoped slash commands, and it is namespaced
+        # by channel. Setting only the first leaves the customer able to talk to
+        # their own agent but answered with "You are not authorized to use this
+        # command" the moment they try one - configured, connected, and useless.
+        config["commands"] = {"ownerAllowFrom": [f"telegram:{u}"
+                                                 for u in telegram_users]}
+    if telegram_enabled:
+        # Through stdin at 0600, like every other credential here: never a
+        # command line, never this process's log.
+        ok, out = _run(["incus", "exec", "ws", "--project", project, "--", "bash", "-lc",
+                        f"install -d -m 0700 -o dev -g dev {OPENCLAW_HOME} && "
+                        f"install -d -m 0700 -o dev -g dev {OPENCLAW_SECRETS} && "
+                        f"install -m 0600 -o dev -g dev /dev/null {OPENCLAW_TG_TOKEN} && "
+                        f"cat > {OPENCLAW_TG_TOKEN}"],
+                       timeout=120, stdin_text=telegram_token)
+        if not ok:
+            return {"ok": False, "error": "could not write the Telegram token",
+                    "output": (out or "")[-300:]}
+    else:
+        # Removed rather than left behind: a customer who switches Telegram off
+        # should not leave a live bot token on their disk.
+        _run(["incus", "exec", "ws", "--project", project, "--", "bash", "-lc",
+              f"rm -f {OPENCLAW_TG_TOKEN}"], timeout=60)
+
+    ok, out = _run(["incus", "exec", "ws", "--project", project, "--", "bash", "-lc",
+                    f"install -d -m 0700 -o dev -g dev {OPENCLAW_HOME} && "
+                    f"install -m 0600 -o dev -g dev /dev/null {OPENCLAW_CONFIG} && "
+                    f"cat > {OPENCLAW_CONFIG}"],
+                   timeout=120, stdin_text=json.dumps(config))
+    if not ok:
+        return {"ok": False, "error": "could not write configuration",
+                "output": (out or "")[-300:]}
+
+    ok, out = _run(["incus", "exec", "ws", "--project", project, "--", "bash", "-lc",
+                    f"cat > {OPENCLAW_UNIT} && systemctl daemon-reload && "
+                    "systemctl enable --now openclaw-gateway"],
+                   timeout=300, stdin_text=OPENCLAW_SERVICE)
+    if not ok:
+        return {"ok": False, "error": "could not start the gateway",
+                "output": (out or "")[-800:]}
+
+    # Wait for the dashboard to actually ANSWER before reporting success.
+    # `systemctl enable --now` returning 0 only means systemd accepted the unit;
+    # the same mistake made the Hermes Telegram toggle report success on
+    # machines where nothing had started.
+    for _ in range(20):
+        st = _openclaw_status(project)
+        if st["responding"]:
+            return {"ok": True, **st}
+        time.sleep(3)
+
+    _rc, log, _e = _run_split(
+        ["incus", "exec", "ws", "--project", project, "--", "bash", "-lc",
+         "journalctl -u openclaw-gateway -n 40 --no-pager 2>/dev/null"], timeout=60)
+    return {"ok": False, "error": "the gateway did not answer on its port",
+            "output": (log or "")[-800:], **_openclaw_status(project)}
+
+
 # Written into the workspace so Claude Code starts straight into a prompt.
 # SYNTHESISED, not copied: the host's own ~/.claude.json is 59 kB of the
 # operator's history - every repository they have opened, their account record,
@@ -790,15 +1411,18 @@ def handle(req: dict) -> dict:
         _apply_net_fixups(project)
         return {"ok": True, "output": out[-2000:], "tier": t, "apt_fixups": fx_ok}
 
-    if verb == "ai_usage":
+    if verb in ("ai_usage", "codex_usage"):
         # Counted INSIDE the workspace. The session logs run to tens of
         # megabytes; pulling them to the host to parse them here would repeat
         # the mistake the zip download made, and would put a customer's
         # conversations on the host for no reason. Only totals come back.
+        codex = verb == "codex_usage"
+        scanner = CODEX_USAGE_SCAN if codex else AI_USAGE_SCAN
+        target = "~/.codex/sessions" if codex else "~/.claude/projects"
         try:
-            script = AI_USAGE_SCAN.read_text()
+            script = scanner.read_text()
         except OSError as e:  # noqa: BLE001
-            return {"ok": False, "error": f"cannot read {AI_USAGE_SCAN}: {e}"}
+            return {"ok": False, "error": f"cannot read {scanner}: {e}"}
 
         # Piped to `python3 -` rather than written to the workspace: this runs
         # every few minutes and leaving a file behind on a machine the customer
@@ -806,7 +1430,7 @@ def handle(req: dict) -> dict:
         # stdin each time.
         rc, out, err = _run_split(
             ["incus", "exec", "ws", "--project", project, "--",
-             "su", "-", "dev", "-c", "python3 - ~/.claude/projects"],
+             "su", "-", "dev", "-c", f"python3 - {target}"],
             timeout=300, stdin_text=script)
         if not (out or "").strip():
             return {"ok": False, "error": (err or "scanner produced no output")[-300:]}
@@ -818,6 +1442,15 @@ def handle(req: dict) -> dict:
 
     if verb == "ai_claude":
         return _verb_ai_claude(project, req)
+
+    if verb == "ai_codex":
+        return _verb_ai_codex(project, req)
+
+    if verb == "ai_openclaw":
+        return _verb_ai_openclaw(project, req)
+
+    if verb == "disk_usage":
+        return _verb_disk_usage(req)
 
     if verb == "apt_repair":
         # Repairs both families. They share a cause - dpkg cannot do privileged
@@ -897,7 +1530,9 @@ def handle(req: dict) -> dict:
             ok, out = _run(["incus", "exec", "ws", "--project", project, "--",
                             "bash", "-lc",
                             "systemctl disable --now hermes-dashboard hermes-gateway >/dev/null 2>&1; "
-                            "systemctl reset-failed hermes-dashboard >/dev/null 2>&1; "
+                            "systemctl reset-failed hermes-dashboard hermes-gateway "
+                            ">/dev/null 2>&1; "
+                            + HERMES_USER_GATEWAY_PURGE +
                             # The key is what actually costs money, so removing
                             # it matters more than stopping the listener.
                             "rm -f /home/dev/.hermes/.env; "
@@ -1019,13 +1654,19 @@ def handle(req: dict) -> dict:
         if telegram_enabled:
             rc, gout, gerr = _run_split(
                 ["incus", "exec", "ws", "--project", project, "--", "bash", "-lc",
+                 HERMES_USER_GATEWAY_PURGE +
                  "cat > /etc/systemd/system/hermes-gateway.service && "
                  "chmod 0644 /etc/systemd/system/hermes-gateway.service && "
                  "systemctl daemon-reload && systemctl enable hermes-gateway >/dev/null 2>&1 && "
-                 "systemctl restart hermes-gateway && sleep 3 && "
+                 "systemctl restart hermes-gateway && sleep 6 && "
                  "systemctl is-active hermes-gateway && "
-                 "! journalctl -u hermes-gateway -n 30 --no-pager | "
-                 "grep -q 'No messaging platforms enabled'"],
+                 # Two failures look identical to the customer - a silent bot -
+                 # so both are treated as a failed enable rather than reported
+                 # as success. The second is Telegram refusing a duplicate
+                 # poller, which is the symptom the purge above exists to stop
+                 # and the one check that would notice it coming back.
+                 "! journalctl -u hermes-gateway -n 40 --no-pager | "
+                 "grep -qE 'No messaging platforms enabled|terminated by other getUpdates'"],
                 timeout=120, stdin_text=HERMES_GATEWAY_UNIT)
             if rc != 0 or "active" not in gout.splitlines():
                 return {"ok": False, "error": "telegram gateway failed",
@@ -1033,8 +1674,10 @@ def handle(req: dict) -> dict:
         else:
             _, gout = _run(
                 ["incus", "exec", "ws", "--project", project, "--", "bash", "-lc",
+                 HERMES_USER_GATEWAY_PURGE +
                  "systemctl disable --now hermes-gateway >/dev/null 2>&1 || true; "
                  "systemctl is-active --quiet hermes-gateway && echo gateway=1 || echo gateway=0; "
+                 "systemctl reset-failed hermes-gateway >/dev/null 2>&1; "
                  "rm -f /etc/systemd/system/hermes-gateway.service; systemctl daemon-reload"],
                 timeout=120)
             if "gateway=0" not in (gout or ""):

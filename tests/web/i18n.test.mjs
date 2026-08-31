@@ -50,8 +50,11 @@ test("every dynamically-built key prefix has all its variants", () => {
     "machine.state.": ["on", "off", "starting", "stopping", "provisioning",
                        "resetting", "archiving", "archived", "error", "pending",
                        "none"],
+    // Every TxKind the ledger can post. A missing variant prints a raw key in a
+    // customer's own billing history - which is exactly what charge_hermes did
+    // until this list was completed.
     "billing.kind.": ["grant", "charge_hour", "charge_partial", "charge_ai",
-                      "adjustment"],
+                      "charge_hermes", "charge_codex", "adjustment"],
     "act.a.": ["register", "sign_in", "password_change", "power_on", "power_off",
                "size_change", "port_publish", "port_unpublish",
                "approve", "reject", "grant_credit",
@@ -101,10 +104,19 @@ const LATIN_ALLOWED = new Set([
   "machine.subtitle",   // "Ubuntu 24.04 · 2 vCPU · 4 GB" - all technical
   "ssh.keygen",              // a literal command the customer types
   "ssh.keys.placeholder",    // a literal example of an SSH key
+  // Quotes the English OpenClaw itself prints - "pairing required", "device is
+  // not approved". The customer has to match this hint against the words on
+  // their screen, so translating them would make it harder to recognise, not
+  // easier.
+  "ai.openclaw.approve.hint",
   "ai.tab.claude",           // "Claude Code" is the product's own name
   "ai.tab.hermes",           // likewise Hermes
   "ai.tab.openrouter",
-  "adm.nav.claude",          // the admin nav names the two services
+  "ai.tab.codex",            // ...and Codex
+  "ai.tab.openclaw",         // ...and OpenClaw
+  "adm.nav.claude",          // the admin nav names the services themselves
+  "adm.nav.codex",
+  "adm.nav.openclaw",
   "adm.nav.hermes",
   "adm.nav.openrouter",
 ]);
@@ -123,7 +135,7 @@ test("customer-facing labels are in Persian", () => {
       !["Ubuntu", "Docker", "Claude", "Code", "Codex", "systemd", "apt", "root",
         "Vazirmatn", "MMD", "DEV", "TCP", "UDP", "SSH", "vCPU", "API", "http",
         "https", "port", "Remote", "Desktop", "Connection", "PowerShell",
-        "Windows", "Hermes", "OpenRouter"].includes(w));
+        "Windows", "Hermes", "OpenRouter", "OpenClaw"].includes(w));
     if (!persian && v.length > 3) offenders.push(`${k} = ${v}`);
     else if (latinWords.length > 2) offenders.push(`${k} has untranslated words: ${latinWords}`);
   }

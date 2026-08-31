@@ -105,6 +105,7 @@ cp -r "$REPO/control" "$REPO/workspace" "$REPO/host" "$REPO/web" "$REPO/image" /
 # Mount point for the read-only view of the operator's Claude Code sign-in.
 # systemd will not create a missing bind-mount destination for us.
 install -d -m 0700 /var/lib/mmd/host-claude/.claude
+install -d -m 0700 /var/lib/mmd/host-codex/.codex
 install -m 0644 "$REPO/deploy/mmd-provisioner.service" /etc/systemd/system/
 install -m 0644 "$REPO/deploy/mmd-api.service" /etc/systemd/system/
 install -m 0644 "$REPO/deploy/mmd-worker.service" /etc/systemd/system/

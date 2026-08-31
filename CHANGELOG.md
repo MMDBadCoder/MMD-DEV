@@ -2,6 +2,188 @@
 
 Notable changes. Dates are the day the work landed on the production host.
 
+## [1.6.0] — 2026-08-31
+
+### Added
+
+- **Automated PostgreSQL backups, delivered to Telegram.** Admin →
+  پشتیبان‌گیری takes a bot token, a chat id and an interval in minutes, and the
+  worker sends a compressed `pg_dump` on that schedule. Off-host is the point:
+  the platform runs on one host, and a dump on that host survives a dropped
+  table and nothing else. Chosen over an object store because it needs no second
+  provider account, no bucket and no credential rotation — and because a backup
+  that stops arriving in your own chat is its own alerting.
+  - The bot is the **administrator's**, separate from the one customers wire to
+    Hermes and OpenClaw; the platform's database does not travel through a bot
+    attached to an agent with a shell in someone's workspace.
+  - The token is **write-only**: the panel is told only that one is stored and
+    its last four characters. An omitted field keeps it, so changing the
+    interval cannot silently turn delivery off.
+  - The interval is measured from the last **success**, so a failing backup is
+    retried on the normal cadence rather than skipped until the failure ages
+    out.
+  - The page leads with **last delivery** and **last error**, not the toggle:
+    the failure being guarded against is an operator who believes for a month
+    that they have backups. A **send one now** button turns "I configured it"
+    into "a file arrived" before leaving the page.
+  - Telegram's 50 MB bot limit is checked locally and reported as a size error
+    rather than an opaque HTTP failure. The dump is 1.8 MB today.
+  - Admin-only, off by default, audited when changed — without the token.
+
+- **Codex usage is metered, priced and charged, like Claude.** A scanner reads
+  the session logs inside the workspace and reports cumulative totals; the
+  existing mark arithmetic bills the difference. Codex has its own price table,
+  its own discount and its own ledger kind — sharing any of the three would have
+  been silently wrong. It starts with NO prices: an unpriced model is held
+  uncounted rather than billed at a guessed rate, and the admin page lists which
+  models are waiting for one. Admin → Codex configures it.
+- **All five AI tabs now use one section order** — status, connection details,
+  usage, billing, what-it-is, privacy — declared once in code rather than
+  re-decided per tab. The explainer used to be second on Claude Code and last
+  elsewhere; credentials were inline above the button on Hermes and OpenClaw and
+  are their own card now, as on OpenRouter.
+- **The billing explainer moved to the OpenRouter tab**, which is the supplier
+  it describes. Hermes and OpenClaw both spend that key, so on the Hermes tab it
+  was one supplier's rules filed under one of its two consumers.
+- **Every AI tab now opens with a "what is this" card** — OpenRouter, Claude
+  Code, Codex, Hermes and OpenClaw — in plain language, before any control or
+  credential.
+- **Codex and OpenClaw each get their own tab on the AI page.** Codex is Claude
+  Code's arrangement: the platform signs in once on the host, and an allowlisted
+  slice of `~/.codex/auth.json` — `auth_mode`, `OPENAI_API_KEY`, `tokens`,
+  `last_refresh` — is copied into the workspace. The operator's `history.jsonl`,
+  settings and caches never leave the host.
+- **OpenClaw** is Hermes' arrangement: a self-hosted agent the worker installs
+  into the workspace, serving its dashboard at
+  `openclaw.<username>.mmd-ai.ir` with a generated password. It spends the
+  customer's **existing managed OpenRouter key**, so the cap and metering that
+  already exist cover it and it cannot become a second way to spend money —
+  enabling is refused until that key exists. Install reports success only once
+  the dashboard actually answers on its port.
+
+### Fixed
+
+- **The Hermes Telegram bot went silent after OpenClaw handed the bot back.**
+  Hermes ships its own `hermes gateway install`, which writes a *user* unit of
+  the same name into `~/.config/systemd/user` and enables lingering. Ours is a
+  system unit, so `systemctl disable --now hermes-gateway` as root reported
+  success having touched only its own copy while the customer's kept polling.
+  Telegram serves one `getUpdates` poller per bot token; the second gets HTTP
+  409 and the bot answers nobody. Every Hermes path now removes the vendor unit
+  before starting ours, a returning duplicate fails the enable instead of being
+  reported as success, and both stop paths reset the unit's failed state.
+- **The two "اتصال به تلگرام" sections behaved differently on the Hermes and
+  OpenClaw tabs.** They shared a shell but each passed its own body markup,
+  which is what let them drift: only one confirmed before disconnecting, only
+  one showed which account credentials were in use, only one named the allowed
+  user, and the buttons sat at different heights. The section is now built once
+  from data — neither tab passes markup — so the only remaining difference is
+  the real one: Hermes can collect credentials inline for an account that has
+  none.
+- **OpenClaw could never report a Telegram failure.** Its section displayed the
+  whole service's error, a value that cannot be true while the section is
+  visible, so a channel that failed to start sat behind a "preparing" pill
+  indefinitely saying nothing. It now has its own `openclaw_telegram_error`,
+  as Hermes does.
+- **The Codex tab said the platform was not signed in, while `codex` worked
+  fine on the host.** The provisioner runs with `ProtectHome=yes`, which hides
+  `/root` entirely, so it found no `auth.json`. Claude Code has a read-only
+  bind mount for exactly this; Codex now has its own, plus the environment
+  variable that points at it. Both lines are pinned by tests, because either
+  alone is silently useless.
+- **OpenClaw never started.** `gateway.bind` takes a mode, not an address, so
+  `"0.0.0.0"` was rejected; and `gateway.mode` is mandatory or the gateway
+  refuses to start at all. Now `bind: "lan"` — chosen because `auto` was
+  measured leaving it on loopback, where nginx cannot reach it — and
+  `mode: "local"`. Its unit also gained a start limit, having been found
+  crash-looping at restart counter 127.
+- **The OpenClaw dashboard loaded but refused to connect** — "Browser origin
+  not allowed". Its Control UI checks the browser origin against an explicit
+  list, and behind that treats any non-local browser as a device that must pair.
+  The published address is now handed to the gateway as an allowed origin, and
+  the bridge address nginx arrives from is named as a trusted proxy so a
+  connection through it counts as local. A button on the tab approves any device
+  still left pending.
+- **The gateway config was written to a filename only the service could see.**
+  The CLI reads `~/.openclaw/openclaw.json`; we wrote `config.json` and pointed
+  the unit at it, so every `openclaw` command the customer typed saw a different,
+  empty configuration.
+- **OpenClaw could stall at "installing" forever.** `installed` and the
+  dashboard password could disagree — switching the service off and straight
+  back on left the first set and the second cleared — and the reconcile guard
+  checked only the first, so nothing ever regenerated the password.
+- **The OpenClaw gateway stayed down after restarting itself.** It restarts by
+  exiting cleanly and expecting its supervisor to act; under
+  `Restart=on-failure` systemd read that as success and left it stopped.
+- **`/api/workspace/ai/usage` summed every supplier's tokens together.** Correct
+  while Claude was the only one; wrong the moment a second service wrote a mark.
+- **Removed the Telegram walkthrough from the Claude tab** — six steps teaching
+  a third-party plugin the platform does not provide or support. Hermes has a
+  managed Telegram gateway; that is where it belongs.
+- **A tab waiting on the worker dragged you back to it** after you navigated
+  away. The re-render timer now checks you are still on the page. Hermes had the
+  same bug.
+- **Codex and OpenClaw had borrowed icons.** They now have their own marks —
+  OpenAI's hexagonal knot and a three-talon claw — drawn in the same
+  stroke-only style as the Claude and Hermes marks beside them.
+
+- **A customer published internal port 8000 and broke every nginx reload for
+  four days.** Hostname-routed ports emit `listen <internal_port>;`, nothing
+  validated the port, and a failed bind makes nginx abandon the *entire* reload
+  — so no vhost change and no certificate renewal took effect. nginx had also
+  taken `0.0.0.0:8000` alongside the control plane's `127.0.0.1:8000`; the API
+  kept working only because a specific bind beats a wildcard.
+  The platform's own ports are now refused outright, other services' ports are
+  detected via `ss` while ignoring nginx's own listeners, and the reconciler
+  checks whether the reload actually succeeded instead of assuming it.
+
+### Added
+
+- **OpenClaw is configured properly on install.** It was being installed without
+  a default model, so the gateway started, answered, and was not necessarily
+  using the customer's OpenRouter supplier at all. The install now writes the
+  model, the provider auth profile and the plugin entries. Admin → OpenClaw sets
+  the default model; the id is provider-prefixed (`openrouter/z-ai/glm-5.2`) and
+  the field accepts either form.
+- **OpenClaw can connect to Telegram**, reusing the bot token saved on the
+  customer's account exactly as Hermes does, with both required allowlists
+  written — `channels.telegram.allowFrom` for direct messages and
+  `commands.ownerAllowFrom` for owner commands. Configuring only the first
+  yields a bot that talks to you and then refuses every command.
+- **One bot, one agent.** Telegram permits a single poller per bot token, so
+  enabling Telegram on Hermes and OpenClaw at once left the channel
+  "running, disconnected". Either service now refuses while the other holds the
+  bot, in both directions; disabling is never blocked.
+
+- **Codex usage is now priced and charged.** The gpt-5.6 family is seeded from
+  OpenAI's published rates, with a family fallback so an unrecognised suffix
+  bills at the flagship rate rather than being free. The 90% discount is
+  justified the same way Claude's is, and it was checked rather than assumed:
+  the platform's Codex account runs on a flat ChatGPT subscription
+  (`auth_mode: chatgpt`, no API key), so a customer's marginal token costs the
+  operator nothing.
+
+### Fixed
+
+- **Two ledger kinds rendered as raw keys in customers' billing history.**
+  `charge_hermes` had never had a label; `charge_codex` was new. The catalogue
+  test that exists to catch exactly this had a hardcoded list that was never
+  extended.
+
+### Changed
+
+- **Workspace disk is thin-provisioned.** Ten workspaces were holding 60 GiB of
+  a 67.5 GiB pool while writing 9.4 GiB between them, and no eleventh customer
+  could be created. Removing the reservations reclaimed **44.8 GiB**. Each
+  workspace keeps its hard `refquota`, so no tenant can overrun its own
+  allowance — what changed is that the allowances may now sum past the pool.
+- **A pool guard makes that safe.** The worker samples every workspace's real
+  usage, warns an owner past 85% of their allowance, and — below an 8 GiB pool
+  floor — stops the largest consumers until the pool recovers. A full ZFS pool
+  fails for every tenant at once, and PostgreSQL is on the same disk.
+- **The admin users list shows per-workspace disk**, coloured in four bands at
+  the same thresholds the worker acts on.
+
 ## [1.5.0] — 2026-08-30
 
 - Published applications now have two routes: a plain HTTP hostname such as
