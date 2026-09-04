@@ -2,10 +2,11 @@
 
 **Cloud development machines, billed by the hour in Toman.**
 
-Every customer gets what feels like their own Ubuntu server — root access,
-`apt`, Docker, AI coding tools preinstalled — reachable from a Persian web
-dashboard, and able to power fully off to near-zero cost without losing a byte.
-The whole product runs on **one** host.
+Every approved customer gets an account-level, credit-capped OpenRouter key and
+may optionally create an Ubuntu workspace with root access, `apt`, Docker and AI
+coding tools. The workspace is controlled from a Persian dashboard and can be
+deleted completely without deleting the account or OpenRouter service. The
+whole product runs on **one** host.
 
 <p align="center">
   <a href="#quick-start">Quick start</a> ·
@@ -13,6 +14,7 @@ The whole product runs on **one** host.
   <a href="docs/BILLING.md">Billing</a> ·
   <a href="docs/API.md">API</a> ·
   <a href="docs/OPERATIONS.md">Operations</a> ·
+  <a href="docs/METRICS.md">Metrics</a> ·
   <a href="docs/DECISIONS.md">Decisions</a> ·
   <a href="AGENTS.md">For AI agents</a>
 </p>
@@ -21,7 +23,10 @@ The whole product runs on **one** host.
 
 ## What a customer gets
 
-- **A real machine.** Root, `apt install` anything, `docker run` anything. It is
+- **OpenRouter without compute.** Approval creates a dedicated managed key that
+  can be used anywhere; a workspace is not required.
+- **An optional real machine.** Root, `apt install` anything, `docker run`
+  anything. It is
   a full Ubuntu 24.04 system, not a sandbox with holes cut in it.
 - **Power off to zero.** No CPU, no RAM, no charge for either — while every
   file, package, config edit and Docker volume survives untouched.
@@ -42,7 +47,8 @@ because translating "Docker" helps nobody.
 
 ## What an operator gets
 
-Signup → admin approval → automatic provisioning. A capacity view, an editable
+Signup → admin approval → automatic OpenRouter key → optional customer-requested
+workspace provisioning. A capacity view, an editable
 rate card, per-account credit grants, a full audit trail of every action, and a
 verification suite that checks the running host rather than the source.
 
@@ -102,7 +108,8 @@ Full detail in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 | `tests/` | Unit tests: pytest for the backend, `node:test` for the interface |
 | `verify/` | Suites that check the **running host**, not the source |
 | `deploy/` | Hardened systemd units |
-| `docs/` | Architecture, billing, API, operations, and every decision made |
+| `docs/` | Architecture, billing, API, operations, metrics, and every decision made |
+| `observability/` | Prometheus and Grafana configuration; `build_dashboards.py` generates the dashboards |
 
 Roughly 13,000 lines, excluding vendored assets: ~7,400 Python, ~3,800
 JavaScript, ~2,100 shell.
@@ -133,7 +140,8 @@ sudo bash image/build-golden-image.sh         # ~10 min
 ```
 
 The first account to sign up becomes the administrator. After that, signups wait
-for approval, and approving one provisions a machine automatically.
+for approval. Approval activates the account and schedules its OpenRouter key;
+the customer creates a workspace from the dashboard only if they need one.
 
 ```bash
 bash tests/run.sh              # every unit test, ~5 seconds, no infrastructure
@@ -156,7 +164,7 @@ Real URLs via the History API, so refreshing or sharing a link works.
 | `/console/connections` | Browser terminal · SSH · RDP desktop |
 | `/console/files` | File manager: edit, upload, download, zip, preview |
 | `/console/resources` | Size, and the factory reset |
-| `/console/ai` | Claude Code, installed and signed in |
+| `/console/ai` | Account-level OpenRouter plus optional Claude, Codex, Hermes and OpenClaw workspace services |
 | `/console/ports` | Publish a port to a reserved public address |
 | `/console/billing` | Balance, itemised Toman rates, spend chart, ledger |
 | `/console/activity` | Every action recorded on the account |
@@ -172,8 +180,8 @@ browser.
 
 ## Billing in one paragraph
 
-Disk bills **every** hour regardless of power state, because a stopped workspace
-still holds its reservation. CPU and memory bill **only while on**, as a
+Disk allowance bills **every** hour while a workspace exists, regardless of
+power state. CPU and memory bill **only while on**, as a
 reservation component plus a measured usage component. Settlement is in arrears;
 before each hour the balance must cover that hour **at full capacity** or the
 machine is not allowed to start. At zero credit the machine is archived,
@@ -212,7 +220,8 @@ measurable. Behavioural results from `verify/`:
                      times overcommit (cpu ×2, memory ×1 — never oversubscribed)
   ⇒ 6.0 cores / 5.75 GiB schedulable
   ⇒ 5 concurrent workspaces at the 1 core / 1 GiB default
-  ⇒ ~6 total accounts, capped by the 68 GiB pool at 10 GiB each
+  ⇒ account registrations are not capped by disk; workspace allowances are
+     thin-provisioned and protected by hard per-workspace quotas and a pool guard
 ```
 
 Disk caps total accounts because the reservation is held even when off. A second

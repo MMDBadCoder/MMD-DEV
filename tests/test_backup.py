@@ -35,9 +35,9 @@ def env():
     Base.metadata.create_all(engine)
     Local = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
     db = Local()
-    admin = User(email="a@example.com", password_hash="x",
+    admin = User(password_hash="x",
                  status=UserStatus.APPROVED, username="ali", is_admin=True)
-    plain = User(email="b@example.com", password_hash="x",
+    plain = User(password_hash="x",
                  status=UserStatus.APPROVED, username="reza", is_admin=False)
     db.add_all([admin, plain])
     db.commit()

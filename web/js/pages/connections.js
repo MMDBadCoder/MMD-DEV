@@ -82,6 +82,12 @@ export async function connectionsPage(params) {
   let d;
   try { d = await get("/api/workspace/services"); }
   catch (e) {
+    if (e.code === "no_workspace") {
+      render(`<div class="page-head"><h1>${t("conn.title")}</h1></div>
+        <div class="card empty"><p>${t("workspace.empty.short")}</p>
+          <a class="btn primary" href="/console">${icon.plus}${t("workspace.create")}</a></div>`);
+      return;
+    }
     render(`<div class="page-head"><h1>${t("conn.title")}</h1></div>${recoveryNote(e, { retry: true })}`);
     wireRecovery(() => connectionsPage(params));
     return;

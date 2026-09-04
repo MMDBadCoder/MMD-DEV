@@ -44,7 +44,7 @@ def db():
                            poolclass=StaticPool)
     Base.metadata.create_all(engine)
     s = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)()
-    u = User(email="a@example.com", password_hash="x",
+    u = User(password_hash="x",
              status=UserStatus.APPROVED, username="ali")
     s.add(u)
     s.commit()
@@ -66,7 +66,8 @@ def test_hermes_is_not_published_before_the_worker_has_finished(vh, db):
     s.commit()
     assert vh.desired(s, _cfg(), usernames) == {}
 
-    ws.hermes_key_hash, ws.hermes_dash_user, ws.hermes_dash_password = "h", "u", "p"
+    ws.hermes_installed = True
+    ws.hermes_dash_user, ws.hermes_dash_password = "u", "p"
     s.commit()
     wanted = vh.desired(s, _cfg(), usernames)
     # idx 3 -> 10.42.0.13. Publishing the name before the dashboard has
@@ -78,7 +79,8 @@ def test_a_customer_with_no_username_is_skipped(vh, db):
     from mmd import usernames
     s, ws, u = db
     ws.hermes_enabled = True
-    ws.hermes_key_hash, ws.hermes_dash_user, ws.hermes_dash_password = "h", "u", "p"
+    ws.hermes_installed = True
+    ws.hermes_dash_user, ws.hermes_dash_password = "u", "p"
     u.username = None
     s.commit()
     assert vh.desired(s, _cfg(), usernames) == {}

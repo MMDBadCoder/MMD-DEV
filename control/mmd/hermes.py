@@ -14,45 +14,24 @@ That one decision answers the three problems separately:
   * **Attribution** - OpenRouter meters per key, so usage is read from the
     supplier's own billing rather than from anything inside a machine the
     customer controls. It cannot be under-reported by tampering.
-  * **Expensive models** - a guardrail refuses anything off the allowlist
-    upstream, before a token is spent.
-
-Where the model policy actually lives
--------------------------------------
-Verified against the live API rather than assumed, because the obvious guesses
-are all wrong:
-
-  * A guardrail does NOT attach to a key. `guardrail_id` passed to POST /keys is
-    accepted and silently ignored, and PATCH /keys rejects `guardrail_ids` - so
-    code that "attaches" one would appear to work while enforcing nothing. That
-    was measured: a paid model answered normally through a key whose guardrail
-    allowed only one free model.
-  * Policy attaches to an OpenRouter WORKSPACE. Each workspace owns a
-    `default_guardrail_id`, created with it, and every key minted into that
-    workspace is governed by it. `default_guardrail_id` is not patchable, so the
-    policy is written onto the guardrail the workspace already has.
-
-Hence a dedicated `mmd-customers` workspace. Putting the allowlist on the
-account's Default Workspace would have silently restricted the operator's own
-personal key too. Confirmed both ways: a key in the customer workspace gets 404
-"No endpoints available matching your guardrail restrictions" for a paid model,
-while a Default Workspace key still reaches it.
+Customers receive the key itself and may use it in any compatible application.
+Consequently the platform does not restrict model or provider choice. The
+supplier-side dollar cap and zero-credit disable flag remain billing controls,
+not catalogue controls.
 
 Only mmd-worker runs any of this. mmd-api faces the internet.
 """
 from __future__ import annotations
 
 import logging
-import re
 import secrets
 import string
-from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from sqlalchemy import select
 
 from .billing import aipricing
-from .models import Setting, TxKind, Workspace
+from .models import OpenRouterAccount, Setting, TxKind
 from .openrouter import OpenRouter, OpenRouterError
 
 log = logging.getLogger("mmd.hermes")
@@ -60,22 +39,28 @@ UTC = timezone.utc
 
 SERVICE = "openrouter"
 
-# The OpenRouter workspace customer keys are minted into. Its own default
-# guardrail carries the model policy, and it exists so that policy never touches
-# the operator's personal key in the account's Default Workspace.
-WORKSPACE_NAME = "MMD Customers"
-WORKSPACE_SLUG = "mmd-customers"
-
-# Discovered at runtime and cached in settings, never hardcoded: the ids are
-# per-account, so a compiled-in value would be wrong on any other deployment.
+# Legacy settings are retained only so one deployment can clear the old model
+# allowlist for already-issued keys without rotating customer secrets.
 SETTING_WORKSPACE_ID = "openrouter_workspace_id"
 SETTING_GUARDRAIL_ID = "openrouter_guardrail_id"
 LEGACY_WORKSPACE_ID = "hermes_workspace_id"
 LEGACY_GUARDRAIL_ID = "hermes_guardrail_id"
+SETTING_GUARDRAIL_REMOVED = "openrouter_guardrail_removed"
 
 # Admin-configurable policy.
-SETTING_DEFAULT_MODEL = "hermes_default_model"
-SETTING_MAX_OUTPUT_USD = "hermes_max_output_usd"
+# ONE model setting for every OpenRouter-backed service.
+#
+# Hermes, OpenClaw, OpenCode and Open WebUI all spend the same customer key, so
+# they should all start on the same model, chosen in one place - the OpenRouter
+# tab, which is where the key and its commercial policy already live. Each
+# service wants the id in a different SHAPE (bare for Hermes and Open WebUI,
+# provider-prefixed for OpenClaw and OpenCode); that is a formatting detail
+# handled per service, not four separate settings to keep in step.
+#
+# The legacy `hermes_default_model` is still read as a fallback so an operator
+# who set one before this consolidation does not silently lose it.
+SETTING_DEFAULT_MODEL = "openrouter_default_model"
+LEGACY_DEFAULT_MODEL = "hermes_default_model"
 
 # A free model, per the product decision that Hermes costs nothing until the
 # customer chooses otherwise. glm-5.2 is the strongest open-weight model on the
@@ -87,20 +72,10 @@ SETTING_MAX_OUTPUT_USD = "hermes_max_output_usd"
 # move to a cheap paid model when the free tier is too slow.
 DEFAULT_MODEL = "z-ai/glm-5.2:free"
 
-# Output price ceiling for the allowlist, USD per million tokens. Expressed as a
-# ceiling rather than a list because OpenRouter carries hundreds of models and
-# adds more weekly; a hand-written list is wrong within a month, and its failure
-# mode is a customer reaching a model nobody meant to sell.
-DEFAULT_MAX_OUTPUT_USD = 40.0
-
 # Never let a cap round down to zero and lock out a funded customer, and never
 # mint an uncapped key.
 MIN_CAP_USD = 0.10
 MAX_CAP_USD = 500.0
-
-
-class HermesError(RuntimeError):
-    pass
 
 
 # --- settings -------------------------------------------------------------
@@ -117,15 +92,31 @@ def _set(db, key: str, value: str) -> None:
         row.value = value
 
 
+def prefixed_model(db) -> str:
+    """The same model, in the provider-prefixed form OpenClaw and OpenCode use.
+
+    OpenRouter's own id is `z-ai/glm-5.2`; both of those CLIs address it as
+    `openrouter/z-ai/glm-5.2`. Getting it wrong does not fail loudly - the
+    agent starts and quietly uses whatever its own built-in default is, which
+    may not be reachable with this customer's key at all.
+    """
+    model = default_model(db)
+    return model if model.startswith("openrouter/") else f"openrouter/{model}"
+
+
 def default_model(db) -> str:
-    return _get(db, SETTING_DEFAULT_MODEL, DEFAULT_MODEL) or DEFAULT_MODEL
+    """The bare OpenRouter id every service starts on."""
+    return (_get(db, SETTING_DEFAULT_MODEL)
+            or _get(db, LEGACY_DEFAULT_MODEL)
+            or DEFAULT_MODEL)
 
 
-def max_output_usd(db) -> float:
-    try:
-        return float(_get(db, SETTING_MAX_OUTPUT_USD, "") or DEFAULT_MAX_OUTPUT_USD)
-    except ValueError:
-        return DEFAULT_MAX_OUTPUT_USD
+def set_default_model(db, model: str) -> str:
+    # Stored bare. Anyone who pastes the prefixed form from OpenClaw's docs
+    # gets it normalised rather than a model id with two providers in it.
+    value = (model or "").strip().removeprefix("openrouter/")[:128] or DEFAULT_MODEL
+    _set(db, SETTING_DEFAULT_MODEL, value)
+    return value
 
 
 # --- dashboard credentials ------------------------------------------------
@@ -139,123 +130,12 @@ def make_password(length: int = 20) -> str:
     return "".join(secrets.choice(_ALPHABET) for _ in range(length))
 
 
-# --- the customer workspace and its policy --------------------------------
-@dataclass(frozen=True)
-class Platform:
-    workspace_id: str
-    guardrail_id: str
-
-
-def ensure_platform(db, client: OpenRouter) -> Platform:
-    """Find or create the customer workspace, and return it with its guardrail.
-
-    Idempotent and self-configuring: it looks the workspace up by slug before
-    creating one, so a restart, a fresh database, or a second deployment against
-    the same account all converge on the same workspace instead of accumulating
-    duplicates.
-    """
-    wanted_ws = _get(db, SETTING_WORKSPACE_ID) or _get(db, LEGACY_WORKSPACE_ID)
-    wanted_gr = _get(db, SETTING_GUARDRAIL_ID) or _get(db, LEGACY_GUARDRAIL_ID)
-    if wanted_ws and wanted_gr:
-        # Rename old settings without forcing a new supplier workspace. The
-        # legacy rows can remain harmlessly for rollback compatibility.
-        _set(db, SETTING_WORKSPACE_ID, wanted_ws)
-        _set(db, SETTING_GUARDRAIL_ID, wanted_gr)
-        db.commit()
-        return Platform(wanted_ws, wanted_gr)
-
-    found = None
-    for w in client.workspaces():
-        if w.get("slug") == WORKSPACE_SLUG:
-            found = w
-            break
-    if found is None:
-        found = client.create_workspace(WORKSPACE_NAME, WORKSPACE_SLUG)
-
-    ws_id = str(found.get("id") or "")
-    gr_id = str(found.get("default_guardrail_id") or "")
-    if not ws_id or not gr_id:
-        raise HermesError("OpenRouter workspace has no id or default guardrail")
-
-    _set(db, SETTING_WORKSPACE_ID, ws_id)
-    _set(db, SETTING_GUARDRAIL_ID, gr_id)
-    db.commit()
-    log.info("hermes workspace %s guardrail %s", ws_id, gr_id)
-    return Platform(ws_id, gr_id)
-
-
-def sync_policy(db, client: OpenRouter, platform: Platform) -> int:
-    """Push the model allowlist onto the workspace's guardrail.
-
-    Returns how many models are allowed. Called periodically, not once, because
-    OpenRouter's catalogue changes underneath us: a model added next week that
-    costs more than the ceiling must not become reachable just because nobody
-    redeployed.
-    """
-    ceiling = max_output_usd(db)
-    allowed = client.build_allowlist_from_catalogue(max_output_usd=ceiling)
-
-    # The configured default must always be reachable. This used to be a
-    # workaround for free models being wrongly excluded - the price filter
-    # could not tell a published price of ZERO from no price at all, so every
-    # `:free` model was dropped and only the default was rescued. That bug is
-    # fixed in openrouter.is_priced(), so what remains here is the narrower
-    # rule it was hiding behind: an operator who deliberately configures a
-    # default has chosen it, and a ceiling should not silently make the
-    # product's own default unusable.
-    #
-    # Note this DOES let the default past the ceiling. That is deliberate and
-    # is one model chosen by an admin, not a hole customers can reach through.
-    model = default_model(db)
-    if model and model not in allowed:
-        allowed.append(model)
-
-    return _push_allowlist(client, platform.guardrail_id, sorted(set(allowed)))
-
-
-# OpenRouter names the offending ids in the body:
-#   {"error":{"message":"Invalid allowed_models: openrouter/auto, openrouter/free"}}
-_INVALID_IDS = re.compile(r"Invalid allowed_models:\s*([^\"}]+)")
-
-
-def _push_allowlist(client: OpenRouter, guardrail_id: str,
-                    allowed: list[str]) -> int:
-    """PATCH the allowlist, retrying once without any ids OpenRouter rejects.
-
-    The whole PATCH fails on a single unacceptable id, and the failure leaves
-    the PREVIOUS allowlist in force - which looks configured and is not. That
-    has now happened twice, both times because the catalogue grew an entry the
-    guardrail will not accept: floating `~` aliases, then the `openrouter/*`
-    routers. Both are excluded up front, but "the catalogue grew something new"
-    is not a problem that stops recurring, and a stale policy is a bad way to
-    find out.
-
-    So the rejected ids are read back out of the error and dropped. A policy
-    missing one model beats a policy that is silently months out of date.
-    """
-    try:
-        client.update_guardrail(guardrail_id, allowed_models=allowed)
-        return len(allowed)
-    except OpenRouterError as exc:
-        m = _INVALID_IDS.search(str(exc))
-        if not m:
-            raise
-        bad = {i.strip() for i in m.group(1).split(",") if i.strip()}
-        keep = [a for a in allowed if a not in bad]
-        if not bad or len(keep) == len(allowed):
-            raise
-        log.warning("guardrail rejected %d model ids, retrying without them: %s",
-                    len(bad), ", ".join(sorted(bad))[:300])
-        client.update_guardrail(guardrail_id, allowed_models=keep)
-        return len(keep)
-
-
 # --- per-workspace keys ---------------------------------------------------
-def key_name(ws: Workspace) -> str:
-    """Identifies the workspace in OpenRouter's own dashboard, so the operator
+def key_name(account: OpenRouterAccount) -> str:
+    """Identifies the customer in OpenRouter's own dashboard, so the operator
     can read the account page without a lookup table."""
-    owner = getattr(ws.user, "username", None) or f"user-{ws.user_id}"
-    return f"mmd-ws{ws.id}-{owner}"
+    owner = getattr(account.user, "username", None) or f"user-{account.user_id}"
+    return f"mmd-user{account.user_id}-{owner}"
 
 
 def affordable_usd(balance_micro: int, usd_to_toman: float, discount_percent: float) -> float:
@@ -279,31 +159,28 @@ def affordable_usd(balance_micro: int, usd_to_toman: float, discount_percent: fl
     return max(MIN_CAP_USD, min(MAX_CAP_USD, toman / usd_to_toman / mult))
 
 
-def ensure_key(db, ws: Workspace, client: OpenRouter, platform: Platform,
+def ensure_key(db, account: OpenRouterAccount, client: OpenRouter,
                cap_usd: float) -> bool:
-    """Mint this workspace's key if it does not have one. True if minted.
+    """Mint this customer's key if it does not have one. True if minted.
 
     The secret is stored because OpenRouter returns it exactly once. Losing it
     would mean the customer could never see the key they are entitled to, and
     the only repair would be revoking and re-minting.
     """
-    if ws.hermes_key_hash:
+    if account.key_hash:
         return False
-    secret, info = client.create_key(key_name(ws), cap_usd, workspace_id=platform.workspace_id)
-    ws.hermes_key = secret
-    ws.hermes_key_hash = info.hash
-    ws.hermes_usage_usd = float(info.usage_usd or 0.0)
-    ws.hermes_credit_blocked = False
-    if not ws.hermes_dash_user:
-        ws.hermes_dash_user = getattr(ws.user, "username", None) or f"user{ws.user_id}"
-    if not ws.hermes_dash_password:
-        ws.hermes_dash_password = make_password()
-    ws.hermes_error = None
-    log.info("hermes key minted for ws %s cap $%.2f", ws.id, cap_usd)
+    secret, info = client.create_key(key_name(account), cap_usd)
+    account.key = secret
+    account.key_hash = info.hash
+    account.usage_usd = float(info.usage_usd or 0.0)
+    account.credit_blocked = False
+    account.error = None
+    log.info("OpenRouter key minted for user %s cap $%.2f", account.user_id, cap_usd)
     return True
 
 
-def revoke_key(db, ws: Workspace, client: OpenRouter, *, strict: bool = False) -> None:
+def revoke_key(db, account: OpenRouterAccount, client: OpenRouter,
+               *, strict: bool = False) -> None:
     """Delete the key upstream and forget it locally.
 
     Deleted rather than disabled: a disabled key is still a live secret sitting
@@ -311,9 +188,9 @@ def revoke_key(db, ws: Workspace, client: OpenRouter, *, strict: bool = False) -
     the high-water mark is not reset, so re-enabling later cannot re-bill spend
     that was already settled.
     """
-    if ws.hermes_key_hash:
+    if account.key_hash:
         try:
-            client.delete_key(ws.hermes_key_hash)
+            client.delete_key(account.key_hash)
         except OpenRouterError as e:
             # A key already gone upstream must still be cleared locally, or the
             # workspace is stuck holding a hash that can never be reconciled.
@@ -322,21 +199,15 @@ def revoke_key(db, ws: Workspace, client: OpenRouter, *, strict: bool = False) -
                 # left behind. A transient supplier failure must therefore
                 # retry, not erase the only identity we can use to revoke it.
                 raise
-            log.warning("hermes revoke ws %s: %s", ws.id, e)
-    ws.hermes_key = None
-    ws.hermes_key_hash = None
-    ws.hermes_installed = False
-    ws.hermes_vhost_ready = False
-    ws.hermes_credit_blocked = False
-    ws.hermes_dash_password = None
-    ws.hermes_telegram_enabled = False
-    ws.hermes_telegram_installed = False
-    ws.hermes_telegram_token = None
-    ws.hermes_telegram_users = None
-    ws.hermes_telegram_error = None
+            log.warning("OpenRouter revoke user %s: %s", account.user_id, e)
+    account.key = None
+    account.key_hash = None
+    account.credit_blocked = True
+    account.limit_dirty = False
 
 
-def meter(db, ws: Workspace, info, usd_to_toman: float, discount_percent: float) -> int:
+def meter(db, account: OpenRouterAccount, info, usd_to_toman: float,
+          discount_percent: float) -> int:
     """Charge the OpenRouter spend accrued since the last pass. Micro-Toman.
 
     Reads a cumulative total from the supplier and charges the difference, which
@@ -346,14 +217,14 @@ def meter(db, ws: Workspace, info, usd_to_toman: float, discount_percent: float)
     """
     from . import service as svc  # local import: service imports this module
 
-    previous = float(ws.hermes_usage_usd or 0.0)
+    previous = float(account.usage_usd or 0.0)
     current = float(info.usage_usd or 0.0)
     delta = current - previous
     if delta <= 0:
         # Never negative. A key re-minted upstream resets usage to zero, and
         # charging a negative delta would silently hand out credit.
         if current < previous:
-            ws.hermes_usage_usd = current
+            account.usage_usd = current
         return 0
 
     toman = delta * usd_to_toman * aipricing.discount_multiplier(discount_percent)
@@ -365,9 +236,10 @@ def meter(db, ws: Workspace, info, usd_to_toman: float, discount_percent: float)
         return 0
 
     tx = svc.post_transaction(
-        db, user_id=ws.user_id, workspace_id=ws.id,
+        db, user_id=account.user_id, workspace_id=None,
         kind=TxKind.CHARGE_HERMES, amount_micro=-micro,
         period_start=svc._ai_period(datetime.now(UTC)),
+        scope_key=f"openrouter:{account.user_id}",
         detail={"service": SERVICE,
                 "usd": round(delta, 6),
                 "usd_to_toman": usd_to_toman,
@@ -379,6 +251,6 @@ def meter(db, ws: Workspace, info, usd_to_toman: float, discount_percent: float)
         return 0
 
     # Only after the charge lands. The other order gives away spend on a crash.
-    ws.hermes_usage_usd = current
+    account.usage_usd = current
     db.commit()
     return micro

@@ -41,7 +41,7 @@ def env(monkeypatch):
     Base.metadata.create_all(engine)
     db = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)()
     for i in (1, 2, 3):
-        u = User(email=f"u{i}@example.com", password_hash="x",
+        u = User(password_hash="x",
                  status=UserStatus.APPROVED, username=f"u{i}")
         db.add(u)
         db.commit()

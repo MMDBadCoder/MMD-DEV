@@ -95,6 +95,36 @@ class Config:
     # Never in the repository, never in api.env, never sent to a workspace.
     openrouter_key: str = field(default_factory=lambda: _secret(
         "openrouter", "MMD_OPENROUTER_KEY"))
+    # The Kavenegar key, which can send messages that cost money to any number.
+    # Worker-only, for the same reason as the OpenRouter key above: mmd-api runs
+    # as the same user, so a file the web app can read is a file it holds.
+    kavenegar_key: str = field(default_factory=lambda: _secret(
+        "kavenegar", "MMD_KAVENEGAR_KEY"))
+    # The dedicated line messages are sent from. Not a secret; an account with a
+    # single line may leave it empty and let Kavenegar choose.
+    sms_sender: str = field(default_factory=lambda: _env(
+        "MMD_SMS_SENDER", "20006000519"))
+    # Balance in Toman at or below which a customer is texted once. Zero
+    # disables the warning entirely.
+    sms_low_credit_toman: int = field(default_factory=lambda: int(
+        _env("MMD_SMS_LOW_CREDIT_TOMAN", "50000")))
+    # TEMPORARY, while the SMS feature is proven in production: only these
+    # numbers actually receive anything. Everything else is still queued and
+    # visible in the outbox, marked `skipped`, so the trial shows exactly what
+    # would have been sent. Set MMD_SMS_ALLOWLIST to an empty string to lift
+    # the restriction - that single change removes the whole feature.
+    sms_allowlist: tuple[str, ...] = field(default_factory=lambda: tuple(
+        n for n in (_env("MMD_SMS_ALLOWLIST",
+                         "09395382065,09004443232").replace(" ", "").split(","))
+        if n))
+    # Text a customer each time their cumulative spend passes another whole
+    # step of this many Toman. Zero disables it.
+    sms_spend_step_toman: int = field(default_factory=lambda: int(
+        _env("MMD_SMS_SPEND_STEP_TOMAN", "50000")))
+    # How long the worker may go without a heartbeat before the watchdog texts
+    # every administrator.
+    worker_stall_minutes: int = field(default_factory=lambda: int(
+        _env("MMD_WORKER_STALL_MINUTES", "15")))
     # The apex the Hermes dashboards hang off: hermes.<username>.<domain>.
     domain: str = field(default_factory=lambda: _env("MMD_DOMAIN", "mmd-ai.ir"))
 
@@ -126,6 +156,8 @@ class Config:
     # the same host.
     pool_floor_gib: float = field(default_factory=lambda: float(
         _env("MMD_POOL_FLOOR_GIB", "8")))
+    prometheus_token: str = field(default_factory=lambda: _env(
+        "MMD_PROMETHEUS_TOKEN", ""))
 
 
 CONFIG = Config()

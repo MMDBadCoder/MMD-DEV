@@ -75,6 +75,12 @@ export async function filesPage(params) {
   try {
     d = await get(`/api/workspace/files?path=${encodeURIComponent(cwd)}`);
   } catch (e) {
+    if (e.code === "no_workspace") {
+      render(`<div class="page-head"><h1>${t("files.title")}</h1></div>
+        <div class="card empty"><p>${t("workspace.empty.short")}</p>
+          <a class="btn primary" href="/console">${icon.plus}${t("workspace.create")}</a></div>`);
+      return;
+    }
     render(`<div class="page-head"><h1>${t("files.title")}</h1></div>
       ${note(e.code === "machine_off" ? "warn" : "bad",
              e.code === "machine_off" ? t("files.machineoff") : esc(e.message))}`);

@@ -20,6 +20,8 @@ EnvironmentFile=/etc/mmd/api.env
 # the internet-facing process cannot see it at all - not merely "should not".
 # Missing file = Hermes stays unprovisioned; it is not fatal to billing.
 LoadCredential=openrouter:/etc/mmd/openrouter.key
+# The SMS provider key, worker-only for the same reason.
+LoadCredential=kavenegar:/etc/mmd/kavenegar.key
 ExecStart=/opt/mmd/venv/bin/python -m mmd.worker
 Restart=on-failure
 RestartSec=5

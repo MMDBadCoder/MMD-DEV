@@ -1,4 +1,4 @@
-/* Hermes product defaults. Supplier billing and guardrails live in OpenRouter. */
+/* Hermes product defaults. Supplier billing lives in OpenRouter. */
 import { get, put } from "../api.js";
 import { $, esc, fmtNum, note, toast } from "../ui.js";
 import { t } from "../i18n.js";

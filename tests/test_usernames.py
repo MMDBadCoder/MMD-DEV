@@ -33,6 +33,8 @@ def test_case_is_folded_so_one_host_cannot_be_two_accounts():
     ("admin", "username_reserved"),
     ("hermes", "username_reserved"),
     ("www", "username_reserved"),
+    ("ports", "username_reserved"),
+    ("ssh", "username_reserved"),
 ])
 def test_rejections_carry_a_translatable_code(bad, code):
     with pytest.raises(U.UsernameError) as e:
@@ -47,26 +49,11 @@ def test_reserved_names_cannot_impersonate_the_platform():
             U.validate(name)
 
 
-# --- backfilling accounts that predate the field ---------------------------
-def test_an_email_local_part_becomes_a_legal_label():
-    assert U.derive_from_email("seyfoori.amir.h@gmail.com") == "seyfoori-amir-h"
-    assert U.derive_from_email("heidary13794@gmail.com") == "heidary13794"
-
-
-def test_a_derived_name_always_validates():
-    """The backfill must not produce something signup would reject - that would
-    leave an account with an address nobody can reach."""
-    for email in ("a.b@x.com", "TEST@x.com", "x..y@x.com", "12345@x.com",
-                  "admin@x.com", "ab@x.com", "-lead@x.com",
-                  "very.long.name.that.goes.on.and.on.forever@x.com"):
-        U.validate(U.derive_from_email(email))
-
-
-def test_derived_names_are_deduplicated():
+def test_names_are_deduplicated_for_migrations():
     taken = set()
     got = []
-    for e in ("ali@x.com", "ali@y.com", "ali@z.com"):
-        n = U.make_unique(U.derive_from_email(e), taken)
+    for candidate in ("ali", "ali", "ali"):
+        n = U.make_unique(candidate, taken)
         taken.add(n)
         got.append(n)
     assert got == ["ali", "ali-2", "ali-3"]

@@ -19,13 +19,17 @@ silently comes back.
 from __future__ import annotations
 
 import asyncio
+import json as _json
 import logging
+import time
 import secrets
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import case, delete, or_, select, update
+from sqlalchemy import case, delete, func, or_, select, update
 
 from . import backup as backuplib
+from . import metrics as m
+from . import sms as smslib
 from . import hermes
 from . import notifications
 from . import operations as oplib
@@ -39,8 +43,8 @@ from .openrouter import OpenRouter, OpenRouterError
 from .billing.pricing import MICRO
 from .models import (AiUsageMark, AuditLog, CreditAccount, CreditTransaction,
                      ExposedPort, Notification, Operation, PortKind, SshKey, Ticket,
-                     TicketMessage, UsageSample, User, Workspace,
-                     WorkspaceState)
+                     Setting, TicketMessage, UsageSample, User, UserStatus,
+                     OpenRouterAccount, Workspace, WorkspaceState)
 
 UTC = timezone.utc
 log = logging.getLogger("mmd.worker")
@@ -139,6 +143,8 @@ async def settle_once() -> None:
                             await client.stop(ws.instance, ws.incus_project)
                             ws.state = WorkspaceState.OFF
                             ws.desired_on = False
+                            _text(db, ws.user, "stopped_no_credit",
+                                  dedupe_key=f"nocredit:{ws.id}:{this_hour:%Y%m%d%H}")
                             db.commit()
                         except IncusError as exc:
                             log.error("stop failed for %s: %s", ws.incus_project, exc)
@@ -187,6 +193,8 @@ async def auto_stop_once() -> None:
                 ws.desired_on = False
                 ws.period_start = None
                 svc.disarm_auto_stop(ws)
+                _text(db, ws.user, "auto_stopped",
+                      dedupe_key=f"autostop:{ws.id}:{svc.now():%Y%m%d%H%M}")
                 db.commit()
                 svc.audit(db, None, "auto_stop", ws.incus_project,
                           hours=CONFIG.auto_stop_hours)
@@ -260,7 +268,13 @@ RECONCILE_EVERY = 180      # 180 x 5s = 15 minutes
 # once an hour is settled its charge is in the ledger and the raw samples are
 # just history. Keeping them forever is how a table quietly becomes the biggest
 # thing in the database - this one had no pruning at all.
-SAMPLE_RETENTION_DAYS = 7
+# Two days, not seven. Settlement only ever reads the hour it is closing, so
+# everything older exists for CHARTS - and the admin charts now come from
+# Prometheus. Two days covers the widest window a customer can ask for on
+# their own machine page (24 hours) with a day of margin.
+#
+# This table was 96% of the database at seven days, growing ~8,000 rows a day.
+SAMPLE_RETENTION_DAYS = 2
 
 # AI tokens are pay-as-you-go and bill against the platform's own Claude
 # subscription, so the gap between usage and payment is real exposure. Five
@@ -341,11 +355,10 @@ def meter_codex_once() -> None:
 
 
 HERMES_EVERY = 60          # 60 x 5s = 5 minutes, same cadence as Claude metering
-POLICY_EVERY = 360         # 360 x 5s = 30 minutes; the catalogue changes slowly
 
 
-def hermes_once(sync_policy: bool = False, meter_usage: bool = True) -> None:
-    """Provision, cap, meter and revoke the OpenRouter side.
+def hermes_once(meter_usage: bool = True) -> None:
+    """Provision, cap and meter every approved customer's OpenRouter key.
 
     Reconciliation rather than event handling, for the same reason power state
     is: the customer's toggle records intent in the database, and this closes
@@ -358,114 +371,82 @@ def hermes_once(sync_policy: bool = False, meter_usage: bool = True) -> None:
     if not CONFIG.openrouter_key:
         return
     with SessionLocal() as db:
-        rows = db.execute(select(Workspace).where(
-            (Workspace.hermes_enabled.is_(True)) |
-            (Workspace.hermes_key_hash.isnot(None)))).scalars().all()
+        users = list(db.scalars(select(User).where(User.status == UserStatus.APPROVED)))
+        accounts = []
+        for user in users:
+            account = db.get(OpenRouterAccount, user.id)
+            if account is None:
+                account = OpenRouterAccount(user_id=user.id, credit_blocked=True,
+                                            limit_dirty=True)
+                db.add(account)
+                db.flush()
+            accounts.append(account)
+        db.commit()
         if not meter_usage:
-            # Provisioning-only pass: keep just the workspaces with outstanding
-            # work. Enabling is a click, and waiting five minutes for a key to
-            # appear reads as broken - but polling OpenRouter once per workspace
-            # every twenty seconds to discover there is nothing to do would be
-            # rude to the supplier and slow. So the fast pass touches the
-            # network ONLY when a toggle is actually outstanding.
-            rows = [w for w in rows
-                    if (w.hermes_enabled and not w.hermes_key_hash and
-                        (svc.balance_micro(db, w.user_id) > 0
-                         or not w.hermes_credit_blocked))
-                    or (not w.hermes_enabled and w.hermes_key_hash)
-                    or (w.hermes_enabled and w.hermes_key_hash and
-                        w.hermes_telegram_installed != w.hermes_telegram_enabled)
-                    or (w.hermes_enabled and w.hermes_key_hash and
-                        (w.hermes_limit_dirty or w.hermes_credit_blocked !=
-                         (svc.balance_micro(db, w.user_id) <= 0)))]
-        if not rows:
+            accounts = [a for a in accounts if not a.key_hash or a.limit_dirty
+                        or a.credit_blocked != (svc.balance_micro(db, a.user_id) <= 0)]
+        workspaces = list(db.scalars(select(Workspace).where(or_(
+            Workspace.hermes_enabled.is_(True),
+            Workspace.hermes_installed.is_(True)))))
+        if not accounts and not workspaces:
             return
         try:
             with OpenRouter(CONFIG.openrouter_key) as client:
-                platform = hermes.ensure_platform(db, client)
-                if sync_policy:
-                    try:
-                        n = hermes.sync_policy(db, client, platform)
-                        log.info("hermes policy: %s models allowed", n)
-                    except OpenRouterError as e:
-                        log.warning("hermes policy sync failed: %s", e)
+                # Existing keys were minted into the old guarded workspace.
+                # Clearing its allowlist preserves every exposed secret while
+                # making the migration effective immediately. New keys are
+                # minted without a workspace and never enter this path.
+                if hermes._get(db, hermes.SETTING_GUARDRAIL_REMOVED) != "1":
+                    guardrail_id = (hermes._get(db, hermes.SETTING_GUARDRAIL_ID)
+                                    or hermes._get(db, hermes.LEGACY_GUARDRAIL_ID))
+                    if guardrail_id:
+                        client.clear_model_restrictions(guardrail_id)
+                    hermes._set(db, hermes.SETTING_GUARDRAIL_REMOVED, "1")
+                    db.commit()
+                    log.info("OpenRouter model restrictions removed")
 
                 usd_rate, discount = svc.ai_settings(db, hermes.SERVICE)
-                for ws in rows:
+                for account in accounts:
                     try:
-                        _hermes_workspace(db, ws, client, platform, usd_rate,
-                                          discount, meter_usage)
+                        _openrouter_account(db, account, client, usd_rate,
+                                            discount, meter_usage)
                     except OpenRouterError as e:
                         # One customer's failure must not stop the others being
                         # metered - unbilled spend is the expensive outcome.
-                        ws.hermes_error = str(e)[:500]
+                        account.error = str(e)[:500]
                         db.commit()
-                        log.warning("hermes ws %s: %s", ws.id, e)
+                        log.warning("OpenRouter user %s: %s", account.user_id, e)
+                for ws in workspaces:
+                    _hermes_install(db, ws)
         except OpenRouterError as e:
             log.warning("hermes unavailable: %s", e)
 
 
-def _hermes_workspace(db, ws: Workspace, client: OpenRouter,
-                      platform, usd_rate: float, discount: float,
-                      meter_usage: bool = True) -> None:
-    if not ws.hermes_enabled:
-        if ws.hermes_key_hash:
-            # Meter the final spend BEFORE revoking. Deleting the key first
-            # would destroy the only record of what was spent since the last
-            # pass, and that spend has already left the operator's account.
-            try:
-                hermes.meter(db, ws, client.get_key(ws.hermes_key_hash), usd_rate, discount)
-            except OpenRouterError as e:
-                log.warning("hermes final meter ws %s: %s", ws.id, e)
-            # Tear the dashboard down inside the machine too. Revoking the
-            # key upstream is what stops the spending, but leaving a dead
-            # dashboard listening - and the key file on disk - is untidy at
-            # best and misleading at worst.
-            if ws.state == WorkspaceState.ON:
-                try:
-                    svc.call_provisioner({"verb": "service_hermes", "idx": ws.idx,
-                                          "action": "disable"}, timeout=180)
-                except Exception as e:  # noqa: BLE001
-                    log.warning("hermes teardown ws %s: %s", ws.id, e)
-            hermes.revoke_key(db, ws, client)
-            ws.hermes_limit_dirty = False
-            db.commit()
-        return
-
-    balance = svc.balance_micro(db, ws.user_id)
+def _openrouter_account(db, account: OpenRouterAccount, client: OpenRouter,
+                        usd_rate: float, discount: float,
+                        meter_usage: bool = True) -> None:
+    balance = svc.balance_micro(db, account.user_id)
     credit_blocked = balance <= 0
-    if not ws.hermes_key_hash and credit_blocked:
-        # A zero-dollar OpenRouter limit is not a stop signal. Do not mint a
-        # usable key until the account can pay for its first request.
-        ws.hermes_credit_blocked = True
-        ws.hermes_limit_dirty = False
-        ws.hermes_error = None
-        db.commit()
-        return
     cap = hermes.affordable_usd(balance, usd_rate, discount)
-
-    if hermes.ensure_key(db, ws, client, platform, cap):
-        ws.hermes_limit_dirty = False
+    if hermes.ensure_key(db, account, client, cap):
+        # The key exists from approval even at zero credit, but is unusable
+        # until funds arrive. This gives the customer one stable credential.
+        if credit_blocked:
+            client.update_key(account.key_hash, limit_usd=cap, disabled=True)
+        account.credit_blocked = credit_blocked
+        account.limit_dirty = False
         db.commit()
-        _hermes_install(db, ws)
         return
-
-    if (not ws.hermes_installed
-            or ws.hermes_telegram_installed != ws.hermes_telegram_enabled):
-        # Retried on later passes: the usual reason it has not happened yet is
-        # simply that the machine is off, and a customer who enables Hermes then
-        # powers on should not have to toggle it again.
-        _hermes_install(db, ws)
-
-    if (not meter_usage and not ws.hermes_limit_dirty
-            and ws.hermes_credit_blocked == credit_blocked):
+    if (not meter_usage and not account.limit_dirty
+            and account.credit_blocked == credit_blocked):
         return
-    info = client.get_key(ws.hermes_key_hash)
-    hermes.meter(db, ws, info, usd_rate, discount)
+    info = client.get_key(account.key_hash)
+    if meter_usage:
+        hermes.meter(db, account, info, usd_rate, discount)
 
     # Re-read the cap against the balance AFTER metering, so a customer who has
     # just spent down is capped at what is actually left.
-    balance = svc.balance_micro(db, ws.user_id)
+    balance = svc.balance_micro(db, account.user_id)
     credit_blocked = balance <= 0
     # OpenRouter limits are cumulative for the lifetime of a key. New headroom
     # starts after the spend already reported upstream; otherwise a topped-up
@@ -478,11 +459,17 @@ def _hermes_workspace(db, ws: Workspace, client: OpenRouter,
         # The cap is the hard stop: OpenRouter refuses the request when the
         # customer runs out, instead of us noticing minutes later and billing
         # for spend that has already happened.
-        client.update_key(ws.hermes_key_hash, limit_usd=cap,
+        client.update_key(account.key_hash, limit_usd=cap,
                           disabled=credit_blocked)
-    ws.hermes_credit_blocked = credit_blocked
-    ws.hermes_limit_dirty = False
-    ws.hermes_error = None
+    # Only on the transition. The flag is recomputed every pass, so texting on
+    # the value rather than the change would repeat for as long as the balance
+    # stayed at zero.
+    if credit_blocked and not account.credit_blocked:
+        _text(db, account.user, "key_blocked",
+              dedupe_key=f"keyblocked:{account.user_id}:{svc.now():%Y%m%d%H}")
+    account.credit_blocked = credit_blocked
+    account.limit_dirty = False
+    account.error = None
     db.commit()
 
 
@@ -493,12 +480,32 @@ def _hermes_install(db, ws: Workspace) -> None:
     and this is retried every pass, so a customer who enables Hermes while
     powered off gets it the moment they power on.
     """
-    if ws.state != WorkspaceState.ON or not ws.hermes_key:
+    if not ws.hermes_enabled:
+        if ws.state == WorkspaceState.ON:
+            resp = svc.call_provisioner({"verb": "service_hermes", "idx": ws.idx,
+                                         "action": "disable"}, timeout=180)
+            if not resp.get("ok"):
+                ws.hermes_error = (resp.get("error") or "disable failed")[-300:]
+                db.commit()
+                return
+        ws.hermes_installed = False
+        ws.hermes_vhost_ready = False
+        ws.hermes_telegram_installed = False
+        ws.hermes_error = None
+        db.commit()
         return
+    account = db.get(OpenRouterAccount, ws.user_id)
+    if ws.state != WorkspaceState.ON or account is None or not account.key:
+        return
+    if not ws.hermes_dash_user:
+        ws.hermes_dash_user = ws.user.username if ws.user else f"user{ws.user_id}"
+    if not ws.hermes_dash_password:
+        ws.hermes_dash_password = hermes.make_password()
+    db.commit()
     try:
         resp = svc.call_provisioner({
             "verb": "service_hermes", "idx": ws.idx, "action": "enable",
-            "install": not ws.hermes_installed, "api_key": ws.hermes_key,
+            "install": not ws.hermes_installed, "api_key": account.key,
             "model": hermes.default_model(db),
             "dash_user": ws.hermes_dash_user,
             "dash_password": ws.hermes_dash_password,
@@ -564,6 +571,15 @@ async def disk_once() -> None:
     per_ws = resp.get("workspaces") or {}
     pool = resp.get("pool") or {}
     free_gib = (pool.get("available") or 0) / GIB
+    used_gib = (pool.get("used") or 0) / GIB
+    # Persisted for the exporter. The pool figures come from a provisioner
+    # call, which is far too heavy to make on every 60-second scrape; this
+    # pass already has them, so it writes them down instead.
+    with SessionLocal() as sdb:
+        _set_setting(sdb, "pool_free_gib", f"{free_gib:.3f}")
+        _set_setting(sdb, "pool_used_gib", f"{used_gib:.3f}")
+        _set_setting(sdb, "pool_total_gib", f"{free_gib + used_gib:.3f}")
+        sdb.commit()
 
     with SessionLocal() as db:
         rows = list(db.scalars(select(Workspace)))
@@ -581,12 +597,21 @@ async def disk_once() -> None:
             pct = (ws.disk_used_mib / limit_mib * 100) if limit_mib else 0
             key = f"disk:{ws.id}"
             if pct >= CONFIG.disk_warn_percent:
+                first_time = db.scalar(select(Notification).where(
+                    Notification.user_id == ws.user_id,
+                    Notification.dedupe_key == key,
+                    Notification.resolved_at.is_(None))) is None
                 notifications.emit(
                     db, user_id=ws.user_id, kind="disk", code="disk_nearly_full",
                     severity="warn" if pct < 100 else "error",
                     detail={"percent": round(pct), "used_mib": ws.disk_used_mib,
                             "limit_gib": ws.disk_gib},
                     href="/console/files", dedupe_key=key)
+                # Once per crossing, like low credit: a customer parked at 90%
+                # must not be texted on every disk pass.
+                if first_time:
+                    _text(db, ws.user, "disk_high",
+                          dedupe_key=f"{key}:{svc.now():%Y%m%d%H%M%S}")
             else:
                 notifications.resolve(db, ws.user_id, key, svc.now())
         db.commit()
@@ -597,6 +622,8 @@ async def disk_once() -> None:
         # --- the pool is low ------------------------------------------------
         log.error("pool free %.1f GiB is below the %.1f GiB floor - stopping "
                   "the largest running workspaces", free_gib, CONFIG.pool_floor_gib)
+        text_admins(db, "admin_pool_low", detail={"free": f"{free_gib:.1f}"},
+                    dedupe_key=f"poollow:{svc.now():%Y%m%d%H}")
         running = sorted(
             (w for w in rows if w.state == WorkspaceState.ON),
             key=lambda w: -(w.disk_used_mib or 0))
@@ -622,6 +649,8 @@ async def disk_once() -> None:
                     severity="error",
                     detail={"used_mib": ws.disk_used_mib, "limit_gib": ws.disk_gib},
                     href="/console/files", dedupe_key=f"poolstop:{ws.id}")
+                _text(db, ws.user, "pool_stopped",
+                      dedupe_key=f"poolstop:{ws.id}:{svc.now():%Y%m%d%H}")
                 svc.audit(db, None, "disk_pool_stop", ws.incus_project,
                           used_mib=ws.disk_used_mib, pool_free_gib=round(free_gib, 1))
                 db.commit()
@@ -684,7 +713,8 @@ def openclaw_once() -> None:
                     # as "already installed".
                     and ws.openclaw_telegram_installed == bool(ws.openclaw_telegram_enabled)):
                 continue
-            if not ws.hermes_key:
+            account = db.get(OpenRouterAccount, ws.user_id)
+            if account is None or not account.key:
                 # It spends the managed OpenRouter key. Waiting is right: the
                 # key arrives on its own reconciler and this pass runs again.
                 continue
@@ -700,7 +730,7 @@ def openclaw_once() -> None:
                 from . import usernames as unames
                 resp = svc.call_provisioner({
                     "verb": "ai_openclaw", "idx": ws.idx, "action": "install",
-                    "openrouter_key": ws.hermes_key,
+                    "openrouter_key": account.key,
                     "password": ws.openclaw_password,
                     # Without a default model the gateway starts and quietly
                     # answers with whatever OpenClaw's own default is, which
@@ -754,6 +784,67 @@ def openclaw_once() -> None:
                                      or "install failed")[-300:]
                 log.warning("openclaw install ws %s failed: %s", ws.id, ws.openclaw_error)
             db.commit()
+
+
+def managed_web_once() -> None:
+    """Reconcile the two OpenRouter-backed web applications."""
+    with SessionLocal() as db:
+        for ws in db.scalars(select(Workspace)):
+            if ws.state != WorkspaceState.ON:
+                continue
+            account = db.get(OpenRouterAccount, ws.user_id)
+            for name in ("opencode", "openwebui"):
+                enabled = bool(getattr(ws, f"{name}_enabled"))
+                installed = bool(getattr(ws, f"{name}_installed"))
+                if not enabled and not installed:
+                    continue
+                if not enabled:
+                    resp = svc.call_provisioner({"verb": "ai_managed_web", "idx": ws.idx,
+                                                 "service": name, "action": "disable"}, timeout=300)
+                    if resp.get("ok"):
+                        setattr(ws, f"{name}_installed", False)
+                        setattr(ws, f"{name}_password", None)
+                        setattr(ws, f"{name}_error", None)
+                        db.commit()
+                    continue
+                # Open WebUI's Python backend is killed by the kernel while
+                # starting in a 1 GiB workspace. Do not publish a permanently
+                # restarting container as ready or let it consume the machine.
+                # Intent stays enabled, so a memory resize heals it automatically.
+                if name == "openwebui" and ws.mem_mib < 2048:
+                    if installed:
+                        svc.call_provisioner({"verb": "ai_managed_web", "idx": ws.idx,
+                                              "service": name, "action": "disable"},
+                                             timeout=300)
+                    setattr(ws, f"{name}_installed", False)
+                    setattr(ws, f"{name}_error", "insufficient memory")
+                    db.commit()
+                    continue
+                if installed and not getattr(ws, f"{name}_error"):
+                    continue
+                if account is None or not account.key:
+                    continue
+                password = getattr(ws, f"{name}_password")
+                if not password:
+                    password = secrets.token_urlsafe(18)
+                    setattr(ws, f"{name}_password", password)
+                    db.commit()
+                try:
+                    resp = svc.call_provisioner({"verb": "ai_managed_web", "idx": ws.idx,
+                        "service": name, "action": "install", "openrouter_key": account.key,
+                        "password": password,
+                        "admin_email": f"{ws.user.username}@mmd.local",
+                        # The one model every OpenRouter-backed service starts
+                        # on, chosen on the OpenRouter tab. The provisioner
+                        # reshapes it per service.
+                        "model": hermes.default_model(db)}, timeout=1800)
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("%s install ws %s: %s", name, ws.id, exc)
+                    continue
+                setattr(ws, f"{name}_installed", bool(resp.get("ok")))
+                setattr(ws, f"{name}_error", None if resp.get("ok") else
+                        (resp.get("error") or resp.get("output") or "install failed")[-300:])
+                db.commit()
 
 
 def prune_samples_once() -> None:
@@ -820,12 +911,13 @@ def _purge_account(db, op: Operation) -> None:
         return
     ws = db.scalar(select(Workspace).where(Workspace.user_id == user.id))
 
-    if ws and ws.hermes_key_hash:
+    account = db.get(OpenRouterAccount, user.id)
+    if account and account.key_hash:
         oplib.progress(db, op, "revoking_ai")
         if not CONFIG.openrouter_key:
             raise RuntimeError("OpenRouter management key unavailable")
         with OpenRouter(CONFIG.openrouter_key) as client:
-            hermes.revoke_key(db, ws, client, strict=True)
+            hermes.revoke_key(db, account, client, strict=True)
         db.commit()
 
     if ws:
@@ -857,7 +949,7 @@ def _purge_account(db, op: Operation) -> None:
     db.execute(delete(CreditAccount).where(CreditAccount.user_id == user.id))
     db.execute(delete(Notification).where(Notification.user_id == user.id))
 
-    targets = [user.email]
+    targets = [user.username]
     if ws:
         targets.append(ws.incus_project)
     db.execute(delete(AuditLog).where(or_(
@@ -877,6 +969,10 @@ def _purge_account(db, op: Operation) -> None:
 
 
 async def _factory_reset(db, op: Operation, ws: Workspace) -> None:
+    # The API and worker are separate processes. Always begin from the state
+    # the API committed instead of trusting an identity-map copy that may have
+    # been loaded before the reset request.
+    db.refresh(ws)
     # Reset means optional AI is no longer selected, regardless of whether the
     # image rebuild later succeeds. Clear intent first so another worker pass
     # cannot mint a replacement key after this one has been revoked.
@@ -890,25 +986,12 @@ async def _factory_reset(db, op: Operation, ws: Workspace) -> None:
     ws.openclaw_installed = False
     ws.openclaw_password = None
     ws.openclaw_error = None
+    for name in ("opencode", "openwebui"):
+        setattr(ws, f"{name}_enabled", False)
+        setattr(ws, f"{name}_installed", False)
+        setattr(ws, f"{name}_password", None)
+        setattr(ws, f"{name}_error", None)
     db.commit()
-    if ws.hermes_key_hash:
-        oplib.progress(db, op, "removing_ai")
-        try:
-            if not CONFIG.openrouter_key:
-                raise OpenRouterError("management key unavailable")
-            with OpenRouter(CONFIG.openrouter_key) as client:
-                info = client.get_key(ws.hermes_key_hash)
-                usd_rate, discount = svc.ai_settings(db, hermes.SERVICE)
-                hermes.meter(db, ws, info, usd_rate, discount)
-                hermes.revoke_key(db, ws, client, strict=True)
-                db.commit()
-        except OpenRouterError:
-            ws.state = WorkspaceState.ERROR
-            ws.error = "reset could not revoke optional AI credentials"
-            oplib.fail(db, op, "reset_ai_cleanup_failed", svc.now())
-            svc.audit(db, op.actor_id, "reset_failed", ws.incus_project,
-                      stage="ai_cleanup")
-            return
     oplib.progress(db, op, "rebuilding_machine")
     detail = op.detail or {}
     resp = svc.call_provisioner({
@@ -947,9 +1030,11 @@ async def _factory_reset(db, op: Operation, ws: Workspace) -> None:
     ws.rdp_enabled = False
     ws.rdp_installed = False
     # Reset is a new machine, not a request to reinstall optional AI software.
-    # The old key was revoked above; the customer chooses Hermes again later.
+    # The account-level OpenRouter key deliberately survives this operation.
     ws.hermes_installed = False
     ws.hermes_vhost_ready = False
+    # Legacy duplicates migrated to OpenRouterAccount at startup. Clear them
+    # from the rebuilt machine row without touching the account credential.
     ws.hermes_key = None
     ws.hermes_key_hash = None
     ws.hermes_credit_blocked = False
@@ -968,6 +1053,61 @@ async def _factory_reset(db, op: Operation, ws: Workspace) -> None:
     oplib.finish(db, op, svc.now())
 
 
+async def _workspace_create(db, op: Operation, ws: Workspace) -> None:
+    """Materialise the optional machine requested by an approved customer."""
+    oplib.progress(db, op, "creating_machine")
+    resp = svc.call_provisioner({
+        "verb": "provision", "idx": ws.idx,
+        "cores": max(1, round(ws.cpu_milli / 1000)), "mem_mib": ws.mem_mib,
+        "root_gib": ws.root_gib, "docker_gib": ws.docker_gib}, timeout=1800)
+    if not resp.get("ok"):
+        ws.state = WorkspaceState.ERROR
+        ws.error = (resp.get("error") or resp.get("output", ""))[-500:]
+        oplib.fail(db, op, "provision_failed", svc.now())
+        return
+    oplib.progress(db, op, "stopping_machine")
+    client = _incus()
+    try:
+        await client.stop(ws.instance, ws.incus_project)
+    except Exception:  # noqa: BLE001
+        ws.state = WorkspaceState.ERROR
+        ws.error = "post-provision stop did not complete"
+        oplib.fail(db, op, "provision_stop_failed", svc.now())
+        return
+    finally:
+        await client.aclose()
+    ws.state = WorkspaceState.OFF
+    ws.desired_on = False
+    ws.error = None
+    portalloc.reserve_service_ports(db, ws.id)
+    db.commit()
+    svc.sync_published_ports(db)
+    svc.audit(db, op.actor_id, "workspace_create_done", ws.incus_project)
+    oplib.finish(db, op, svc.now())
+
+
+def _workspace_delete(db, op: Operation, ws: Workspace) -> None:
+    """Remove every machine-bound resource but keep account-level products."""
+    oplib.progress(db, op, "removing_addresses")
+    fw = svc.sync_published_ports(db, exclude_workspace_id=ws.id)
+    if not fw.get("ok"):
+        raise RuntimeError("could not remove published-port rules")
+    oplib.progress(db, op, "destroying_machine")
+    resp = svc.call_provisioner({"verb": "destroy", "idx": ws.idx})
+    if not resp.get("ok"):
+        raise RuntimeError("could not destroy workspace")
+    target = ws.incus_project
+    for model in (UsageSample, ExposedPort, SshKey, AiUsageMark):
+        db.execute(delete(model).where(model.workspace_id == ws.id))
+    db.execute(update(CreditTransaction).where(
+        CreditTransaction.workspace_id == ws.id).values(workspace_id=None))
+    op.workspace_id = None
+    db.delete(ws)
+    db.commit()
+    svc.audit(db, op.actor_id, "workspace_delete_done", target)
+    oplib.finish(db, op, svc.now())
+
+
 async def operations_once() -> None:
     """Advance one durable operation; running work is safe to retry."""
     with SessionLocal() as db:
@@ -975,7 +1115,7 @@ async def operations_once() -> None:
         # abandoned because external resources may still exist. Retry it, but
         # only after ordinary queued work so one unavailable upstream does not
         # hold every customer's operation behind it forever.
-        retryable_cleanup = (Operation.kind == "account_delete") & (
+        retryable_cleanup = (Operation.kind.in_(("account_delete", "workspace_delete"))) & (
             Operation.status == "failed")
         op = db.scalar(select(Operation).where(or_(
             Operation.status.in_(("queued", "running")), retryable_cleanup))
@@ -993,6 +1133,12 @@ async def operations_once() -> None:
                 return
             if op.kind == "factory_reset":
                 await _factory_reset(db, op, ws)
+                return
+            if op.kind == "workspace_create":
+                await _workspace_create(db, op, ws)
+                return
+            if op.kind == "workspace_delete":
+                _workspace_delete(db, op, ws)
                 return
             oplib.fail(db, op, "unknown_operation", svc.now())
         except Exception as exc:  # noqa: BLE001
@@ -1085,6 +1231,188 @@ async def reconcile_once() -> None:
         await client.aclose()
 
 
+def _text(db, user, kind: str, detail: dict | None = None,
+          dedupe_key: str | None = None) -> None:
+    """Queue one customer message, honouring their preferences.
+
+    Wrapped because every worker event needs the same three things - a user
+    that may be missing, a preference check, and a failure that must not stop
+    the pass it is running inside.
+    """
+    if user is None:
+        return
+    try:
+        smslib.queue(db, user_id=user.id, phone=user.phone, kind=kind,
+                     detail=detail, user=user, dedupe_key=dedupe_key)
+    except smslib.SmsError as e:
+        log.warning("sms %s not queued for %s: %s", kind, user.username, e)
+
+
+def low_credit_once() -> None:
+    """Text a customer once, the first time their balance falls low.
+
+    ONCE PER CROSSING, not once per pass. The arming state is the notification
+    itself: an unresolved `low_credit` row means this customer has already been
+    told and is still low, so nothing is sent. Topping up resolves it, which
+    re-arms the warning for the next time. Without that, a customer sitting at
+    40,000 Toman would be texted every five seconds.
+
+    Deliberately fires ABOVE zero. At zero the machine has already been stopped
+    and the supplier key already blocked - a warning that arrives then is a
+    receipt, not a warning.
+    """
+    threshold = CONFIG.sms_low_credit_toman * MICRO
+    if threshold <= 0:
+        return
+    now = svc.now()
+    with SessionLocal() as db:
+        for user in db.scalars(select(User).where(
+                User.status == UserStatus.APPROVED)):
+            balance = svc.balance_micro(db, user.id)
+            key = f"lowcredit:{user.id}"
+            if 0 < balance <= threshold:
+                already = db.scalar(select(Notification).where(
+                    Notification.user_id == user.id,
+                    Notification.dedupe_key == key,
+                    Notification.resolved_at.is_(None)))
+                if already is not None:
+                    continue
+                note = notifications.emit(
+                    db, user_id=user.id, kind="credit", code="low_credit",
+                    severity="warn", detail={"balance_micro": balance},
+                    href="/console/billing", dedupe_key=key)
+                try:
+                    # Keyed off the notification's creation time, which `emit`
+                    # resets each time the condition re-activates. A wall-clock
+                    # stamp would collide when a customer crosses the threshold
+                    # twice inside one second and silently drop the second
+                    # message - which is exactly what the re-arm test caught.
+                    smslib.queue(db, user_id=user.id, phone=user.phone,
+                                 kind="low_credit", user=user,
+                                 dedupe_key=f"{key}:{note.created_at.isoformat()}")
+                except smslib.SmsError as e:
+                    log.warning("low-credit sms not queued for %s: %s",
+                                user.username, e)
+                db.commit()
+            elif balance > threshold:
+                notifications.resolve(db, user.id, key, now)
+                db.commit()
+
+
+def _admins(db):
+    return list(db.scalars(select(User).where(
+        User.is_admin.is_(True), User.status == UserStatus.APPROVED)))
+
+
+def text_admins(db, kind: str, detail: dict | None = None,
+                dedupe_key: str | None = None) -> None:
+    """Operator alerts go to every administrator, not a configured number.
+
+    The number that matters is whoever is on call, and a single hard-coded
+    recipient goes stale the moment that person leaves.
+    """
+    for admin in _admins(db):
+        try:
+            smslib.queue(db, user_id=admin.id, phone=admin.phone, kind=kind,
+                         detail=detail, user=admin,
+                         dedupe_key=(f"{dedupe_key}:{admin.id}"
+                                     if dedupe_key else None))
+        except smslib.SmsError:
+            continue
+    db.commit()
+
+
+def spend_milestone_once() -> None:
+    """Text a customer each time their spend passes another whole step.
+
+    The watermark is stored per customer rather than derived, because "spent
+    another 50,000" is only meaningful against the point they were last told -
+    a running total against a moving balance would fire again on every top-up.
+    """
+    step = CONFIG.sms_spend_step_toman * MICRO
+    if step <= 0:
+        return
+    with SessionLocal() as db:
+        for user in db.scalars(select(User).where(
+                User.status == UserStatus.APPROVED)):
+            spent = -(db.scalar(
+                select(func.coalesce(func.sum(CreditTransaction.amount_micro), 0))
+                .where(CreditTransaction.user_id == user.id,
+                       CreditTransaction.amount_micro < 0)) or 0)
+            key = f"spend:{user.id}"
+            raw = _setting(db, key, "")
+            crossed = (spent // step) * step
+            if raw == "":
+                # First sight of this customer: record where they already are
+                # and say nothing. Treating an absent watermark as zero texts
+                # everyone with historical spend the moment the feature ships -
+                # which is exactly what happened on the first deploy, to four
+                # customers who had done nothing that day.
+                _set_setting(db, key, str(crossed))
+                db.commit()
+                continue
+            marked = int(raw or 0)
+            if spent < marked + step:
+                continue
+            _set_setting(db, key, str(crossed))
+            balance = svc.balance_micro(db, user.id)
+            _text(db, user, "spend_milestone",
+                  detail={"step": f"{round(step / MICRO):,}",
+                          "balance": f"{round(balance / MICRO):,}"},
+                  dedupe_key=f"{key}:{crossed}")
+            db.commit()
+
+
+def _setting(db, key: str, default: str = "") -> str:
+    row = db.scalar(select(Setting).where(Setting.key == key))
+    return row.value if row and row.value is not None else default
+
+
+def _set_setting(db, key: str, value: str) -> None:
+    row = db.scalar(select(Setting).where(Setting.key == key))
+    if row is None:
+        db.add(Setting(key=key, value=value))
+    else:
+        row.value = value
+    db.flush()
+
+
+def heartbeat_once(duration: float = 0.0, failed: bool = False) -> None:
+    """Record that the worker is alive, for the watchdog and the exporter.
+
+    Written by the loop it proves, which is the point: a heartbeat produced by
+    anything else would keep ticking through exactly the stall it exists to
+    detect.
+
+    The metric snapshot rides along because the worker is a separate process
+    from the exporter. One scrape target, two processes.
+    """
+    m.gauge("mmd_worker_last_tick_seconds", duration)
+    m.inc("mmd_worker_ticks_total", {"result": "failed" if failed else "ok"})
+    with SessionLocal() as db:
+        now = svc.now()
+        _set_setting(db, "worker_heartbeat", now.isoformat())
+        if not failed:
+            _set_setting(db, "worker_last_success", now.isoformat())
+        db.commit()
+    m.write_snapshot()
+
+
+def sms_once() -> None:
+    """Send whatever is queued in the SMS outbox.
+
+    Only this process holds the provider key, so this is the only place a
+    message can actually leave. Failures are recorded on the row and retried
+    with backoff rather than raised - one unreachable number must not stop the
+    rest of the queue.
+    """
+    if not CONFIG.kavenegar_key:
+        return
+    with SessionLocal() as db:
+        for row in smslib.due(db):
+            smslib.deliver(db, row)
+
+
 async def backup_once() -> None:
     """Send a database backup if one is owed.
 
@@ -1101,9 +1429,20 @@ async def backup_once() -> None:
     # and outlives the check above by however long the upload takes.
     def _run() -> None:
         with SessionLocal() as db:
-            backuplib.run_once(db)
+            result = backuplib.run_once(db)
+            # A backup that fails silently is the exact thing backups exist to
+            # prevent, so the operator hears about it on the same pass.
+            if not result.get("ok"):
+                text_admins(db, "admin_backup_failed",
+                            dedupe_key=f"backupfail:{svc.now():%Y%m%d}")
 
     await asyncio.to_thread(_run)
+
+
+# Same reason as the API's seeds: a failure counter that has never fired must
+# render as zero, not as an absent series.
+m.inc("mmd_worker_tick_failures_total", None, 0)
+m.inc("mmd_worker_ticks_total", {"result": "failed"}, 0)
 
 
 async def main() -> None:
@@ -1115,6 +1454,8 @@ async def main() -> None:
     reserve_service_ports_once()
     await reconcile_once()
     while True:
+        tick_started = time.monotonic()
+        tick_failed = False
         try:
             await operations_once()
             if tick % METRICS_EVERY == 0:
@@ -1125,13 +1466,14 @@ async def main() -> None:
             # Provisioning is checked every tick so a toggle takes seconds;
             # metering stays on the five-minute cadence money moves at.
             if tick % HERMES_EVERY == 0:
-                hermes_once(sync_policy=(tick % POLICY_EVERY == 0))
+                hermes_once()
             else:
                 hermes_once(meter_usage=False)
             # Same cadence as the Hermes provisioning check: a toggle should
             # take seconds to be picked up, and the pass is a no-op for every
             # workspace that has not asked for it.
             openclaw_once()
+            managed_web_once()
             # Every tick, not every settlement: a machine that should have
             # stopped at 12h00m must not keep billing until the next five-minute
             # boundary. The query is indexed and matches almost nothing.
@@ -1141,6 +1483,18 @@ async def main() -> None:
             # five-minute settlement boundary. Almost every call returns
             # immediately from the due check.
             await backup_once()
+            # Cheap when idle: one indexed query that matches nothing. Kept on
+            # every tick so an approved customer is texted in seconds, which is
+            # while they are still looking at the page that told them to wait.
+            # Settlement cadence, not every tick: a balance only moves when an
+            # hour is charged, so checking faster would re-read the ledger for
+            # every customer to find nothing changed.
+            if tick % SETTLE_EVERY == 0:
+                await asyncio.to_thread(low_credit_once)
+                await asyncio.to_thread(spend_milestone_once)
+            await asyncio.to_thread(
+                heartbeat_once, time.monotonic() - tick_started, tick_failed)
+            await asyncio.to_thread(sms_once)
             # Every settlement, not every tick: a ZFS pass over the pool is
             # cheap but not free, and disk fills over minutes, not seconds.
             if tick % SETTLE_EVERY == 0:
@@ -1153,7 +1507,10 @@ async def main() -> None:
                 await reconcile_once()
                 reserve_service_ports_once()
         except Exception:  # noqa: BLE001
+            tick_failed = True
+            m.inc("mmd_worker_tick_failures_total")
             log.exception("worker tick failed")
+        m.observe("mmd_worker_tick_seconds", time.monotonic() - tick_started)
         tick += 1
         await asyncio.sleep(LOOP_SECONDS)
 

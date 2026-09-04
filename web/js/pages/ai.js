@@ -16,7 +16,8 @@ import { currentPath } from "../router.js";
 
 const TABS = [{ key: "openrouter", ic: "openrouter" }, { key: "claude", ic: "claude" },
               { key: "codex", ic: "codex" }, { key: "hermes", ic: "hermes" },
-              { key: "openclaw", ic: "openclaw" }];
+              { key: "openclaw", ic: "openclaw" }, { key: "opencode", ic: "opencode" },
+              { key: "openwebui", ic: "openwebui" }];
 
 // What "ready" means differs per supplier, so each tab says so for itself
 // rather than sharing one guess. Claude and Codex are signed in or not;
@@ -27,10 +28,12 @@ const READY = {
   codex: (d) => d.codex.linked,
   hermes: (d) => d.hermes.ready,
   openclaw: (d) => d.openclaw.ready,
+  opencode: (d) => d.opencode.ready,
+  openwebui: (d) => d.openwebui.ready,
 };
 
 function tabBar(active, d) {
-  return `<div class="tabs2">${TABS.map((tb) => {
+  return `<div class="tabs2 ai-tabs">${TABS.map((tb) => {
     const on = READY[tb.key](d);
     return `<a href="/console/ai/${tb.key}"
       class="${tb.key === active ? "active" : ""}">${icon[tb.ic]}
@@ -158,13 +161,54 @@ export async function aiPage(params) {
   const head = `<div class="page-head"><h1>${t("ai.title")}</h1>
       <p class="muted small" style="margin:0">${t("ai.sub")}</p></div>
     ${tabBar(tab, d)}
-    ${d.claude.machine_running ? "" : note("warn", t("ai.machineoff"))}`;
+    ${!d.has_workspace || d.claude.machine_running ? "" : note("warn", t("ai.machineoff"))}`;
 
-  if (tab === "openrouter") return renderOpenRouter(head, d.hermes);
+  if (tab === "openrouter") return renderOpenRouter(head, d.openrouter);
+  if (!d.has_workspace) {
+    render(`${head}<div class="card empty"><p>${t("workspace.ai.needs")}</p>
+      <a class="btn primary" href="/console">${icon.plus}${t("workspace.create")}</a></div>`);
+    return;
+  }
   if (tab === "hermes") return renderHermes(head, d.hermes);
   if (tab === "codex") return renderCodex(head, d.codex, codexUsage);
   if (tab === "openclaw") return renderOpenClaw(head, d.openclaw);
+  if (tab === "opencode") return renderManagedWeb(head, "opencode", d.opencode);
+  if (tab === "openwebui") return renderManagedWeb(head, "openwebui", d.openwebui);
   return renderClaude(head, d.claude, usage);
+}
+
+
+function renderManagedWeb(head, name, service) {
+  const waiting = service.enabled && !service.ready;
+  render(`${head}${sections({
+    status: `<div class="card"><div class="between"><div><h2>${t(`ai.${name}.title`)}</h2>
+      <p class="muted small">${t(`ai.${name}.desc`)}</p></div>
+      <span class="pill"><span class="dot ${service.ready ? "on" : waiting ? "busy" : ""}"></span>${
+        service.ready ? t("ai.ready") : waiting ? t("conn.preparing") : t("conn.off")}</span></div>
+      ${service.error ? note("bad", t("ai.managed.failed")) : ""}
+      ${service.needs_memory ? note("warn", `${t("ai.managed.memory", { m: fmtFa(service.minimum_memory_mib) })}
+        <a href="/console/resources">${t("ai.managed.memory.action")}</a>`) : ""}
+      ${service.needs_openrouter ? note("warn", t("ai.openclaw.needskey")) : ""}
+      <button class="btn ${service.enabled ? "danger ghost" : "primary"}" id="managed-toggle"
+        ${!service.machine_running || service.needs_openrouter || (!service.enabled && service.needs_memory) ? "disabled" : ""}>${
+        service.enabled ? t("ai.managed.disable") : t("ai.managed.enable")}</button>
+      <div id="managed-msg"></div></div>`,
+    details: service.ready ? `<div class="card"><h2>${t("conn.launcher")}</h2>
+      <a class="btn primary" href="https://${esc(service.host)}" target="_blank" rel="noopener">${icon.link}${t("conn.open")}</a>
+      <p class="mono ltr">https://${esc(service.host)}</p>${`
+      <p class="small">${t("ai.managed.credentials")}</p>
+      ${secretRow({ label: t("auth.username"), value: service.username })}${secretRow({ label: t("auth.password"), value: service.password })}`}</div>` : "",
+    billing: `<div class="card"><h2>${t("ai.billing.title")}</h2><p class="muted small">${t("ai.managed.billing")}</p></div>`,
+    about: aboutCard(name),
+  })}`);
+  $("#managed-toggle").onclick = async () => {
+    try {
+      await post(`/api/workspace/managed-ai/${name}`, { action: service.enabled ? "disable" : "enable" });
+      toast(t("ai.managed.saved"), "ok"); aiPage({ tab: name });
+    } catch (err) { $("#managed-msg").innerHTML = note("bad", esc(err.message)); }
+  };
+  if (waiting) repoll(name, 5000);
+  wireSecrets();
 }
 
 
@@ -372,7 +416,7 @@ function renderOpenRouter(head, h) {
         <span class="pill"><span class="dot ${h.ready ? "on" : ""}"></span>${
           h.ready ? t("ai.ready") : t("ai.notready")}</span></div>
       ${h.credit_blocked ? note("warn", t("ai.hermes.creditblocked")) : ""}
-      ${h.ready ? "" : note("info", t("ai.openrouter.enable.hermes"))}
+      ${h.ready ? "" : note("info", t("ai.openrouter.preparing"))}
     </div>`,
 
     details: h.ready ? `<div class="card">

@@ -42,7 +42,7 @@ DISK_OPTIONS_GIB: tuple[int, ...] = (10, 20, 30, 40)
 DEFAULT_CPU_MILLI = 1000
 DEFAULT_MEM_MIB = 1024
 DEFAULT_ROOT_GIB = 6
-DEFAULT_DOCKER_GIB = 4
+DEFAULT_DOCKER_GIB = 8
 
 # Below this a workspace runs a shell but not an editor or a coding agent.
 # The UI uses it to warn rather than to forbid.

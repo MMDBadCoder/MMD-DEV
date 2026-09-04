@@ -14,16 +14,25 @@ const css = read("web/app.css");
 
 test("account deletion names impact and requires the affected identity", () => {
   assert.match(users, /destructiveDialog/);
-  assert.match(users, /expect: b\.dataset\.email/);
+  assert.match(users, /expect: b\.dataset\.username/);
   assert.match(ui, /danger\.irrecoverable/);
   assert.match(ui, /input\.value\.trim\(\)\.toLowerCase\(\) !== expect\.toLowerCase\(\)/);
 });
 
-test("first-run guidance covers funding through publishing and records terminal use", () => {
-  for (const key of ["onboarding.credit", "onboarding.power", "onboarding.terminal",
-                     "onboarding.ssh", "onboarding.publish"]) assert.match(machine, new RegExp(key));
+test("first-run guidance ends at a usable shell, and stays finished", () => {
+  // Credit, power, terminal: the shortest path to a prompt, which is the
+  // point the machine is actually usable. SSH keys and publishing a port were
+  // once steps four and five; they are features a customer reaches for when
+  // they need them, and listing them left the checklist permanently
+  // unfinished for everyone who never wanted either.
+  for (const key of ["onboarding.credit", "onboarding.power", "onboarding.terminal"])
+    assert.match(machine, new RegExp(key));
+  assert.doesNotMatch(machine, /onboarding\.ssh|onboarding\.publish/);
   assert.match(connections, /mmd-onboarding-terminal/);
-  assert.match(machine, /steps\.every/);
+  // Completed once, gone for good - not recomputed from live state, which
+  // brought the whole checklist back whenever a machine was powered down.
+  assert.match(machine, /localStorage\.getItem\(ONBOARDED\) === "1"/);
+  assert.match(machine, /localStorage\.setItem\(ONBOARDED, "1"\)/);
 });
 
 test("phone layout uses a bottom navigation rail and bottom-sheet confirmations", () => {

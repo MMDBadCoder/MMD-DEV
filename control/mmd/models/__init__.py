@@ -24,7 +24,7 @@ class Base(DeclarativeBase):
 
 class UserStatus(str, enum.Enum):
     PENDING = "pending"        # signed up, waiting for an admin
-    APPROVED = "approved"      # workspace provisioned
+    APPROVED = "approved"      # account active; compute remains optional
     REJECTED = "rejected"
     SUSPENDED = "suspended"
     DELETING = "deleting"      # durable cleanup is removing external resources
@@ -84,18 +84,21 @@ class TxKind(str, enum.Enum):
 class User(Base):
     __tablename__ = "users"
     id: Mapped[int] = mapped_column(primary_key=True)
-    email: Mapped[str] = mapped_column(String(320), unique=True, index=True)
     # Also a DNS label: the customer's Hermes dashboard is served at
     # hermes.<username>.mmd-ai.ir, so this is part of a hostname rather than a
     # display name. Nullable only so the column can be added to a live table;
     # every row is backfilled and signup requires it. See mmd/usernames.py.
     username: Mapped[str | None] = mapped_column(String(32), unique=True, index=True)
-    # Nullable for accounts created before profile details became mandatory.
+    # Nullable only while the live schema migration verifies old accounts.
     # New signups cannot omit either value.
     full_name: Mapped[str | None] = mapped_column(String(120))
     phone: Mapped[str | None] = mapped_column(String(11), unique=True, index=True)
     # Reusable account-level Telegram settings. The token is never serialized
     # by an API response; only the presence flag and numeric user ID are shown.
+    # Which optional SMS this customer wants. Absent means everything, so a
+    # new template reaches existing customers without a backfill and "all on"
+    # needs no row written at signup.
+    sms_prefs: Mapped[dict] = mapped_column(JSON, default=dict)
     telegram_bot_token: Mapped[str | None] = mapped_column(String(256))
     telegram_user_id: Mapped[str | None] = mapped_column(String(15))
     password_hash: Mapped[str] = mapped_column(String(255))
@@ -109,6 +112,31 @@ class User(Base):
 
     workspace: Mapped["Workspace"] = relationship(back_populates="user", uselist=False)
     account: Mapped["CreditAccount"] = relationship(back_populates="user", uselist=False)
+    openrouter: Mapped["OpenRouterAccount"] = relationship(
+        back_populates="user", uselist=False, cascade="all, delete-orphan")
+
+
+class OpenRouterAccount(Base):
+    """One supplier credential per customer account, independent of compute.
+
+    A customer may use this key from another machine and may deliberately own
+    no MMD workspace at all.  Keeping it on ``Workspace`` made factory reset
+    and machine deletion revoke an account-level product by accident.
+    """
+    __tablename__ = "openrouter_accounts"
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    key_hash: Mapped[str | None] = mapped_column(String(128), unique=True)
+    key: Mapped[str | None] = mapped_column(String(256))
+    usage_usd: Mapped[float] = mapped_column(Float, default=0.0)
+    credit_blocked: Mapped[bool] = mapped_column(Boolean, default=True)
+    limit_dirty: Mapped[bool] = mapped_column(Boolean, default=True)
+    error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    user: Mapped[User] = relationship(back_populates="openrouter")
 
 
 class Workspace(Base):
@@ -237,6 +265,17 @@ class Workspace(Base):
     # the page shows "preparing" and never says what went wrong.
     openclaw_telegram_error: Mapped[str | None] = mapped_column(Text)
 
+    # OpenCode and Open WebUI follow the same intent/reconciliation contract.
+    # Passwords are generated once because both dashboards are internet-facing.
+    opencode_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    opencode_installed: Mapped[bool] = mapped_column(Boolean, default=False)
+    opencode_password: Mapped[str | None] = mapped_column(String(64))
+    opencode_error: Mapped[str | None] = mapped_column(Text)
+    openwebui_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    openwebui_installed: Mapped[bool] = mapped_column(Boolean, default=False)
+    openwebui_password: Mapped[str | None] = mapped_column(String(64))
+    openwebui_error: Mapped[str | None] = mapped_column(Text)
+
     hermes_telegram_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     hermes_telegram_installed: Mapped[bool] = mapped_column(Boolean, default=False)
     # Temporary delivery state only: cleared immediately after the worker has
@@ -288,6 +327,12 @@ class CreditTransaction(Base):
     amount_micro: Mapped[int] = mapped_column(BigInteger)   # negative = charge
     period_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     detail: Mapped[dict] = mapped_column(JSON, default=dict)
+    # Account-scoped products have no workspace. PostgreSQL treats NULL values
+    # as distinct in a UNIQUE constraint, so workspace_id=NULL cannot protect
+    # an OpenRouter retry from charging twice. ``scope_key`` supplies a stable
+    # non-null identity for those charges; workspace charges retain the older
+    # constraint for compatibility.
+    scope_key: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (
@@ -297,6 +342,8 @@ class CreditTransaction(Base):
         # bills users twice.
         UniqueConstraint("workspace_id", "period_start", "kind",
                          name="uq_charge_once_per_period"),
+        UniqueConstraint("scope_key", "period_start", "kind",
+                         name="uq_scoped_charge_once_per_period"),
         Index("ix_tx_user_created", "user_id", "created_at"),
     )
 
@@ -439,6 +486,73 @@ class Operation(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class SmsMessage(Base):
+    """One outbound SMS, queued by whoever caused it and sent by the worker.
+
+    An outbox rather than a call at the point of the event, for three reasons
+    that all showed up in the services around it:
+
+      * The provider key can send messages that cost real money, so it is a
+        worker-only credential like the OpenRouter management key. The approval
+        endpoint runs in the internet-facing process and must not hold it.
+      * Approving a customer must not fail, or hang, because an SMS gateway is
+        slow. The admin's action completes; delivery is reconciled after.
+      * A send that fails deserves a retry, and a retry needs somewhere to
+        record how many have been tried.
+
+    `dedupe_key` is what makes the whole thing idempotent: approval is
+    deliberately re-runnable, so without it a second click sends a second
+    message to a customer who has already been told.
+    """
+    __tablename__ = "sms_messages"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    # Kept on delete: a message already sent is a record of what the customer
+    # was told, and it must not disappear with the account it referred to.
+    user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True)
+    phone: Mapped[str] = mapped_column(String(11))
+    kind: Mapped[str] = mapped_column(String(32), index=True)
+    body: Mapped[str] = mapped_column(String(320))
+    status: Mapped[str] = mapped_column(String(16), default="queued", index=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    error: Mapped[str | None] = mapped_column(String(255))
+    provider_message_id: Mapped[str | None] = mapped_column(String(32))
+    dedupe_key: Mapped[str | None] = mapped_column(String(128), unique=True)
+    # Retries back off, so a provider outage is not hammered every five seconds
+    # for as long as it lasts.
+    next_attempt_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class SmsCode(Base):
+    """A one-time code sent to a phone, for signing up or signing in.
+
+    Stored HASHED. A code is a credential for the seconds it lives, and the
+    table is read by the same process that serves the internet; a leaked dump
+    of live codes would be a leaked set of logins.
+
+    Rate limiting lives here rather than in the endpoint because the limit has
+    to survive a restart and apply across workers - counting in memory would
+    reset every deploy, which is exactly when someone is watching.
+    """
+    __tablename__ = "sms_codes"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    phone: Mapped[str] = mapped_column(String(11), index=True)
+    purpose: Mapped[str] = mapped_column(String(16))       # signup | login
+    code_hash: Mapped[str] = mapped_column(String(128))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    # Wrong guesses, so a code cannot be brute-forced inside its lifetime.
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True)
+
+    __table_args__ = (Index("ix_sms_code_lookup", "phone", "purpose"),)
 
 
 class Notification(Base):

@@ -14,15 +14,17 @@ import posixpath
 import re
 import secrets
 import shutil
+import subprocess
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from fastapi import (Depends, FastAPI, File, HTTPException, Request, Response,
                      UploadFile, WebSocket)
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from itsdangerous import BadSignature, URLSafeTimedSerializer
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, Field
 from sqlalchemy import desc, func, or_, select
 from sqlalchemy.orm import Session, aliased
 
@@ -30,6 +32,9 @@ from . import hermes
 from . import operations as oplib
 from . import notifications as notifylib
 from . import backup as backuplib
+from . import metrics as m
+from . import sms as smslib
+from . import smscode
 from . import openclaw as oclib
 from . import ports as portalloc
 from . import sshkeys
@@ -42,7 +47,8 @@ from .incus.client import IncusClient, IncusConfig, IncusError
 from .incus.execws import open_exec
 from .models import (AiModelPrice, AiUsageMark, AuditLog, CreditAccount,
                      CreditTransaction, ExposedPort, Notification, PortKind,
-                     Setting, SshKey, Operation, Ticket, TicketMessage,
+                     Setting, SmsMessage, SshKey, Operation, OpenRouterAccount,
+                     Ticket, TicketMessage,
                      TicketStatus, TxKind, UsageSample,
                      User, UserStatus, Workspace, WorkspaceState)
 from .security import hash_password, verify_password
@@ -83,6 +89,64 @@ def _incus() -> IncusClient:
         client_key=CONFIG.incus_client_key, server_cert=CONFIG.incus_server_cert))
 
 
+# --- request metrics ------------------------------------------------------
+m.describe("mmd_http_requests_total", "counter",
+           "API requests by route template, method and status class.")
+m.describe("mmd_http_request_seconds", "histogram",
+           "API request latency in seconds, by route template and method.")
+m.describe("mmd_http_exceptions_total", "counter",
+           "Requests that raised out of the handler.")
+m.describe("mmd_auth_failures_total", "counter",
+           "Failed sign-in attempts by method and reason.")
+m.describe("mmd_registration_conflicts_total", "counter",
+           "Rejected sign-ups by the field that conflicted.")
+
+# Seeded at zero so the series EXISTS before the first failure. Otherwise the
+# panel reads "No data", which on an operations dashboard is ambiguous in the
+# worst way: it looks identical whether nothing is wrong or the exporter is
+# broken. A flat zero line says "measured, and fine".
+for _method, _reason in (("password", "bad_password"),
+                         ("password", "no_such_user"),
+                         ("sms", "sms_code_wrong"),
+                         ("sms", "sms_code_expired")):
+    m.inc("mmd_auth_failures_total", {"method": _method, "reason": _reason}, 0)
+for _field in ("username", "phone", "code"):
+    m.inc("mmd_registration_conflicts_total", {"field": _field}, 0)
+for _verb in ("GET", "POST", "PUT", "DELETE"):
+    m.inc("mmd_http_exceptions_total", {"method": _verb}, 0)
+
+
+@app.middleware("http")
+async def _record_request(request: Request, call_next):
+    """Count and time every request.
+
+    The label is the ROUTE TEMPLATE - `/api/tickets/{ticket_id}` - never the
+    path that was actually requested. One is a handful of series; the other is
+    one series per ticket per customer, which is how a monitoring stack gets
+    taken down by the thing it was installed to watch. Same reason the status
+    is a class (`2xx`) rather than a code.
+
+    Unmatched paths collapse to a single `<unmatched>` label instead of being
+    reported individually: a scanner walking random URLs must not be able to
+    mint series.
+    """
+    start = time.monotonic()
+    status = "5xx"
+    try:
+        response = await call_next(request)
+        status = f"{response.status_code // 100}xx"
+        return response
+    except Exception:
+        m.inc("mmd_http_exceptions_total", {"method": request.method})
+        raise
+    finally:
+        route = request.scope.get("route")
+        template = getattr(route, "path", None) or "<unmatched>"
+        labels = {"route": template, "method": request.method}
+        m.observe("mmd_http_request_seconds", time.monotonic() - start, labels)
+        m.inc("mmd_http_requests_total", {**labels, "status": status})
+
+
 # --- auth plumbing -------------------------------------------------------
 def current_user(request: Request, db: Session = Depends(get_session)) -> User:
     raw = request.cookies.get(COOKIE)
@@ -109,6 +173,11 @@ def require_admin(user: User = Depends(current_user)) -> User:
     return user
 
 
+@app.get("/api/admin/auth-check")
+def admin_auth_check(_: User = Depends(require_admin)) -> dict:
+    return {"ok": True}
+
+
 def my_workspace(db: Session, user: User) -> Workspace:
     ws = db.scalar(select(Workspace).where(Workspace.user_id == user.id))
     if ws is None:
@@ -118,22 +187,32 @@ def my_workspace(db: Session, user: User) -> Workspace:
 
 # --- schemas -------------------------------------------------------------
 class SignUp(BaseModel):
-    email: EmailStr
     password: str = Field(min_length=8, max_length=256)
     # Not optional: it becomes part of a hostname, so it has to be chosen rather
     # than derived from an address the customer may later change.
     username: str = Field(min_length=1, max_length=64)
     full_name: str = Field(min_length=2, max_length=120)
     phone: str = Field(pattern=r"^09[0-9]{9}$")
+    # Proves the number is reachable and belongs to whoever is signing up.
+    code: str = Field(min_length=4, max_length=8)
 
 
-class Credentials(BaseModel):
-    email: EmailStr
-    password: str = Field(min_length=10, max_length=200)
+class CodeRequest(BaseModel):
+    phone: str = Field(pattern=r"^09[0-9]{9}$")
+    purpose: str = Field(pattern=r"^(signup|login)$")
+
+
+class SmsLogin(BaseModel):
+    phone: str = Field(pattern=r"^09[0-9]{9}$")
+    code: str = Field(min_length=4, max_length=8)
+
+
+class SmsPreferences(BaseModel):
+    prefs: dict[str, bool]
 
 
 class LoginBody(BaseModel):
-    username: str = Field(min_length=1, max_length=64)
+    identifier: str = Field(min_length=1, max_length=64)
     password: str
 
 
@@ -143,7 +222,6 @@ class PasswordChange(BaseModel):
 
 
 class ProfileUpdate(BaseModel):
-    email: EmailStr
     full_name: str = Field(min_length=2, max_length=120)
     phone: str = Field(pattern=r"^09[0-9]{9}$")
     current_password: str = Field(min_length=1, max_length=256)
@@ -156,7 +234,6 @@ class TelegramProfileUpdate(BaseModel):
 
 
 class AdminProfileUpdate(BaseModel):
-    email: EmailStr
     full_name: str = Field(min_length=2, max_length=120)
     phone: str = Field(pattern=r"^09[0-9]{9}$")
 
@@ -198,12 +275,17 @@ class ResetRequest(BaseModel):
 
     Both fields are required and both are checked server-side, so the
     confirmation is not something a stray click - or a script poking the API -
-    can satisfy. The typed value is the account's own email address: unlike a
+    can satisfy. The typed value is the account's own username: unlike a
     fixed phrase, it cannot be copied from documentation, and unlike a checkbox
     it has to be produced rather than dismissed.
     """
     confirm: str = Field(min_length=3, max_length=320)
     password: str = Field(min_length=1, max_length=256)
+
+
+class WorkspaceCreate(BaseModel):
+    cpu_milli: int = 1000
+    mem_mib: int = 1024
 
 
 class AiPriceRow(BaseModel):
@@ -272,25 +354,15 @@ def _startup() -> None:
 def _backfill_usernames() -> None:
     """Give every pre-existing account a username.
 
-    The field arrived after these customers signed up, and their Hermes address
-    depends on it. Derived from the email's local part, sanitised into a legal
-    DNS label and de-duplicated. Idempotent: rows that already have one are left
-    alone, so this is safe on every boot.
+    The field arrived after these customers signed up. Legacy installations
+    backfilled it before the legacy contact field was removed; finding a row without one now is a
+    schema invariant violation rather than a reason to invent public identity.
     """
     with SessionLocal() as db:
         rows = list(db.scalars(select(User)))
-        taken = {u.username for u in rows if u.username}
-        filled = 0
-        for u in rows:
-            if u.username:
-                continue
-            name = unames.make_unique(unames.derive_from_email(u.email), taken)
-            u.username = name
-            taken.add(name)
-            filled += 1
-        if filled:
-            db.commit()
-            log.info("backfilled %d username(s)", filled)
+        missing = [u.id for u in rows if not u.username]
+        if missing:
+            raise RuntimeError("users_without_username")
 
 
 @app.get("/api/health")
@@ -298,29 +370,409 @@ def health() -> dict:
     return {"ok": True, "version": APP_VERSION}
 
 
+def _metric_label(value: object) -> str:
+    return str(value or "").replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+
+
+@app.get("/internal/metrics", response_class=PlainTextResponse)
+def prometheus_metrics(request: Request, db: Session = Depends(get_session)) -> str:
+    """Low-cardinality platform snapshot, scraped locally every five minutes."""
+    expected = CONFIG.prometheus_token
+    supplied = request.headers.get("authorization", "").removeprefix("Bearer ")
+    if not expected or not secrets.compare_digest(supplied, expected):
+        fail(401, "metrics_auth", "Metrics authentication failed.")
+    lines = [f'mmd_build_info{{version="{_metric_label(APP_VERSION)}"}} 1']
+    for user in db.scalars(select(User)):
+        username = _metric_label(user.username)
+        account = db.get(CreditAccount, user.id)
+        router = db.get(OpenRouterAccount, user.id)
+        ws = db.scalar(select(Workspace).where(Workspace.user_id == user.id))
+        labels = f'username="{username}"'
+        lines.append(f"mmd_user_credit_micro_toman{{{labels}}} {account.balance_micro if account else 0}")
+        lines.append(f"mmd_user_openrouter_usage_usd{{{labels}}} {router.usage_usd if router else 0}")
+        lines.append(f"mmd_user_openrouter_ready{{{labels}}} {1 if router and router.key else 0}")
+        lines.append(f"mmd_user_openrouter_blocked{{{labels}}} "
+                     f"{1 if router and router.credit_blocked else 0}")
+        lines.append(f"mmd_user_workspace_present{{{labels}}} {1 if ws else 0}")
+        if ws:
+            lines.extend((
+                f"mmd_workspace_desired_on{{{labels}}} {1 if ws.desired_on else 0}",
+                f"mmd_workspace_cpu_millicores{{{labels}}} {ws.cpu_milli}",
+                f"mmd_workspace_memory_mib{{{labels}}} {ws.mem_mib}",
+                f"mmd_workspace_disk_limit_gib{{{labels}}} {ws.disk_gib}",
+                f"mmd_workspace_disk_used_mib{{{labels}}} {ws.disk_used_mib or 0}",
+                f"mmd_workspace_published_ports{{{labels}}} " + str(db.scalar(select(func.count(ExposedPort.id)).where(ExposedPort.workspace_id == ws.id)) or 0),
+            ))
+            # The two committed catalogue items that were missing. `ready`
+            # says a key exists; `blocked` says it has been disabled for
+            # non-payment - different questions, and the second is the one
+            # that explains a customer's agent going quiet.
+            lines.append(f"mmd_workspace_state{{{labels},state=\"{ws.state.value}\"}} 1")
+            for name in ("hermes", "openclaw", "opencode", "openwebui"):
+                lines.append(f'mmd_workspace_service_ready{{{labels},service="{name}"}} '
+                             f'{1 if getattr(ws, f"{name}_installed") else 0}')
+    for status in UserStatus:
+        count = db.scalar(select(func.count(User.id)).where(User.status == status)) or 0
+        lines.append(f'mmd_users{{status="{status.value}"}} {count}')
+    for state in WorkspaceState:
+        count = db.scalar(select(func.count(Workspace.id)).where(Workspace.state == state)) or 0
+        lines.append(f'mmd_workspaces{{state="{state.value}"}} {count}')
+    lines.extend(_usage_metrics(db))
+    lines.extend(_operations_metrics(db))
+    lines.extend(_process_metrics())
+    # The worker's own counters, folded in from the snapshot it persists.
+    lines.extend(m.render(m.read_snapshot()))
+    lines.append("# EOF")
+    return "\n".join(lines) + "\n"
+
+
+def _usage_metrics(db: Session) -> list[str]:
+    """What the fleet is ACTUALLY consuming, plus the pool and the headroom.
+
+    Everything here replaces a chart the admin pages used to draw themselves.
+    The configured allowance was already exported; this is the other half - a
+    tier of 2 GiB tells you nothing without the 300 MiB actually in use.
+
+    CPU is exported as the raw monotonic counter rather than a computed rate.
+    Prometheus is built to differentiate counters and handles restarts and
+    gaps correctly; a rate computed here would be an average over whatever
+    window happened to be handy, and wrong at every other window.
+    """
+    out: list[str] = []
+
+    # The newest sample per workspace, in one query rather than one per row.
+    newest = (select(UsageSample.workspace_id,
+                     func.max(UsageSample.ts).label("ts"))
+              .group_by(UsageSample.workspace_id).subquery())
+    rows = db.execute(
+        select(User.username, UsageSample.cpu_seconds_total,
+               UsageSample.mem_bytes, UsageSample.ts, Workspace.state)
+        .join(newest, (UsageSample.workspace_id == newest.c.workspace_id)
+              & (UsageSample.ts == newest.c.ts))
+        .join(Workspace, Workspace.id == UsageSample.workspace_id)
+        .join(User, User.id == Workspace.user_id)).all()
+    for username, cpu_seconds, mem_bytes, ts, state in rows:
+        lab = f'{{username="{_metric_label(username)}"}}'
+        running = state == WorkspaceState.ON
+        # CPU is a COUNTER, so it keeps its last value while the machine is
+        # off. That is correct and required: a counter must never decrease,
+        # and `rate()` over a flat counter is already zero.
+        out.append(f"mmd_workspace_cpu_seconds_total{lab} {cpu_seconds:g}")
+        # Memory is a GAUGE, and a stopped machine is using none. Reporting
+        # the last sample instead meant a workspace switched off yesterday
+        # still claimed 429 MB today - a reading from whenever it last ran,
+        # published as though it were current.
+        out.append(f"mmd_workspace_memory_bytes{lab} {mem_bytes if running else 0}")
+        # Only meaningful for a machine that is supposed to be sampling. For a
+        # stopped one the age just counts up forever and says nothing, so it
+        # is reported as -1: "not applicable" rather than a huge number that
+        # looks like a fault.
+        out.append(f"mmd_workspace_sample_age_seconds{lab} "
+                   f"{_age_seconds(ts) if running else -1}")
+
+    # Per-model AI usage, summed across a customer's sessions.
+    #
+    # These are the high-water marks the billing path already keeps, so they
+    # are cumulative and monotonic - exactly what a Prometheus counter wants.
+    # `increase(...[1h])` then answers "which models did this customer use in
+    # the last hour", which a cumulative line cannot.
+    #
+    # Grouped in SQL rather than exported per session: a session id is
+    # unbounded and would mint a series per conversation.
+    rows = db.execute(
+        select(User.username, AiUsageMark.service, AiUsageMark.model,
+               func.sum(AiUsageMark.input_tokens),
+               func.sum(AiUsageMark.output_tokens),
+               func.sum(AiUsageMark.cache_read_tokens),
+               func.sum(AiUsageMark.billed_micro))
+        .join(Workspace, Workspace.id == AiUsageMark.workspace_id)
+        .join(User, User.id == Workspace.user_id)
+        .group_by(User.username, AiUsageMark.service, AiUsageMark.model)).all()
+    for username, service, model, tin, tout, tcache, billed in rows:
+        lab = (f'username="{_metric_label(username)}",'
+               f'service="{_metric_label(service)}",'
+               f'model="{_metric_label(model)}"')
+        out.append(f'mmd_ai_tokens_total{{{lab},direction="input"}} {tin or 0}')
+        out.append(f'mmd_ai_tokens_total{{{lab},direction="output"}} {tout or 0}')
+        out.append(f'mmd_ai_tokens_total{{{lab},direction="cache_read"}} {tcache or 0}')
+        out.append(f"mmd_ai_billed_micro_toman_total{{{lab}}} {billed or 0}")
+
+    # Headroom: what the scheduler will and will not admit.
+    try:
+        from .scheduler.admission import host_capacity
+        cap = host_capacity(svc.get_settings(db))
+        running = svc.running_tiers(db)
+        out.append(f"mmd_capacity_total_cores {cap.total_cores:g}")
+        out.append(f"mmd_capacity_total_memory_gib {cap.total_mem_gib:g}")
+        out.append(f"mmd_capacity_schedulable_cores {cap.schedulable_cores:g}")
+        out.append(f"mmd_capacity_schedulable_memory_gib {cap.schedulable_mem_gib:g}")
+        out.append(f"mmd_capacity_used_cores {sum(c for c, _ in running):g}")
+        out.append(f"mmd_capacity_used_memory_gib {sum(m for _, m in running):g}")
+        out.append(f"mmd_capacity_running {len(running)}")
+    except Exception:  # noqa: BLE001
+        # Capacity is derived from host inspection; a failure there must not
+        # take the whole scrape down with it.
+        pass
+
+    # The ZFS pool, as the worker last measured it. Read from settings rather
+    # than measured here: it costs a provisioner round trip.
+    for key, name in (("pool_total_gib", "mmd_pool_total_gib"),
+                      ("pool_used_gib", "mmd_pool_used_gib"),
+                      ("pool_free_gib", "mmd_pool_free_gib")):
+        row = db.scalar(select(Setting).where(Setting.key == key))
+        try:
+            out.append(f"{name} {float(row.value) if row and row.value else -1:g}")
+        except (TypeError, ValueError):
+            out.append(f"{name} -1")
+    # Summed in Python: `disk_gib` is a derived property on the model, not a
+    # column, so SQL cannot add it up.
+    committed = sum(w.disk_gib for w in db.scalars(select(Workspace)))
+    out.append(f"mmd_pool_committed_gib {committed:g}")
+    return out
+
+
+def _operations_metrics(db: Session) -> list[str]:
+    """Everything in the catalogue's 'Product operations' section that is a
+    question about stored state rather than an event."""
+    out: list[str] = []
+
+    # Operations by kind and status, plus the queue depth that says whether
+    # the worker is keeping up.
+    rows = db.execute(
+        select(Operation.kind, Operation.status, func.count(Operation.id))
+        .group_by(Operation.kind, Operation.status)).all()
+    for kind, status, count in rows:
+        out.append(f'mmd_operations{{kind="{_metric_label(kind)}",'
+                   f'status="{_metric_label(status)}"}} {count}')
+    backlog = db.scalar(select(func.count(Operation.id))
+                        .where(Operation.status.in_(("queued", "running")))) or 0
+    out.append(f"mmd_operations_backlog {backlog}")
+
+    # Support. `unread` and the age of the oldest open ticket are the two that
+    # actually describe an SLO being missed.
+    for status in TicketStatus:
+        count = db.scalar(select(func.count(Ticket.id))
+                          .where(Ticket.status == status)) or 0
+        out.append(f'mmd_tickets{{status="{status.value}"}} {count}')
+    oldest = db.scalar(select(func.min(Ticket.created_at))
+                       .where(Ticket.status.notin_((TicketStatus.CLOSED,))))
+    out.append("mmd_ticket_oldest_open_seconds "
+               f"{_age_seconds(oldest)}")
+    unread = db.scalar(select(func.count(Ticket.id))
+                       .where(Ticket.staff_unread.is_(True))) or 0 \
+        if hasattr(Ticket, "staff_unread") else 0
+    out.append(f"mmd_tickets_unread_staff {unread}")
+
+    # Notifications: created by kind, and how stale the oldest unread is.
+    rows = db.execute(
+        select(Notification.kind, func.count(Notification.id))
+        .where(Notification.read_at.is_(None))
+        .group_by(Notification.kind)).all()
+    for kind, count in rows:
+        out.append(f'mmd_notifications_unread{{kind="{_metric_label(kind)}"}} {count}')
+    oldest_note = db.scalar(select(func.min(Notification.created_at))
+                            .where(Notification.read_at.is_(None)))
+    out.append(f"mmd_notification_oldest_unread_seconds {_age_seconds(oldest_note)}")
+
+    # SMS outbox, which is now a delivery path worth watching.
+    rows = db.execute(
+        select(SmsMessage.kind, SmsMessage.status, func.count(SmsMessage.id))
+        .group_by(SmsMessage.kind, SmsMessage.status)).all()
+    for kind, status, count in rows:
+        out.append(f'mmd_sms_messages{{kind="{_metric_label(kind)}",'
+                   f'status="{_metric_label(status)}"}} {count}')
+
+    # Backups: age is the number that matters. A backup system reports "on"
+    # long after it has stopped producing anything.
+    cfg = backuplib.config(db)
+    out.append(f"mmd_backup_enabled {1 if cfg['enabled'] else 0}")
+    out.append(f"mmd_backup_last_size_bytes {cfg['last_size']}")
+    out.append(f"mmd_backup_failing {1 if cfg['last_error'] else 0}")
+    last_ok = None
+    if cfg["last_ok_at"]:
+        try:
+            last_ok = datetime.fromisoformat(cfg["last_ok_at"])
+        except ValueError:
+            last_ok = None
+    out.append(f"mmd_backup_age_seconds {_age_seconds(last_ok)}")
+
+    # The worker, as seen from outside it.
+    for key, name in (("worker_heartbeat", "mmd_worker_heartbeat_age_seconds"),
+                      ("worker_last_success", "mmd_worker_last_success_age_seconds")):
+        row = db.scalar(select(Setting).where(Setting.key == key))
+        when = None
+        if row and row.value:
+            try:
+                when = datetime.fromisoformat(row.value)
+            except ValueError:
+                when = None
+        out.append(f"{name} {_age_seconds(when)}")
+
+    # Ledger and money, which the catalogue files under accounts but which is
+    # the same kind of question: a stored aggregate.
+    rows = db.execute(
+        select(CreditTransaction.kind, func.count(CreditTransaction.id),
+               func.coalesce(func.sum(CreditTransaction.amount_micro), 0))
+        .group_by(CreditTransaction.kind)).all()
+    for kind, count, total in rows:
+        label = _metric_label(getattr(kind, "value", str(kind)))
+        out.append(f'mmd_ledger_entries{{kind="{label}"}} {count}')
+        out.append(f'mmd_ledger_micro_toman{{kind="{label}"}} {total}')
+
+    # Schema patches that did not apply are silent by design; this makes them
+    # loud. See db.py, where each patch runs in its own transaction.
+    out.append(f"mmd_schema_patch_failures {int(_schema_failures())}")
+    return out
+
+
+def _age_seconds(when) -> float:
+    if when is None:
+        return -1.0
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=UTC)
+    return max(0.0, (datetime.now(UTC) - when).total_seconds())
+
+
+def _schema_failures() -> int:
+    from .db import SCHEMA_PATCH_FAILURES
+    return len(SCHEMA_PATCH_FAILURES)
+
+
+# Which units to report process metrics for. Named rather than discovered:
+# these four ARE the platform, and a discovered list would quietly stop
+# covering one that was renamed.
+_UNITS = ("mmd-api", "mmd-worker", "mmd-provisioner", "mmd-vhosts")
+
+
+def _process_metrics() -> list[str]:
+    """CPU, memory, descriptors and uptime for each service.
+
+    Read from /proc rather than through a library: /proc/<pid>/stat is
+    world-readable, so the unprivileged API process can see the root
+    provisioner's numbers without any new permission.
+    """
+    out: list[str] = []
+    boot = m.boot_time()
+    for unit in _UNITS:
+        pid = _unit_pid(unit)
+        if not pid:
+            out.append(f'mmd_process_up{{unit="{unit}"}} 0')
+            continue
+        sample = m.process_sample(pid)
+        if sample is None:
+            out.append(f'mmd_process_up{{unit="{unit}"}} 0')
+            continue
+        lab = f'{{unit="{unit}"}}'
+        out.append(f"mmd_process_up{lab} 1")
+        out.append(f"mmd_process_cpu_seconds_total{lab} {sample['cpu_seconds']:g}")
+        out.append(f"mmd_process_resident_bytes{lab} {sample['rss_bytes']:g}")
+        out.append(f"mmd_process_threads{lab} {sample['threads']}")
+        out.append(f"mmd_process_open_fds{lab} {sample['open_fds']}")
+        if boot:
+            started = boot + sample["start_ticks"] / m.CLOCK_TICKS
+            out.append(f"mmd_process_uptime_seconds{lab} "
+                       f"{max(0.0, time.time() - started):g}")
+        out.append(f"mmd_process_restarts_total{lab} {_unit_restarts(unit)}")
+    return out
+
+
+def _systemctl(unit: str, prop: str) -> str:
+    try:
+        return subprocess.run(["systemctl", "show", unit, "-p", prop, "--value"],
+                              capture_output=True, text=True,
+                              timeout=5).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def _unit_pid(unit: str) -> int:
+    try:
+        return int(_systemctl(unit, "MainPID") or 0)
+    except ValueError:
+        return 0
+
+
+def _unit_restarts(unit: str) -> int:
+    try:
+        return int(_systemctl(unit, "NRestarts") or 0)
+    except ValueError:
+        return 0
+
+
 # --- auth ----------------------------------------------------------------
+def _signup_username(raw: str) -> str:
+    name = unames.validate(raw)
+    endpoint_label = (CONFIG.endpoint_host or "").split(".", 1)[0].lower()
+    if endpoint_label and name == endpoint_label:
+        raise unames.UsernameError("username_reserved", "That username is reserved.")
+    return name
+
+
+def _notify_admins(db: Session, kind: str, detail: dict | None = None,
+                   dedupe_key: str | None = None) -> None:
+    """Text every administrator who has a usable phone.
+
+    Operator alerts fan out to all admins rather than to one configured
+    number, because the number that matters is whoever is actually on call,
+    and a single hard-coded recipient goes stale the moment they leave.
+    """
+    for admin in db.scalars(select(User).where(
+            User.is_admin.is_(True), User.status == UserStatus.APPROVED)):
+        try:
+            smslib.queue(db, user_id=admin.id, phone=admin.phone, kind=kind,
+                         detail=detail, user=admin,
+                         dedupe_key=(f"{dedupe_key}:{admin.id}"
+                                     if dedupe_key else None))
+        except smslib.SmsError:
+            continue
+    db.commit()
+
+
+def _issue_session(response: Response, user: User) -> None:
+    """One definition, because password and SMS sign-in must produce exactly
+    the same session - a second copy is how the two drift in cookie flags."""
+    response.set_cookie(COOKIE, _serializer.dumps(str(user.id)), httponly=True,
+                        samesite="lax", secure=True,
+                        max_age=CONFIG.session_hours * 3600)
+
+
+def _notify_new_login(db: Session, user: User) -> None:
+    """Text the owner about a sign-in they may not have made.
+
+    Once a day at most, keyed by date: a security message that arrives on
+    every sign-in is a security message people stop reading, and the point is
+    that an unexpected one stands out.
+    """
+    try:
+        smslib.queue(db, user_id=user.id, phone=user.phone, kind="new_login",
+                     dedupe_key=f"login:{user.id}:{svc.now():%Y%m%d}")
+        db.commit()
+    except smslib.SmsError:
+        pass
+
+
 @app.post("/api/auth/register")
 def register(body: SignUp, db: Session = Depends(get_session)) -> dict:
     try:
-        username = unames.validate(body.username)
+        username = _signup_username(body.username)
     except unames.UsernameError as e:
         fail(400, e.code, str(e))
-    # Checked before the duplicate-email branch so a customer picking a taken
-    # username is told so, rather than being silently absorbed into the
-    # deliberately-identical "awaiting approval" reply.
     if db.scalar(select(User).where(User.username == username)):
+        m.inc("mmd_registration_conflicts_total", {"field": "username"})
         fail(409, "username_taken", "That username is already in use.")
-    if db.scalar(select(User).where(User.email == body.email.lower())):
-        # Identical to the success response on purpose: differing replies would
-        # let anyone enumerate which addresses hold accounts.
-        return {"status": "pending", "code": "pending_approval"}
     if db.scalar(select(User).where(User.phone == body.phone)):
-        # Phone ownership is private account information, so duplicate phone
-        # and duplicate email deliberately have the same non-enumerating reply.
-        return {"status": "pending", "code": "pending_approval"}
+        m.inc("mmd_registration_conflicts_total", {"field": "phone"})
+        fail(409, "phone_taken", "That phone number is already in use.")
+    # Before anything is written: an unverified number would make phone - the
+    # sole contact identity and now a sign-in credential - self-asserted.
+    try:
+        smscode.verify(db, body.phone, "signup", body.code)
+    except smscode.CodeError as e:
+        m.inc("mmd_registration_conflicts_total", {"field": "code"})
+        fail(400, e.code, str(e))
     first = db.scalar(select(User).limit(1)) is None
     user = User(
-        email=body.email.lower(), username=username,
+        username=username,
         full_name=body.full_name.strip(), phone=body.phone,
         password_hash=hash_password(body.password),
         is_admin=first,
@@ -328,14 +780,73 @@ def register(body: SignUp, db: Session = Depends(get_session)) -> dict:
     db.add(user)
     db.commit()
     db.add(CreditAccount(user_id=user.id, balance_micro=0))
+    if user.status == UserStatus.APPROVED:
+        db.add(OpenRouterAccount(user_id=user.id, credit_blocked=True,
+                                 limit_dirty=True))
     db.commit()
-    svc.audit(db, user.id, "register", user.email, first_account=first)
+    svc.audit(db, user.id, "register", user.username, first_account=first)
+    if not first:
+        _notify_admins(db, "admin_signup_pending", dedupe_key=f"signup:{user.id}")
     # A CODE, not a sentence. The interface is Persian and translates by code;
     # returning English prose here meant the sign-up page had to compare the
     # server's exact wording to decide what to show - so a reworded string, or a
     # second caller, would silently print English at a customer.
     return {"status": user.status.value,
             "code": "admin_created" if first else "pending_approval"}
+
+
+@app.post("/api/auth/request-code")
+def request_code(body: CodeRequest, db: Session = Depends(get_session)) -> dict:
+    """Send a one-time code to a phone, for signing up or signing in.
+
+    Answers identically whether or not the number belongs to an account.
+    Saying "no such account" would turn this into a way to ask whether a given
+    person is a customer, one number at a time - and the SMS itself already
+    tells the real owner what happened.
+    """
+    phone = body.phone
+    exists = db.scalar(select(User).where(User.phone == phone)) is not None
+    if body.purpose == "signup" and exists:
+        # Not an enumeration leak: the signup form already reports a taken
+        # number through phone-available, and sending a signup code to an
+        # existing account would be a way to spam a customer.
+        fail(409, "phone_taken", "That phone number is already in use.")
+    try:
+        # Throttled even when nothing will be sent, so the shape of the
+        # response cannot be used to time-probe for existing accounts.
+        code = smscode.issue(db, phone, body.purpose)
+    except smscode.CodeError as e:
+        fail(429, e.code, str(e))
+    if body.purpose == "login" and not exists:
+        db.commit()
+        return {"ok": True}
+    smslib.queue(db, user_id=None, phone=phone,
+                 kind="signup_code" if body.purpose == "signup" else "login_code",
+                 detail={"code": code})
+    db.commit()
+    return {"ok": True}
+
+
+@app.post("/api/auth/login-sms")
+def login_sms(body: SmsLogin, response: Response,
+              db: Session = Depends(get_session)) -> dict:
+    """Sign in with a code instead of a password.
+
+    The code is verified BEFORE the account is looked up, so a wrong code and
+    an unknown number take the same path and return the same error.
+    """
+    try:
+        smscode.verify(db, body.phone, "login", body.code)
+    except smscode.CodeError as e:
+        m.inc("mmd_auth_failures_total", {"method": "sms", "reason": e.code})
+        fail(401, e.code, str(e))
+    user = db.scalar(select(User).where(User.phone == body.phone))
+    if user is None:
+        fail(401, "bad_credentials", "Incorrect phone or code")
+    _issue_session(response, user)
+    svc.audit(db, user.id, "sign_in_sms", user.username)
+    _notify_new_login(db, user)
+    return {"status": user.status.value, "is_admin": user.is_admin}
 
 
 @app.get("/api/auth/username-available")
@@ -347,7 +858,7 @@ def username_available(name: str, db: Session = Depends(get_session)) -> dict:
     is public anyway once it is in a hostname.
     """
     try:
-        candidate = unames.validate(name)
+        candidate = _signup_username(name)
     except unames.UsernameError as e:
         return {"available": False, "code": e.code, "reason": str(e)}
     taken = db.scalar(select(User).where(User.username == candidate)) is not None
@@ -355,20 +866,61 @@ def username_available(name: str, db: Session = Depends(get_session)) -> dict:
             "code": "username_taken" if taken else None}
 
 
+@app.get("/api/auth/phone-available")
+def phone_available(phone: str, db: Session = Depends(get_session)) -> dict:
+    if not re.fullmatch(r"09[0-9]{9}", phone):
+        return {"available": False, "code": "phone_invalid"}
+    taken = db.scalar(select(User).where(User.phone == phone)) is not None
+    return {"available": not taken,
+            "code": "phone_taken" if taken else None}
+
+
 @app.post("/api/auth/login")
 def login(body: LoginBody, response: Response,
           db: Session = Depends(get_session)) -> dict:
-    # Username is the sole public login identifier. Email and phone remain
-    # contact/profile data and changing either cannot lock a customer out.
-    username = body.username.strip().lower()
-    user = db.scalar(select(User).where(User.username == username))
+    identifier = body.identifier.strip().lower()
+    user = db.scalar(select(User).where(
+        (User.username == identifier) | (User.phone == identifier)))
     if user is None or not verify_password(body.password, user.password_hash):
+        # Reason, not identity: "which account" would be an unbounded label and
+        # a log of who is being targeted.
+        m.inc("mmd_auth_failures_total",
+              {"method": "password",
+               "reason": "no_such_user" if user is None else "bad_password"})
         fail(401, "bad_credentials", "Incorrect username or password")
-    response.set_cookie(COOKIE, _serializer.dumps(str(user.id)), httponly=True,
-                        samesite="lax", secure=True,
-                        max_age=CONFIG.session_hours * 3600)
-    svc.audit(db, user.id, "sign_in", user.email)
+    _issue_session(response, user)
+    svc.audit(db, user.id, "sign_in", user.username)
+    _notify_new_login(db, user)
     return {"status": user.status.value, "is_admin": user.is_admin}
+
+
+@app.get("/api/account/sms")
+def sms_preferences_get(user: User = Depends(current_user)) -> dict:
+    """Which optional messages this customer receives, all on by default."""
+    return {"prefs": smslib.preferences(user),
+            "kinds": smslib.OPTIONAL_KINDS}
+
+
+@app.put("/api/account/sms")
+def sms_preferences_put(body: SmsPreferences, user: User = Depends(current_user),
+                        db: Session = Depends(get_session)) -> dict:
+    """Store the customer's choices.
+
+    Only optional kinds are writable. Account, security and code messages are
+    rejected rather than silently ignored, because an interface that appears
+    to switch off a takeover warning is worse than one that has no switch.
+    """
+    prefs = dict(user.sms_prefs or {})
+    for kind, wanted in body.prefs.items():
+        if kind not in smslib.OPTIONAL_KINDS:
+            fail(400, "sms_kind_locked", "That message cannot be switched off.")
+        prefs[kind] = bool(wanted)
+    user.sms_prefs = prefs
+    # The column is JSON; SQLAlchemy needs the reassignment above to see the
+    # change, which is why this is not an in-place mutation.
+    db.commit()
+    svc.audit(db, user.id, "sms_preferences", user.username)
+    return {"prefs": smslib.preferences(user), "kinds": smslib.OPTIONAL_KINDS}
 
 
 @app.post("/api/auth/logout")
@@ -383,8 +935,13 @@ def change_password(body: PasswordChange, user: User = Depends(current_user),
     if not verify_password(body.current_password, user.password_hash):
         fail(401, "wrong_password", "Your current password is not correct")
     user.password_hash = hash_password(body.new_password)
+    try:
+        smslib.queue(db, user_id=user.id, phone=user.phone,
+                     kind="password_changed")
+    except smslib.SmsError:
+        pass
     db.commit()
-    svc.audit(db, user.id, "password_change", user.email)
+    svc.audit(db, user.id, "password_change", user.username)
     # No message: the page says so in Persian. Nothing consumed this, and a
     # sentence sitting in a response is a sentence waiting to be displayed.
     return {"ok": True}
@@ -395,7 +952,7 @@ def me(user: User = Depends(current_user), db: Session = Depends(get_session)) -
     acct = db.get(CreditAccount, user.id)
     ws = db.scalar(select(Workspace).where(Workspace.user_id == user.id))
     return {
-        "email": user.email, "username": user.username,
+        "username": user.username,
         "full_name": user.full_name, "phone": user.phone,
         "telegram_user_id": user.telegram_user_id,
         "telegram_configured": bool(user.telegram_bot_token and user.telegram_user_id),
@@ -412,20 +969,16 @@ def me(user: User = Depends(current_user), db: Session = Depends(get_session)) -
     }
 
 
-def _validate_identity(db: Session, user: User, email: str, phone: str) -> None:
-    other_email = db.scalar(select(User).where(User.email == email, User.id != user.id))
-    if other_email:
-        fail(409, "email_taken", "That email address is already in use.")
+def _validate_identity(db: Session, user: User, phone: str) -> None:
     other_phone = db.scalar(select(User).where(User.phone == phone, User.id != user.id))
     if other_phone:
         fail(409, "phone_taken", "That phone number is already in use.")
 
 
-def _apply_identity(user: User, email: str, full_name: str, phone: str) -> None:
+def _apply_identity(user: User, full_name: str, phone: str) -> None:
     name = full_name.strip()
     if len(name) < 2:
         fail(400, "full_name_invalid", "The full name is too short.")
-    user.email = email
     user.full_name = name
     user.phone = phone
 
@@ -435,11 +988,10 @@ def update_profile(body: ProfileUpdate, user: User = Depends(current_user),
                    db: Session = Depends(get_session)) -> dict:
     if not verify_password(body.current_password, user.password_hash):
         fail(401, "wrong_password", "Your current password is not correct")
-    email = body.email.lower()
-    _validate_identity(db, user, email, body.phone)
-    _apply_identity(user, email, body.full_name, body.phone)
+    _validate_identity(db, user, body.phone)
+    _apply_identity(user, body.full_name, body.phone)
     db.commit()
-    svc.audit(db, user.id, "profile_change", user.email)
+    svc.audit(db, user.id, "profile_change", user.username)
     return {"ok": True}
 
 
@@ -460,7 +1012,7 @@ def update_telegram_profile(body: TelegramProfileUpdate,
         user.telegram_bot_token = token
         user.telegram_user_id = telegram_user_id
     db.commit()
-    svc.audit(db, user.id, "telegram_profile_change", user.email,
+    svc.audit(db, user.id, "telegram_profile_change", user.username,
               configured=not body.clear)
     return {"ok": True, "configured": bool(user.telegram_bot_token),
             "user_id": user.telegram_user_id}
@@ -613,6 +1165,54 @@ def workspace_status(user: User = Depends(current_user),
                          if ws.auto_stop_at and ws.state == WorkspaceState.ON
                          else None),
     }
+
+
+@app.post("/api/workspace")
+def create_workspace(body: WorkspaceCreate, user: User = Depends(current_user),
+                     db: Session = Depends(get_session)) -> dict:
+    """Queue compute creation only when an approved customer asks for it."""
+    if user.status != UserStatus.APPROVED:
+        fail(409, "pending_approval", "The account is not approved yet.")
+    if db.scalar(select(Workspace).where(Workspace.user_id == user.id)) is not None:
+        fail(409, "already_has_machine", "This account already has a machine.")
+    try:
+        Tier(cpu_milli=body.cpu_milli, mem_mib=body.mem_mib,
+             disk_gib=pricing.DEFAULT_ROOT_GIB + pricing.DEFAULT_DOCKER_GIB)
+    except (InvalidTier, ValueError):
+        fail(400, "invalid_size", "That machine size is not available.")
+    idx = svc.next_free_idx(db)
+    ws = Workspace(user_id=user.id, idx=idx, incus_project=f"ws-{idx}",
+                   state=WorkspaceState.PROVISIONING,
+                   cpu_milli=body.cpu_milli, mem_mib=body.mem_mib)
+    db.add(ws)
+    db.commit()
+    op = oplib.create(db, kind="workspace_create", user_id=user.id,
+                      workspace_id=ws.id, actor_id=user.id,
+                      detail={"cpu_milli": ws.cpu_milli, "mem_mib": ws.mem_mib})
+    svc.audit(db, user.id, "workspace_create_started", ws.incus_project)
+    return {"ok": True, "operation": oplib.view(op)}
+
+
+@app.post("/api/workspace/delete")
+def delete_workspace(body: ResetRequest, user: User = Depends(current_user),
+                     db: Session = Depends(get_session)) -> dict:
+    """Delete compute and public addresses while preserving the account key."""
+    ws = my_workspace(db, user)
+    if body.confirm.strip().lower() != user.username.strip().lower():
+        fail(400, "delete_confirm_mismatch", "The confirmation does not match.")
+    if not verify_password(body.password, user.password_hash):
+        fail(401, "wrong_password", "The current password is not correct.")
+    if ws.state in (WorkspaceState.DELETING, WorkspaceState.RESETTING):
+        fail(409, "busy", "The machine is busy.")
+    if ws.state == WorkspaceState.ON:
+        svc.settle_elapsed(db, ws, powered_on=True)
+    ws.desired_on = False
+    ws.state = WorkspaceState.DELETING
+    db.commit()
+    op = oplib.create(db, kind="workspace_delete", user_id=user.id,
+                      workspace_id=ws.id, actor_id=user.id)
+    svc.audit(db, user.id, "workspace_delete_started", ws.incus_project)
+    return {"ok": True, "operation": oplib.view(op)}
 
 
 @app.post("/api/workspace/keep-running")
@@ -1159,9 +1759,9 @@ async def workspace_reset(body: ResetRequest, user: User = Depends(current_user)
     # Checked in this order on purpose: the typed value is the cheap check and
     # answering it first means a wrong password is only ever reported to someone
     # who already demonstrated they know whose account this is.
-    if body.confirm.strip().lower() != user.email.lower():
+    if body.confirm.strip().lower() != user.username.lower():
         fail(400, "reset_confirm_mismatch",
-             "The typed confirmation does not match your email address.")
+             "The typed confirmation does not match your username.")
     if not verify_password(body.password, user.password_hash):
         # Same code the sign-in page uses, so a wrong password reads the same
         # here as anywhere else.
@@ -1219,7 +1819,14 @@ def _ai_state(ws: Workspace) -> dict:
             "expires_at": resp.get("expires_at")}
 
 
-def _hermes_state(ws: Workspace) -> dict:
+def _openrouter_state(user: User, account: OpenRouterAccount | None) -> dict:
+    return {"ready": bool(account and account.key_hash),
+            "credit_blocked": bool(account.credit_blocked) if account else True,
+            "key": account.key if account else None,
+            "error": bool(account and account.error)}
+
+
+def _hermes_state(ws: Workspace, account: OpenRouterAccount | None = None) -> dict:
     """What the customer may see about their Hermes service.
 
     The API deliberately cannot mint or revoke keys - the OpenRouter management
@@ -1233,9 +1840,8 @@ def _hermes_state(ws: Workspace) -> dict:
     making the product harder to use.
     """
     return {"enabled": bool(ws.hermes_enabled),
-            "ready": bool(ws.hermes_key_hash),
-            "credit_blocked": bool(ws.hermes_credit_blocked),
-            "key": ws.hermes_key,
+            "ready": bool(ws.hermes_installed and ws.hermes_vhost_ready),
+            "credit_blocked": bool(account.credit_blocked) if account else True,
             "dashboard_user": ws.hermes_dash_user,
             "dashboard_password": ws.hermes_dash_password,
             "dashboard_ready": bool(ws.hermes_vhost_ready),
@@ -1280,7 +1886,7 @@ def _codex_state(ws: Workspace) -> dict:
             "expires_at": resp.get("expires_at")}
 
 
-def _openclaw_state(ws: Workspace) -> dict:
+def _openclaw_state(ws: Workspace, account: OpenRouterAccount | None = None) -> dict:
     """What the customer may see about their OpenClaw gateway.
 
     Reported from the database rather than probed, because this is a
@@ -1314,19 +1920,72 @@ def _openclaw_state(ws: Workspace) -> dict:
             # Requires the customer's managed OpenRouter key: OpenClaw spends
             # it, which is what keeps this inside the cap and the metering that
             # already exist rather than opening a second way to spend money.
-            "needs_openrouter": not bool(ws.hermes_key),
+            "needs_openrouter": not bool(account and account.key),
             # A FLAG, not the text. The stored value is whatever npm or systemd
             # said, in English, with paths in it - useful to an operator,
             # meaningless and alarming to a customer reading a Persian page.
             "error": bool(ws.openclaw_error)}
 
 
+def _managed_web_state(ws: Workspace, account: OpenRouterAccount | None,
+                       name: str) -> dict:
+    installed = bool(getattr(ws, f"{name}_installed"))
+    host_fn = unames.opencode_host if name == "opencode" else unames.openwebui_host
+    minimum_memory_mib = 2048 if name == "openwebui" else 0
+    return {"enabled": bool(getattr(ws, f"{name}_enabled")),
+            "installed": installed, "ready": installed,
+            "machine_running": ws.state == WorkspaceState.ON,
+            "minimum_memory_mib": minimum_memory_mib,
+            "needs_memory": bool(minimum_memory_mib and ws.mem_mib < minimum_memory_mib),
+            "needs_openrouter": not bool(account and account.key),
+            "host": host_fn(ws.user.username, CONFIG.domain),
+            "username": ("opencode" if name == "opencode" else
+                         f"{ws.user.username}@mmd.local"),
+            "password": getattr(ws, f"{name}_password"),
+            "error": bool(getattr(ws, f"{name}_error"))}
+
+
 @app.get("/api/workspace/ai")
 def ai_status(user: User = Depends(current_user),
               db: Session = Depends(get_session)) -> dict:
+    account = db.get(OpenRouterAccount, user.id)
+    ws = db.scalar(select(Workspace).where(Workspace.user_id == user.id))
+    empty = {"machine_running": False, "installed": False, "version": None,
+             "linked": False, "available": True, "expires_at": None,
+             "needs_workspace": True}
+    return {"has_workspace": ws is not None,
+            "openrouter": _openrouter_state(user, account),
+            "claude": _ai_state(ws) if ws else dict(empty),
+            "hermes": _hermes_state(ws, account) if ws else {"enabled": False,
+                "ready": False, "machine_running": False, "needs_workspace": True},
+            "codex": _codex_state(ws) if ws else dict(empty),
+            "openclaw": _openclaw_state(ws, account) if ws else {"enabled": False,
+                "ready": False, "machine_running": False, "needs_workspace": True},
+            "opencode": _managed_web_state(ws, account, "opencode") if ws else {
+                "enabled": False, "ready": False, "machine_running": False, "needs_workspace": True},
+            "openwebui": _managed_web_state(ws, account, "openwebui") if ws else {
+                "enabled": False, "ready": False, "machine_running": False, "needs_workspace": True}}
+
+
+@app.post("/api/workspace/managed-ai/{service}")
+def ai_managed_web(service: str, body: HermesAction,
+                   user: User = Depends(current_user),
+                   db: Session = Depends(get_session)) -> dict:
+    if service not in ("opencode", "openwebui"):
+        fail(404, "unknown_service", "Unknown service.")
     ws = my_workspace(db, user)
-    return {"claude": _ai_state(ws), "hermes": _hermes_state(ws),
-            "codex": _codex_state(ws), "openclaw": _openclaw_state(ws)}
+    if ws.state != WorkspaceState.ON:
+        fail(409, "machine_off", "The machine must be running to change this.")
+    account = db.get(OpenRouterAccount, user.id)
+    if body.action == "enable" and not (account and account.key):
+        fail(409, "openrouter_not_ready", "The OpenRouter key is not ready.")
+    setattr(ws, f"{service}_enabled", body.action == "enable")
+    setattr(ws, f"{service}_error", None)
+    if body.action == "disable":
+        setattr(ws, f"{service}_password", None)
+    db.commit()
+    svc.audit(db, user.id, f"ai_{service}_{body.action}", ws.incus_project)
+    return {"ok": True, service: _managed_web_state(ws, account, service)}
 
 
 @app.post("/api/workspace/ai/codex")
@@ -1343,7 +2002,12 @@ def ai_codex(body: AiAction, user: User = Depends(current_user),
         fail(409, "machine_off", "The machine must be running to change this.")
 
     resp = svc.call_provisioner({"verb": "ai_codex", "idx": ws.idx,
-                                 "action": body.action}, timeout=1200)
+                                 "action": body.action,
+                                 # A starting model, if an operator set one.
+                                 # Ignored by the provisioner unless the
+                                 # customer's config file is absent.
+                                 "model": oclib.agent_model(db, "codex")},
+                                timeout=1200)
     if not resp.get("ok"):
         log.error("codex %s failed for %s: %s", body.action, ws.incus_project, resp)
         err = resp.get("error") or ""
@@ -1370,7 +2034,8 @@ def ai_openclaw(body: HermesAction, user: User = Depends(current_user),
     ws = my_workspace(db, user)
     if not user.username:
         fail(409, "no_username", "This account has no username yet.")
-    if body.action == "enable" and not ws.hermes_key:
+    account = db.get(OpenRouterAccount, user.id)
+    if body.action == "enable" and not (account and account.key):
         # It spends the managed OpenRouter key. Without one there is nothing to
         # configure it with, and a gateway that cannot reach a model is a
         # dashboard that only produces errors.
@@ -1385,7 +2050,7 @@ def ai_openclaw(body: HermesAction, user: User = Depends(current_user),
     ws.openclaw_error = None
     db.commit()
     svc.audit(db, user.id, f"ai_openclaw_{body.action}", ws.incus_project)
-    return {"ok": True, "openclaw": _openclaw_state(ws)}
+    return {"ok": True, "openclaw": _openclaw_state(ws, db.get(OpenRouterAccount, user.id))}
 
 
 @app.post("/api/workspace/ai/openclaw/telegram")
@@ -1430,7 +2095,8 @@ def ai_openclaw_telegram(body: HermesAction, user: User = Depends(current_user),
     ws.openclaw_telegram_error = None
     db.commit()
     svc.audit(db, user.id, f"openclaw_telegram_{body.action}", ws.incus_project)
-    return {"ok": True, "openclaw": _openclaw_state(ws)}
+    return {"ok": True, "openclaw": _openclaw_state(
+        ws, db.get(OpenRouterAccount, user.id))}
 
 
 @app.post("/api/workspace/ai/openclaw/devices")
@@ -1509,7 +2175,6 @@ def ai_hermes(body: HermesAction, user: User = Depends(current_user),
     if not ws.hermes_enabled:
         # Cleared here so the interface stops showing a secret the moment the
         # customer switches it off, rather than until the worker catches up.
-        ws.hermes_key = None
         ws.hermes_vhost_ready = False
         ws.hermes_telegram_enabled = False
         ws.hermes_telegram_token = None
@@ -1518,7 +2183,8 @@ def ai_hermes(body: HermesAction, user: User = Depends(current_user),
     ws.hermes_error = None
     db.commit()
     svc.audit(db, user.id, f"ai_hermes_{body.action}", ws.incus_project)
-    return {"ok": True, "hermes": _hermes_state(ws)}
+    return {"ok": True, "hermes": _hermes_state(
+        ws, db.get(OpenRouterAccount, user.id))}
 
 
 @app.post("/api/workspace/ai/claude")
@@ -1531,7 +2197,12 @@ def ai_claude(body: AiAction, user: User = Depends(current_user),
     # npm install of the CLI is the slow part on a machine that does not have it
     # yet; the sign-in itself is a single small file.
     resp = svc.call_provisioner({"verb": "ai_claude", "idx": ws.idx,
-                                 "action": body.action}, timeout=1200)
+                                 "action": body.action,
+                                 # A starting model, if an operator set one.
+                                 # Ignored by the provisioner unless the
+                                 # customer's config file is absent.
+                                 "model": oclib.agent_model(db, "claude")},
+                                timeout=1200)
     if not resp.get("ok"):
         log.error("claude %s failed for %s: %s", body.action, ws.incus_project, resp)
         err = resp.get("error") or ""
@@ -1936,6 +2607,7 @@ def billing_summary(user: User = Depends(current_user),
                                CreditTransaction.amount_micro > 0)) or 0
     out = {"credits": have / MICRO, "total_spent": -spent / MICRO,
            "total_granted": granted / MICRO, "rates": r.as_dict()}
+    out["has_workspace"] = ws is not None
     if ws is not None:
         q = pricing.quote(svc.tier_of(ws), r)
         out["quote"] = q
@@ -2098,7 +2770,8 @@ def _ticket_json(tk: Ticket, *, staff: bool, messages: bool = False) -> dict:
         "unread": unread,
     }
     if staff:
-        out["user_email"] = tk.user.email if tk.user else None
+        out["user_username"] = tk.user.username if tk.user else None
+        out["user_phone"] = tk.user.phone if tk.user else None
         out["user_id"] = tk.user_id
     if messages:
         out["messages"] = [{
@@ -2163,6 +2836,7 @@ def create_ticket(body: TicketCreate, user: User = Depends(current_user),
     db.add(tk)
     _mark_read(db, tk, staff=False)
     db.commit()
+    _notify_admins(db, "admin_ticket_opened", dedupe_key=f"newticket:{tk.id}")
     svc.audit(db, user.id, "ticket_opened", f"#{tk.id}", subject=tk.subject)
     return {"ok": True, "ticket": _ticket_json(tk, staff=False, messages=True)}
 
@@ -2239,6 +2913,15 @@ def admin_reply_ticket(ticket_id: int, body: TicketReply,
                    detail={"ticket_id": tk.id, "subject": tk.subject},
                    href=f"/console/support/{tk.id}",
                    dedupe_key=f"ticket:{tk.id}:reply:{tk.messages[-1].id}")
+    owner = db.get(User, tk.user_id)
+    if owner is not None:
+        try:
+            smslib.queue(db, user_id=owner.id, phone=owner.phone,
+                         kind="ticket_replied", user=owner,
+                         dedupe_key=f"ticketreply:{tk.messages[-1].id}")
+            db.commit()
+        except smslib.SmsError:
+            pass
     svc.audit(db, admin.id, "ticket_replied", f"#{tk.id}")
     return {"ok": True, "ticket": _ticket_json(tk, staff=True, messages=True)}
 
@@ -2250,9 +2933,20 @@ def admin_ticket_status(ticket_id: int, body: TicketStatusChange,
     tk = db.get(Ticket, ticket_id)
     if tk is None:
         fail(404, "no_such_ticket", "No such ticket")
+    became_closed = (TicketStatus(body.status) is TicketStatus.CLOSED
+                     and tk.status is not TicketStatus.CLOSED)
     tk.status = TicketStatus(body.status)
     tk.updated_at = svc.now()
     db.commit()
+    owner = db.get(User, tk.user_id) if became_closed else None
+    if owner is not None:
+        try:
+            smslib.queue(db, user_id=owner.id, phone=owner.phone,
+                         kind="ticket_closed", user=owner,
+                         dedupe_key=f"ticketclosed:{tk.id}")
+            db.commit()
+        except smslib.SmsError:
+            pass
     svc.audit(db, admin.id, "ticket_status", f"#{tk.id}", status=body.status)
     return {"ok": True, "ticket": _ticket_json(tk, staff=True, messages=True)}
 
@@ -2266,7 +2960,7 @@ def admin_users(_: User = Depends(require_admin),
         w = db.scalar(select(Workspace).where(Workspace.user_id == u.id))
         acct = db.get(CreditAccount, u.id)
         out.append({
-            "id": u.id, "email": u.email, "username": u.username,
+            "id": u.id, "username": u.username,
             "full_name": u.full_name, "phone": u.phone,
             "status": u.status.value,
             "is_admin": u.is_admin,
@@ -2295,11 +2989,10 @@ def admin_update_profile(user_id: int, body: AdminProfileUpdate,
     user = db.get(User, user_id)
     if user is None:
         fail(404, "no_such_user", "No such user")
-    email = body.email.lower()
-    _validate_identity(db, user, email, body.phone)
-    _apply_identity(user, email, body.full_name, body.phone)
+    _validate_identity(db, user, body.phone)
+    _apply_identity(user, body.full_name, body.phone)
     db.commit()
-    svc.audit(db, admin.id, "admin_profile_change", user.email, user_id=user.id)
+    svc.audit(db, admin.id, "admin_profile_change", user.username, user_id=user.id)
     return {"ok": True}
 
 
@@ -2309,62 +3002,34 @@ def admin_approve(user_id: int, admin: User = Depends(require_admin),
     user = db.get(User, user_id)
     if user is None:
         fail(404, "no_such_user", "No such user")
-    if db.scalar(select(Workspace).where(Workspace.user_id == user.id)):
-        fail(409, "already_has_machine", "That user already has a machine")
-
-    idx = svc.next_free_idx(db)
-    ws = Workspace(user_id=user.id, idx=idx, incus_project=f"ws-{idx}",
-                   state=WorkspaceState.PROVISIONING)
-    db.add(ws)
+    if user.status == UserStatus.APPROVED:
+        # Old approved rows may predate account-scoped OpenRouter. Approval is
+        # intentionally idempotent, but it must also repair that invariant.
+        if db.get(OpenRouterAccount, user.id) is None:
+            db.add(OpenRouterAccount(user_id=user.id, credit_blocked=True,
+                                     limit_dirty=True))
+            db.commit()
+        return {"ok": True, "status": user.status.value}
     user.status = UserStatus.APPROVED
     user.approved_at = svc.now()
     user.approved_by = admin.id
-    db.commit()
-
-    resp = svc.call_provisioner({
-        "verb": "provision", "idx": idx,
-        "cores": max(1, round(ws.cpu_milli / 1000)), "mem_mib": ws.mem_mib,
-        "root_gib": ws.root_gib, "docker_gib": ws.docker_gib})
-    if not resp.get("ok"):
-        ws.state = WorkspaceState.ERROR
-        ws.error = resp.get("error") or resp.get("output", "")[-500:]
-        db.commit()
-        svc.audit(db, admin.id, "provision_failed", user.email, error=ws.error)
-        fail(500, "provision_failed", "The machine could not be created.")
-
-    # ws-create leaves it running so it can be checked; hand it back OFF. A new
-    # customer has no credit, and a running machine would bill them into debt
-    # before they ever signed in.
-    #
-    client = _incus()
-    stop_failed = False
+    if db.get(OpenRouterAccount, user.id) is None:
+        db.add(OpenRouterAccount(user_id=user.id, credit_blocked=True,
+                                 limit_dirty=True))
+    # Queued, not sent: this process has no provider key, approval must not
+    # depend on an SMS gateway being up, and a failed send deserves a retry.
+    # The dedupe key makes the deliberately idempotent approval idempotent
+    # here too - a second click does not send a second message.
     try:
-        asyncio.run(client.stop(ws.instance, ws.incus_project))
-    except Exception as exc:  # noqa: BLE001
-        stop_failed = True
-        svc.audit(db, admin.id, "post_provision_stop_failed", user.email, error=str(exc))
-    finally:
-        try:
-            asyncio.run(client.aclose())
-        except Exception:
-            pass
-
-    ws.state = WorkspaceState.ERROR if stop_failed else WorkspaceState.OFF
-    ws.error = "post-provision stop did not complete" if stop_failed else None
-    ws.desired_on = False
-    ws.period_start = None
+        smslib.queue(db, user_id=user.id, phone=user.phone, kind="approved",
+                     dedupe_key=f"approved:{user.id}")
+    except smslib.SmsError as e:
+        # An unsendable number must not block the approval itself. The account
+        # is approved either way; the customer simply is not texted.
+        log.warning("approval sms not queued for %s: %s", user.username, e)
     db.commit()
-
-    # The two permanent addresses are part of what the customer is buying, so
-    # they are allocated with the machine rather than on first use. _service_ports
-    # can also do this lazily, but a reservation that only appears once someone
-    # visits a page is not a reservation.
-    portalloc.reserve_service_ports(db, ws.id)
-    db.commit()
-    svc.sync_published_ports(db)
-
-    svc.audit(db, admin.id, "approve", user.email, idx=idx)
-    return {"ok": True, "workspace": ws.incus_project, "state": ws.state.value}
+    svc.audit(db, admin.id, "approve", user.username)
+    return {"ok": True, "status": user.status.value}
 
 
 @app.post("/api/admin/users/{user_id}/reject")
@@ -2374,8 +3039,13 @@ def admin_reject(user_id: int, admin: User = Depends(require_admin),
     if user is None:
         fail(404, "no_such_user", "No such user")
     user.status = UserStatus.REJECTED
+    try:
+        smslib.queue(db, user_id=user.id, phone=user.phone, kind="rejected",
+                     dedupe_key=f"rejected:{user.id}")
+    except smslib.SmsError as e:
+        log.warning("rejection sms not queued for %s: %s", user.username, e)
     db.commit()
-    svc.audit(db, admin.id, "reject", user.email)
+    svc.audit(db, admin.id, "reject", user.username)
     return {"ok": True}
 
 
@@ -2394,9 +3064,14 @@ def admin_set_admin(user_id: int, body: AdminFlag,
     user.is_admin = body.is_admin
     if body.is_admin and user.status != UserStatus.APPROVED:
         user.status = UserStatus.APPROVED
+        user.approved_at = svc.now()
+        user.approved_by = admin.id
+        if db.get(OpenRouterAccount, user.id) is None:
+            db.add(OpenRouterAccount(user_id=user.id, credit_blocked=True,
+                                     limit_dirty=True))
     db.commit()
-    svc.audit(db, admin.id, "set_admin", user.email, is_admin=body.is_admin)
-    return {"ok": True, "email": user.email, "is_admin": user.is_admin}
+    svc.audit(db, admin.id, "set_admin", user.username, is_admin=body.is_admin)
+    return {"ok": True, "username": user.username, "is_admin": user.is_admin}
 
 
 @app.delete("/api/admin/users/{user_id}")
@@ -2521,13 +3196,24 @@ def admin_credit(user_id: int, body: CreditGrant,
         fail(404, "no_such_user", "No such user")
     svc.post_transaction(db, user_id=user.id, workspace_id=None,
                          kind=TxKind.GRANT, amount_micro=round(body.credits * MICRO),
-                         detail={"note": body.note, "by": admin.email})
-    ws = db.scalar(select(Workspace).where(Workspace.user_id == user.id))
-    if ws is not None and ws.hermes_enabled and ws.hermes_key_hash:
-        ws.hermes_limit_dirty = True
+                         detail={"note": body.note, "by": admin.username})
+    account = db.get(OpenRouterAccount, user.id)
+    if account is None and user.status == UserStatus.APPROVED:
+        account = OpenRouterAccount(user_id=user.id, credit_blocked=True,
+                                    limit_dirty=True)
+        db.add(account)
+    if account is not None:
+        account.limit_dirty = True
         db.commit()
-    svc.audit(db, admin.id, "grant_credit", user.email, credits=body.credits)
-    return {"ok": True, "balance": svc.balance_micro(db, user.id) / MICRO}
+    balance = svc.balance_micro(db, user.id)
+    try:
+        smslib.queue(db, user_id=user.id, phone=user.phone, kind="credit_added",
+                     detail={"balance": f"{round(balance / MICRO):,}"}, user=user)
+        db.commit()
+    except smslib.SmsError:
+        pass
+    svc.audit(db, admin.id, "grant_credit", user.username, credits=body.credits)
+    return {"ok": True, "balance": balance / MICRO}
 
 
 @app.post("/api/admin/workspaces/{workspace_id}/power-off")
@@ -2638,8 +3324,8 @@ def admin_openclaw_get(_: User = Depends(require_admin),
                        db: Session = Depends(get_session)) -> dict:
     """OpenClaw's own product setting, and how far it has been adopted.
 
-    Only the model. Everything commercial - the exchange rate, the spend cap,
-    the guardrail - belongs to OpenRouter, whose key OpenClaw spends, and is
+    Only the model. Everything commercial - the exchange rate and spend cap -
+    belongs to OpenRouter, whose key OpenClaw spends, and is
     configured there. Duplicating any of it here would create a second place to
     change a number that has one correct value.
     """
@@ -2729,6 +3415,77 @@ def admin_backup_run(admin: User = Depends(require_admin),
     return {**result, "config": backuplib.config(db)}
 
 
+# Which dashboard each administration tab embeds. Declared here rather than in
+# the page files so that "does a tab have a dashboard" is one list, and a tab
+# that gains one does not need its own copy of the embed plumbing.
+GRAFANA_DASHBOARDS = {
+    "": "mmd-fleet",
+    "users": "mmd-customers",
+    "storage": "mmd-storage",
+    "openrouter": "mmd-ai",
+    "policy": "mmd-capacity",
+    "tickets": "mmd-support",
+    "backup": "mmd-delivery",
+}
+
+
+class AgentModel(BaseModel):
+    # Empty is meaningful: it means "write nothing", leaving each CLI on its
+    # own built-in default.
+    default_model: str = Field(default="", max_length=128)
+
+
+@app.get("/api/admin/agent-model/{service}")
+def admin_agent_model_get(service: str, _: User = Depends(require_admin),
+                          db: Session = Depends(get_session)) -> dict:
+    if service not in ("claude", "codex"):
+        fail(404, "no_such_service", "No such service")
+    return {"service": service, "default_model": oclib.agent_model(db, service)}
+
+
+@app.put("/api/admin/agent-model/{service}")
+def admin_agent_model_put(service: str, body: AgentModel,
+                          admin: User = Depends(require_admin),
+                          db: Session = Depends(get_session)) -> dict:
+    """The model a newly installed agent starts on.
+
+    Applied at INSTALL only, and only when the customer has no config file of
+    their own yet. Both CLIs read their model from a file in the customer's
+    home, which they may edit; an admin default is a starting point, not a
+    policy, and rewriting it on every repair would undo their choice silently.
+    """
+    if service not in ("claude", "codex"):
+        fail(404, "no_such_service", "No such service")
+    value = oclib.set_agent_model(db, service, body.default_model)
+    db.commit()
+    svc.audit(db, admin.id, f"admin_{service}_model", None, default_model=value)
+    return {"service": service, "default_model": value}
+
+
+@app.get("/api/admin/grafana")
+def admin_grafana(_: User = Depends(require_admin),
+                  db: Session = Depends(get_session)) -> dict:
+    """Where the dashboards are, and the credential that opens them.
+
+    Grafana has its OWN login now. It used to trust anonymous access behind
+    the reverse proxy, which quietly merged two different systems' idea of
+    "administrator" into one - anything that reached it was already a Viewer.
+
+    The password is returned in full, deliberately: this endpoint is
+    administrator-only, and a credential the operator cannot read is one they
+    cannot use. It is a service account for a dashboard, not a customer secret.
+    """
+    def _get(key: str, default: str = "") -> str:
+        row = db.scalar(select(Setting).where(Setting.key == key))
+        return row.value if row and row.value else default
+
+    return {"base": "/grafana",
+            "dashboards": GRAFANA_DASHBOARDS,
+            "username": _get("grafana_admin_user", "admin"),
+            "password": _get("grafana_admin_password"),
+            "configured": bool(_get("grafana_admin_password"))}
+
+
 @app.get("/api/admin/storage")
 def admin_storage(_: User = Depends(require_admin),
                   db: Session = Depends(get_session)) -> dict:
@@ -2769,7 +3526,6 @@ def admin_storage(_: User = Depends(require_admin),
         cap_gib = ws.disk_gib
         rows.append({
             "username": user.username if user else None,
-            "email": user.email if user else None,
             "user_id": ws.user_id,
             "idx": ws.idx,
             "state": ws.state.value,
@@ -2808,127 +3564,6 @@ def admin_storage(_: User = Depends(require_admin),
         "pool_at_risk": pool_free < CONFIG.pool_floor_gib,
         "workspaces": sorted(rows, key=lambda r: -r["used_gib"]),
     }
-
-
-@app.get("/api/admin/capacity")
-def admin_capacity(_: User = Depends(require_admin),
-                   db: Session = Depends(get_session)) -> dict:
-    from .scheduler.admission import host_capacity
-    cap = host_capacity(svc.get_settings(db))
-    running = svc.running_tiers(db)
-    return {"total_cores": cap.total_cores,
-            "total_mem_gib": round(cap.total_mem_gib, 2),
-            "schedulable_cores": cap.schedulable_cores,
-            "schedulable_mem_gib": round(cap.schedulable_mem_gib, 2),
-            "used_cores": sum(c for c, _ in running),
-            "used_mem_gib": round(sum(m for _, m in running), 2),
-            "running": len(running)}
-
-
-@app.get("/api/admin/metrics")
-def admin_metrics(minutes: int = 5, _: User = Depends(require_admin),
-                  db: Session = Depends(get_session)) -> dict:
-    """What every workspace on the host is ACTUALLY consuming, over time.
-
-    The bars beside this show what is *reserved* - capacity promised to
-    customers whether or not they use it. This shows what is being used, which
-    is the other half of the question and the one that says whether the host is
-    comfortable or about to be in trouble.
-
-    Samples are written per workspace within a few milliseconds of each other,
-    so they are bucketed to the sampling interval before being summed;
-    otherwise every workspace would land in its own bucket and the total would
-    read as a sawtooth of individual machines.
-    """
-    from .scheduler.admission import host_capacity
-    minutes = max(1, min(minutes, max(METRIC_WINDOWS)))
-    since = svc.now() - timedelta(minutes=minutes)
-
-    rows = list(db.scalars(
-        select(UsageSample).where(UsageSample.ts >= since)
-        .order_by(UsageSample.workspace_id, UsageSample.ts)))
-
-    # cores-in-use needs a delta per workspace, so walk each one separately and
-    # accumulate into shared time buckets.
-    buckets_cpu: dict[int, float] = {}
-    buckets_mem: dict[int, float] = {}
-    by_ws: dict[int, list[UsageSample]] = {}
-    for r in rows:
-        by_ws.setdefault(r.workspace_id, []).append(r)
-
-    for series in by_ws.values():
-        for prev, cur in zip(series, series[1:]):
-            span = (cur.ts - prev.ts).total_seconds()
-            if span <= 0:
-                continue
-            key = int(cur.ts.timestamp() // SAMPLE_SECONDS)
-            delta = cur.cpu_seconds_total - prev.cpu_seconds_total
-            buckets_cpu[key] = buckets_cpu.get(key, 0.0) + max(0.0, delta) / span
-            buckets_mem[key] = buckets_mem.get(key, 0.0) + cur.mem_bytes / 1073741824
-
-    def series_of(b: dict[int, float]) -> list[dict]:
-        return [{"ts": datetime.fromtimestamp(k * SAMPLE_SECONDS, UTC).isoformat(),
-                 "value": round(v, 3)}
-                for k, v in sorted(b.items())]
-
-    cap = host_capacity(svc.get_settings(db))
-    return {"minutes": minutes, "windows": list(METRIC_WINDOWS),
-            "cpu": series_of(buckets_cpu), "memory": series_of(buckets_mem),
-            # Scale against what can actually be handed out, not the raw host
-            # total - the host reserve is not for sale.
-            "cpu_cores": cap.schedulable_cores,
-            "memory_gb": round(cap.schedulable_mem_gib, 2),
-            "sample_seconds": SAMPLE_SECONDS,
-            "workspaces": len(by_ws)}
-
-
-@app.get("/api/admin/metrics/per-user")
-def admin_metrics_per_user(minutes: int = 60, _: User = Depends(require_admin),
-                           db: Session = Depends(get_session)) -> dict:
-    """One CPU line and one memory line PER workspace.
-
-    The host-wide chart answers "is the machine in trouble". This answers "who
-    is causing it", which is the question that actually leads to an action -
-    with ten customers the aggregate says a core is busy and nothing about
-    which account to talk to.
-    """
-    minutes = max(1, min(minutes, max(METRIC_WINDOWS)))
-    since = svc.now() - timedelta(minutes=minutes)
-
-    rows = list(db.scalars(
-        select(UsageSample).where(UsageSample.ts >= since)
-        .order_by(UsageSample.workspace_id, UsageSample.ts)))
-
-    by_ws: dict[int, list[UsageSample]] = {}
-    for r in rows:
-        by_ws.setdefault(r.workspace_id, []).append(r)
-
-    names: dict[int, str] = {}
-    for ws in db.scalars(select(Workspace).where(Workspace.id.in_(by_ws.keys() or [0]))):
-        names[ws.id] = (ws.user.username if ws.user and ws.user.username
-                        else f"ws-{ws.idx}")
-
-    out = []
-    for ws_id, series in by_ws.items():
-        cpu, mem = [], []
-        for prev, cur in zip(series, series[1:]):
-            span = (cur.ts - prev.ts).total_seconds()
-            if span <= 0:
-                continue
-            ts = datetime.fromtimestamp(
-                int(cur.ts.timestamp() // SAMPLE_SECONDS) * SAMPLE_SECONDS, UTC).isoformat()
-            delta = cur.cpu_seconds_total - prev.cpu_seconds_total
-            # Negative means the counter reset when the machine restarted; a
-            # restart is not negative CPU use.
-            cpu.append({"ts": ts, "value": round(max(0.0, delta) / span, 3)})
-            mem.append({"ts": ts, "value": round(cur.mem_bytes / 1073741824, 3)})
-        if cpu:
-            out.append({"workspace_id": ws_id, "label": names.get(ws_id, str(ws_id)),
-                        "cpu": cpu, "memory": mem})
-
-    out.sort(key=lambda w: w["label"])
-    return {"minutes": minutes, "windows": list(METRIC_WINDOWS),
-            "sample_seconds": SAMPLE_SECONDS, "series": out}
 
 
 @app.get("/api/admin/users/{user_id}")
@@ -2974,9 +3609,10 @@ def admin_user_detail(user_id: int, minutes: int = 10080,
         select(AuditLog).where(AuditLog.actor_id == user_id)
         .order_by(AuditLog.ts.desc()).limit(100)))
     ws = u.workspace
+    openrouter = db.get(OpenRouterAccount, u.id)
 
     return {
-        "user": {"id": u.id, "email": u.email, "username": u.username,
+        "user": {"id": u.id, "username": u.username,
                  "full_name": u.full_name, "phone": u.phone,
                  "status": u.status.value if hasattr(u.status, "value") else str(u.status),
                  "is_admin": u.is_admin, "created_at": u.created_at.isoformat()},
@@ -2993,7 +3629,9 @@ def admin_user_detail(user_id: int, minutes: int = 10080,
         "workspace": ({"id": ws.id, "idx": ws.idx,
                        "state": ws.state.value if hasattr(ws.state, "value") else str(ws.state),
                        "hermes_enabled": bool(ws.hermes_enabled),
-                       "hermes_ready": bool(ws.hermes_key_hash)} if ws else None),
+                       "hermes_ready": bool(ws.hermes_installed)} if ws else None),
+        "openrouter": {"ready": bool(openrouter and openrouter.key_hash),
+                       "credit_blocked": bool(openrouter and openrouter.credit_blocked)},
     }
 
 
@@ -3004,7 +3642,7 @@ def admin_hermes_get(_: User = Depends(require_admin),
     enabled = db.scalar(select(func.count()).select_from(Workspace)
                         .where(Workspace.hermes_enabled.is_(True))) or 0
     ready = db.scalar(select(func.count()).select_from(Workspace)
-                      .where(Workspace.hermes_key_hash.isnot(None))) or 0
+                      .where(Workspace.hermes_installed.is_(True))) or 0
     return {"default_model": hermes.default_model(db),
             "workspaces_enabled": int(enabled),
             "workspaces_ready": int(ready),
@@ -3031,25 +3669,18 @@ def admin_hermes_put(body: HermesConfig, admin: User = Depends(require_admin),
 
 class OpenRouterConfig(BaseModel):
     usd_to_toman: float | None = None
-    workspace_id: str | None = None
-    guardrail_id: str | None = None
-    max_output_usd: float | None = None
+    # The one model every OpenRouter-backed service starts on.
+    default_model: str | None = Field(default=None, max_length=128)
 
 
 @app.get("/api/admin/openrouter")
 def admin_openrouter_get(_: User = Depends(require_admin),
                          db: Session = Depends(get_session)) -> dict:
     usd_rate, _ = svc.ai_settings(db, hermes.SERVICE)
-    workspace_id = (hermes._get(db, hermes.SETTING_WORKSPACE_ID)
-                    or hermes._get(db, hermes.LEGACY_WORKSPACE_ID))
-    guardrail_id = (hermes._get(db, hermes.SETTING_GUARDRAIL_ID)
-                    or hermes._get(db, hermes.LEGACY_GUARDRAIL_ID))
     return {"usd_to_toman": usd_rate,
-            "workspace_id": workspace_id,
-            "guardrail_id": guardrail_id,
-            "max_output_usd": hermes.max_output_usd(db),
-            "configured": bool(workspace_id and guardrail_id),
-            "discount_percent": 0.0}
+            "discount_percent": 0.0,
+            "default_model": hermes.default_model(db),
+            "fallback_model": hermes.DEFAULT_MODEL}
 
 
 @app.put("/api/admin/openrouter")
@@ -3058,13 +3689,8 @@ def admin_openrouter_put(body: OpenRouterConfig,
                          db: Session = Depends(get_session)) -> dict:
     if body.usd_to_toman is not None:
         hermes._set(db, "usd_to_toman", str(max(0.0, float(body.usd_to_toman))))
-    if body.workspace_id is not None:
-        hermes._set(db, hermes.SETTING_WORKSPACE_ID, body.workspace_id.strip())
-    if body.guardrail_id is not None:
-        hermes._set(db, hermes.SETTING_GUARDRAIL_ID, body.guardrail_id.strip())
-    if body.max_output_usd is not None:
-        hermes._set(db, hermes.SETTING_MAX_OUTPUT_USD,
-                    str(max(0.0, float(body.max_output_usd))))
+    if body.default_model is not None:
+        hermes.set_default_model(db, body.default_model)
     db.commit()
     svc.audit(db, admin.id, "admin_openrouter_config", None)
     return admin_openrouter_get(admin, db)

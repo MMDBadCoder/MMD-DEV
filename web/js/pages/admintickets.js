@@ -9,8 +9,10 @@ import { t } from "../i18n.js";
 import { render, refreshMe } from "../main.js";
 import { navigate } from "../router.js";
 import { STATUSES, statusPill, thread } from "./support.js";
+import { grafanaConfig, dashboardCard, mountDashboard } from "../grafana.js";
 
 export async function adminTicketsPage(params) {
+  const _gf = await grafanaConfig();
   if (params?.id) return staffTicketView(Number(params.id));
 
   const filter = new URLSearchParams(location.search).get("status") || "";
@@ -25,7 +27,7 @@ export async function adminTicketsPage(params) {
     <td><div style="font-weight:600">${esc(k.subject)}
         ${k.unread ? `<span class="badge new">${t("tk.new")}</span>` : ""}</div>
       <div class="tiny dim">#${k.id} · ${t("tk.messages")}: ${k.message_count}</div></td>
-    <td><span class="ltr mono" style="font-size:12.5px">${esc(k.user_email || "—")}</span></td>
+    <td><span class="ltr mono" style="font-size:12.5px">${esc(k.user_username || "—")}</span></td>
     <td>${statusPill(k.status)}</td>
     <td class="small nowrap">${when(k.last_at || k.updated_at)}</td>
   </tr>`).join("");
@@ -67,7 +69,7 @@ async function staffTicketView(id) {
         <h1 style="margin:0">${esc(d.subject)}</h1>${statusPill(d.status)}
       </div>
       <p class="muted small" style="margin:6px 0 0">#${d.id} ·
-        <span class="ltr mono">${esc(d.user_email || "—")}</span> · ${when(d.created_at)}</p>
+        <span class="ltr mono">${esc(d.user_username || "—")}</span> · ${when(d.created_at)}</p>
     </div>
 
     <div class="card">
@@ -90,7 +92,10 @@ async function staffTicketView(id) {
         <button class="btn primary" id="tk-post">${icon.arrow}${t("tk.send")}</button>
       </div>
       <div id="tk-msg"></div>
-    </div>`);
+    </div>
+
+    ${dashboardCard(_gf, "tickets")}`);
+  mountDashboard();
 
   $$("[data-status]").forEach((b) => {
     b.onclick = async () => {

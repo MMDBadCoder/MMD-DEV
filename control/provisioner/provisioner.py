@@ -144,6 +144,7 @@ VERBS = {"provision", "archive", "restore", "destroy",
          "service_ssh", "service_rdp", "service_hermes",
          "fs_list", "fs_pull", "fs_push", "fs_mkdir", "fs_delete",
          "fs_archive", "apt_repair", "ai_claude", "ai_codex", "ai_openclaw",
+         "ai_managed_web",
          "ai_usage", "codex_usage", "disk_usage", "reset", "ping"}
 
 # ---------------------------------------------------------------------------
@@ -722,6 +723,17 @@ def _verb_ai_codex(project: str, req: dict) -> dict:
     if not ok:
         return {"ok": False, "error": "could not write credentials",
                 "output": (out or "")[-300:]}
+
+    # A starting model, if the operator has chosen one. Written ONLY when the
+    # file does not already exist: the customer owns their config afterwards,
+    # and rewriting it on every repair would silently undo their choice.
+    model = (req.get("model") or "").strip()
+    if model and re.fullmatch(r"[A-Za-z0-9._:/-]{1,128}", model):
+        _run(["incus", "exec", "ws", "--project", project, "--", "bash", "-lc",
+              "test -e /home/dev/.codex/config.toml || "
+              "{ install -m 0600 -o dev -g dev /dev/stdin "
+              "/home/dev/.codex/config.toml; }"],
+             timeout=60, stdin_text=f'model = "{model}"\n')
     return {"ok": True, **_codex_status(project), "expires_at": _codex_expiry()}
 
 
@@ -758,6 +770,88 @@ OPENCLAW_UNIT = "/etc/systemd/system/openclaw-gateway.service"
 # rather than an inline secret.
 OPENCLAW_SECRETS = f"{OPENCLAW_HOME}/secrets"
 OPENCLAW_TG_TOKEN = f"{OPENCLAW_SECRETS}/telegram-default.token"
+
+MANAGED_WEB = {
+    "opencode": {"port": 4096, "unit": "mmd-opencode", "install":
+        "test -x /home/dev/.opencode/bin/opencode || "
+        "runuser -u dev -- env HOME=/home/dev bash -c 'curl -fsSL https://opencode.ai/install | bash'"},
+    "openwebui": {"port": 3001, "unit": "mmd-openwebui", "install":
+        "command -v docker >/dev/null"},
+}
+
+
+def _verb_ai_managed_web(project: str, req: dict) -> dict:
+    service = (req.get("service") or "").strip()
+    action = req.get("action")
+    spec = MANAGED_WEB.get(service)
+    if spec is None or action not in ("install", "disable"):
+        return {"ok": False, "error": "invalid managed web request"}
+    unit = spec["unit"]
+    if action == "disable":
+        command = (f"systemctl disable --now {unit} 2>/dev/null; "
+                   f"rm -f /etc/systemd/system/{unit}.service; "
+                   + ("docker rm -f mmd-openwebui 2>/dev/null; docker volume rm open-webui 2>/dev/null; "
+                      if service == "openwebui" else "")
+                   + "systemctl daemon-reload; true")
+        ok, out = _run(["incus", "exec", "ws", "--project", project,
+                        "--", "bash", "-lc", command], timeout=300)
+        return {"ok": ok, "output": (out or "")[-300:]}
+
+    key = (req.get("openrouter_key") or "").strip()
+    password = (req.get("password") or "").strip()
+    admin_email = (req.get("admin_email") or "").strip()
+    # One model id arrives; each service wants a different shape of it.
+    # OpenCode addresses OpenRouter models as `openrouter/<id>`; Open WebUI
+    # talks to OpenRouter's OpenAI-compatible endpoint and wants the bare id.
+    model = (req.get("model") or "").strip()
+    if model and not re.fullmatch(r"[A-Za-z0-9._:/-]{1,128}", model):
+        model = ""
+    if service == "openwebui":
+        model = model.removeprefix("openrouter/")
+    elif model and not model.startswith("openrouter/"):
+        model = f"openrouter/{model}"
+    if not key or not password or (service == "openwebui" and "@" not in admin_email):
+        return {"ok": False, "error": "credentials are required"}
+    ok, out = _run(["incus", "exec", "ws", "--project", project,
+                    "--", "bash", "-lc", spec["install"]], timeout=1800)
+    if not ok:
+        return {"ok": False, "error": "install failed", "output": (out or "")[-500:]}
+
+    if service == "opencode":
+        unit_text = f"""[Unit]\nDescription=OpenCode web\nAfter=network-online.target\n[Service]\nUser=dev\nWorkingDirectory=/home/dev\nEnvironment=HOME=/home/dev\nEnvironment=OPENCODE_SERVER_PASSWORD={password}\nExecStart=/home/dev/.opencode/bin/opencode web --hostname 0.0.0.0 --port 4096\nRestart=always\n[Install]\nWantedBy=multi-user.target\n"""
+        auth = json.dumps({"openrouter": {"type": "api", "key": key}})
+        # Incus passes stdin as a pipe.  `install /dev/stdin` tries to reopen
+        # that pipe by pathname and fails, even though reading the inherited
+        # descriptor works.  Create the file first and stream into it, matching
+        # the credential-write pattern used by Codex and Hermes.
+        script = ("install -d -m 700 -o dev -g dev /home/dev/.local/share/opencode && "
+                  "umask 077 && cat > /home/dev/.local/share/opencode/auth.json && "
+                  "chown dev:dev /home/dev/.local/share/opencode/auth.json && "
+                  "chmod 600 /home/dev/.local/share/opencode/auth.json")
+        ok, out = _run(["incus", "exec", "ws", "--project", project, "--",
+                        "bash", "-lc", script], timeout=120, stdin_text=auth)
+        # The credential alone is not enough. With a key but no model OpenCode
+        # has nothing to call: it starts, accepts a prompt, and answers with
+        # something that reads like the prompt echoed back. Measured on a live
+        # workspace, whose opencode.jsonc held only a `$schema` line.
+        if ok and model:
+            cfg = json.dumps({"$schema": "https://opencode.ai/config.json",
+                              "model": model}, indent=2)
+            ok, out = _run(
+                ["incus", "exec", "ws", "--project", project, "--", "bash", "-lc",
+                 "install -d -m 755 -o dev -g dev /home/dev/.config/opencode && "
+                 "cat > /home/dev/.config/opencode/opencode.jsonc && "
+                 "chown dev:dev /home/dev/.config/opencode/opencode.jsonc"],
+                timeout=120, stdin_text=cfg)
+    else:
+        unit_text = f"""[Unit]\nDescription=Open WebUI\nAfter=docker.service\nRequires=docker.service\n[Service]\nExecStartPre=-/usr/bin/docker rm -f mmd-openwebui\nExecStart=/usr/bin/docker run --name mmd-openwebui -p 0.0.0.0:3001:8080 -e OPENAI_API_BASE_URL=https://openrouter.ai/api/v1 -e OPENAI_API_KEY={key} -e WEBUI_ADMIN_EMAIL={admin_email} -e WEBUI_ADMIN_PASSWORD={password} -e WEBUI_ADMIN_NAME=MMD -e ENABLE_SIGNUP=false -e ENABLE_OLLAMA_API=false -e ENABLE_BASE_MODELS_CACHE=true -e DEFAULT_MODELS={model} -v open-webui:/app/backend/data ghcr.io/open-webui/open-webui:v0.11.1\nExecStop=/usr/bin/docker stop mmd-openwebui\nRestart=always\n[Install]\nWantedBy=multi-user.target\n"""
+    if not ok:
+        return {"ok": False, "error": "credential write failed",
+                "output": (out or "")[-500:]}
+    ok, out = _run(["incus", "exec", "ws", "--project", project, "--",
+                    "bash", "-lc", f"cat > /etc/systemd/system/{unit}.service && chmod 600 /etc/systemd/system/{unit}.service && systemctl daemon-reload && systemctl enable --now {unit}"],
+                   timeout=1800, stdin_text=unit_text)
+    return {"ok": ok, "output": (out or "")[-500:]}
 
 # A SYSTEM unit running as `dev`, rather than the `openclaw gateway install`
 # user service the vendor documents. A user service needs lingering enabled and
@@ -1322,6 +1416,17 @@ def _verb_ai_claude(project: str, req: dict) -> dict:
         return {"ok": False, "error": "could not write the Claude configuration",
                 "output": (cfg_out or "")[-300:]}
 
+    # A starting model, if the operator has chosen one. settings.json is the
+    # customer's own file - deliberately never copied from the host - so it is
+    # created only when absent, and never rewritten.
+    model = (req.get("model") or "").strip()
+    if model and re.fullmatch(r"[A-Za-z0-9._:/-]{1,128}", model):
+        _run(["incus", "exec", "ws", "--project", project, "--", "bash", "-lc",
+              "test -e /home/dev/.claude/settings.json || "
+              "{ install -m 0600 -o dev -g dev /dev/stdin "
+              "/home/dev/.claude/settings.json; }"],
+             timeout=60, stdin_text=json.dumps({"model": model}) + "\n")
+
     st = _claude_status(project)
     # `linked` alone is not enough to promise a working `claude`. A machine with
     # valid credentials but no onboarding key opens the first-run wizard, and
@@ -1448,6 +1553,9 @@ def handle(req: dict) -> dict:
 
     if verb == "ai_openclaw":
         return _verb_ai_openclaw(project, req)
+
+    if verb == "ai_managed_web":
+        return _verb_ai_managed_web(project, req)
 
     if verb == "disk_usage":
         return _verb_disk_usage(req)

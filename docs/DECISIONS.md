@@ -2485,3 +2485,57 @@ the toggle is below them. The failure this guards against is not a broken
 backup — it is an operator who believes for a month that they have backups. A
 **send one now** button exists for the same reason: it turns "I configured it"
 into "a file arrived" while the admin is still on the page.
+
+## An account, an OpenRouter key and a workspace are three lifecycles
+
+Approval used to provision an Incus workspace, and the managed OpenRouter key
+was stored in that workspace under `hermes_*` columns. That made an optional
+agent accidentally own a general product: a customer could not use OpenRouter
+without creating compute, disabling Hermes revoked a key used elsewhere, and a
+factory reset interrupted external API clients.
+
+The boundaries are now explicit:
+
+* approval activates the account and creates an `openrouter_accounts` intent;
+* the worker mints one stable key for every approved account, disabled at zero
+  credit and re-enabled after a grant;
+* the customer creates compute only by asking for it;
+* reset and workspace deletion remove machine-bound services but preserve the
+  account key; and
+* full account deletion is the only journey that revokes the supplier key.
+
+OpenRouter charges use an account scope in the ledger. A nullable workspace ID
+cannot be an idempotency key in PostgreSQL because NULL values compare as
+distinct, so `(scope_key, period_start, kind)` protects the account-level pass
+from charging twice after a worker retry.
+
+Existing supplier secrets are copied from legacy workspace columns into the
+new one-to-one table by an idempotent startup migration. The old columns remain
+temporarily for rollback compatibility but no product logic reads them.
+## OpenRouter keys are unrestricted by model
+
+Customers receive their OpenRouter key and may use it outside the managed
+workspace. A Hermes-oriented model allowlist therefore made the general-purpose
+account key unexpectedly incomplete: non-agent endpoints such as TTS were
+missing even though the customer was paying for direct OpenRouter access.
+
+The worker no longer builds or synchronizes a catalogue allowlist, and new keys
+are minted without the old guarded workspace. On the first worker pass after
+migration it sets the legacy guardrail's `allowed_models` and `ignored_models`
+to null. That preserves every already-exposed secret while removing its model
+restriction. This is intentionally separate from billing controls: the key's
+credit-derived dollar limit and its disabled state at zero balance remain.
+
+## 2026-09-02 — Phone is the sole contact identity; login accepts username or phone
+
+Customer email had no delivery workflow (the product deliberately has no SMTP)
+yet appeared in signup, profile editing, login-era compatibility paths, audit
+targets and destructive confirmations. That made it mandatory data without a
+working product purpose. The column is removed rather than left nullable.
+
+Phone remains mandatory, unique and exactly 11 ASCII digits beginning `09`.
+Login resolves one `identifier` against either normalized username or exact
+phone. Signup reports duplicate username and phone explicitly, and destructive
+confirmations use the public, stable username. ACME operator email and email
+fields inside third-party OAuth documents are infrastructure data, not customer
+identity, and are intentionally unaffected.

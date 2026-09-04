@@ -51,8 +51,8 @@ export async function landingPage() {
     </section>
 
     <section class="lp-grid">
-      ${feature("sparkle", "دستیار هوش مصنوعی آماده",
-        "Claude Code و Codex از پیش روی ماشین نصب‌اند. کافی است کلید API خود را وارد کنید و شروع به ساختن کنید.")}
+      ${feature("sparkle", "OpenRouter مستقل و آماده",
+        "پس از تأیید حساب، کلید اختصاصی و محدودشدهٔ OpenRouter می‌گیرید؛ حتی اگر فضای کاری نسازید.")}
       ${feature("machine", "یک ماشین واقعی، نه یک محیط محدود",
         "دسترسی root کامل، نصب بسته با apt، اجرای Docker و سرویس‌های systemd. هر کاری که روی سرور خودتان می‌کنید.")}
       ${feature("power", "خاموش کنید، چیزی از دست نمی‌رود",
@@ -71,9 +71,9 @@ export async function landingPage() {
         <div class="lp-step"><div class="n">۱</div><div>
           <b>ثبت‌نام کنید.</b> <span class="muted">حساب شما پس از بررسی توسط مدیر فعال می‌شود.</span></div></div>
         <div class="lp-step"><div class="n">۲</div><div>
-          <b>ماشین شما ساخته می‌شود.</b> <span class="muted">با Ubuntu، Docker، Node، Python و ابزارهای هوش مصنوعی.</span></div></div>
+          <b>حساب شما تأیید می‌شود.</b> <span class="muted">کلید OpenRouter اختصاصی شما بدون وابستگی به ماشین آماده می‌شود.</span></div></div>
         <div class="lp-step"><div class="n">۳</div><div>
-          <b>از مرورگر وارد ترمینال شوید.</b> <span class="muted">بدون نیاز به SSH یا نصب چیزی روی کامپیوتر خودتان.</span></div></div>
+          <b>در صورت نیاز فضای کاری بسازید.</b> <span class="muted">Ubuntu، Docker و ترمینال ابری اختیاری‌اند و کنترل آن‌ها با شماست.</span></div></div>
         <div class="lp-step"><div class="n">۴</div><div>
           <b>بسازید و منتشر کنید.</b> <span class="muted">پورت برنامه‌تان را منتشر کنید و آن را در دسترس نگه دارید.</span></div></div>
       </div>

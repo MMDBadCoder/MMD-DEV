@@ -14,16 +14,31 @@ import { usageChart, windowPicker, wireWindowPicker,
 let poll = null;
 let chartTimer = null;
 
+const ONBOARDED = "mmd-onboarding-done";
+
 function onboarding(w, services) {
+  // Finished once, gone for good. This used to be recomputed from live state
+  // every render, so a customer who had completed the whole path saw it again
+  // the moment they powered their machine down - a checklist reopening itself
+  // reads as "you have undone something", which is not what happened.
+  if (localStorage.getItem(ONBOARDED) === "1") return "";
+
   const terminalOpened = localStorage.getItem("mmd-onboarding-terminal") === "1";
+  // Three steps, not five. Credit, power, terminal is the shortest path to a
+  // shell prompt - the point at which the machine is genuinely usable. SSH
+  // keys and publishing a port are real features, but they are things a
+  // customer reaches for when they need them, not steps in getting started,
+  // and listing them left the checklist permanently unfinished for everyone
+  // who simply did not want them.
   const steps = [
     [state.me?.credits > 0, "onboarding.credit", "/console/billing"],
     [w.powered_on, "onboarding.power", "/console"],
     [terminalOpened, "onboarding.terminal", "/console/connections/terminal"],
-    [(services?.ssh?.key_count || 0) > 0, "onboarding.ssh", "/console/connections/ssh"],
-    [(services?.applications || []).length > 0, "onboarding.publish", "/console/ports"],
   ];
-  if (steps.every(([done]) => done)) return "";
+  if (steps.every(([done]) => done)) {
+    localStorage.setItem(ONBOARDED, "1");
+    return "";
+  }
   const next = steps.findIndex(([done]) => !done);
   return `<section class="card onboarding" aria-labelledby="onboarding-title">
     <div class="between"><div><h2 id="onboarding-title">${t("onboarding.title")}</h2>
@@ -74,12 +89,44 @@ export async function machinePage() {
   clearTimeout(poll);
   const w = await get("/api/workspace");
 
-  if (w.status === "pending" || w.status === "none") {
+  if (w.status === "pending") {
     render(`<div class="page-head"><h1>${t("ov.title")}</h1></div>
       <div class="card"><div class="between">
         <div><h2>${t("machine.state." + w.status)}</h2>
         <p class="muted small" style="margin:6px 0 0">${t("machine." + w.status)}</p></div>
         ${statePill(w.status)}</div></div>`);
+    return;
+  }
+  if (w.status === "none") {
+    const tiers = await get("/api/tiers");
+    const defaults = tiers.options.find((o) => o.cpu_milli === 1000 && o.mem_mib === 1024)
+      || tiers.options[0];
+    render(`<div class="page-head"><h1>${t("ov.title")}</h1></div>
+      <div class="card machine-empty">
+        <div>${icon.machine}<h2>${t("workspace.empty.title")}</h2>
+          <p class="muted">${t("workspace.empty.body")}</p></div>
+        <div class="cost-preview">
+          <div><span>${t("workspace.empty.size")}</span><b class="ltr">1 vCPU · 1 GB</b></div>
+          <div><span>${t("workspace.empty.maximum")}</span><b>${fmtMoney(defaults.max_per_hour)} ${CURRENCY}</b></div>
+          <div><span>${t("workspace.empty.off")}</span><b>${fmtMoney(defaults.off_per_hour)} ${CURRENCY}</b></div>
+        </div>
+        ${note("info", t("workspace.empty.openrouter"))}
+        <div class="btn-row"><button class="btn primary" id="create-workspace">${
+          icon.plus}${t("workspace.create")}</button>
+          <a class="btn ghost" href="/console/ai/openrouter">${icon.openrouter}${t("workspace.openrouter")}</a></div>
+        <div id="workspace-create-msg"></div>
+      </div>`);
+    $("#create-workspace").onclick = async () => {
+      const b = $("#create-workspace");
+      b.disabled = true; b.innerHTML = `<span class="spinner"></span>${t("workspace.creating")}`;
+      try {
+        await post("/api/workspace", { cpu_milli: 1000, mem_mib: 1024 });
+        toast(t("workspace.create.queued"), "ok"); machinePage();
+      } catch (e) {
+        $("#workspace-create-msg").innerHTML = note("bad", esc(e.message));
+        b.disabled = false; b.innerHTML = `${icon.plus}${t("workspace.create")}`;
+      }
+    };
     return;
   }
 

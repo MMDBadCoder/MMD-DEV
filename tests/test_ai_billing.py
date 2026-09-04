@@ -186,7 +186,7 @@ def db():
 
 @pytest.fixture
 def ws(db):
-    u = User(email="ai@example.com", password_hash="x", status=UserStatus.APPROVED)
+    u = User(password_hash="x", status=UserStatus.APPROVED)
     db.add(u)
     db.commit()
     db.add(CreditAccount(user_id=u.id, balance_micro=100_000_000 * AP.MICRO))

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import socket
+import time
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, select
@@ -20,6 +21,7 @@ from sqlalchemy.orm import Session
 from .billing import pricing
 from .billing import aipricing
 from .billing.pricing import MICRO, Rates, Tier
+from . import metrics
 from . import ports
 from .config import CONFIG
 from .models import (AuditLog, CreditAccount, CreditTransaction, ExposedPort,
@@ -64,7 +66,8 @@ def balance_micro(db: Session, user_id: int) -> int:
 def post_transaction(db: Session, *, user_id: int, workspace_id: int | None,
                      kind: TxKind, amount_micro: int,
                      period_start: datetime | None = None,
-                     detail: dict | None = None) -> CreditTransaction | None:
+                     detail: dict | None = None,
+                     scope_key: str | None = None) -> CreditTransaction | None:
     """Post a ledger entry and move the balance.
 
     Returns None when this exact (workspace, period, kind) was already posted -
@@ -73,7 +76,8 @@ def post_transaction(db: Session, *, user_id: int, workspace_id: int | None,
     """
     tx = CreditTransaction(
         user_id=user_id, workspace_id=workspace_id, kind=kind,
-        amount_micro=amount_micro, period_start=period_start, detail=detail or {})
+        amount_micro=amount_micro, period_start=period_start, detail=detail or {},
+        scope_key=scope_key)
     db.add(tx)
     acct = db.get(CreditAccount, user_id)
     if acct is None:
@@ -115,7 +119,15 @@ def check_admission(db: Session, ws: Workspace, tier: Tier | None = None):
 
 # --- provisioner IPC -----------------------------------------------------
 def call_provisioner(payload: dict, timeout: float = 900.0) -> dict:
-    """Ask the root provisioner to act. The only privileged path in the app."""
+    """Ask the root provisioner to act. The only privileged path in the app.
+
+    Timed and counted by VERB, which is safe to use as a label precisely
+    because the provisioner accepts a fixed allowlist of them - the same
+    property that makes this boundary auditable makes it bounded.
+    """
+    verb = str(payload.get("verb") or "unknown")
+    started = time.monotonic()
+    result = "error"
     s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     s.settimeout(timeout)
     try:
@@ -127,11 +139,21 @@ def call_provisioner(payload: dict, timeout: float = 900.0) -> dict:
             if not chunk:
                 break
             buf += chunk
-        return json.loads(buf.decode() or "{}")
+        reply = json.loads(buf.decode() or "{}")
+        result = "ok" if reply.get("ok") else "failed"
+        return reply
     except (OSError, json.JSONDecodeError) as exc:
+        result = "unreachable"
         return {"ok": False, "error": f"provisioner unreachable: {exc}"}
     finally:
         s.close()
+        # In `finally`, so a verb that raised still reports the time it burned;
+        # a timeout that vanished from the histogram would make a hung
+        # provisioner look idle.
+        metrics.observe("mmd_provisioner_seconds", time.monotonic() - started,
+                        {"verb": verb})
+        metrics.inc("mmd_provisioner_calls_total",
+                    {"verb": verb, "result": result})
 
 
 # --- settlement ----------------------------------------------------------

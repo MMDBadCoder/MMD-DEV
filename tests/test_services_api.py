@@ -21,7 +21,7 @@ from sqlalchemy.pool import StaticPool             # noqa: E402
 from mmd import app as appmod                      # noqa: E402
 from mmd import ports as PORTS                     # noqa: E402
 from mmd import service as svc                     # noqa: E402
-from mmd.models import (Base, CreditAccount, ExposedPort, Notification, PortKind, Setting, User,  # noqa: E402
+from mmd.models import (Base, CreditAccount, ExposedPort, Notification, OpenRouterAccount, PortKind, Setting, User,  # noqa: E402
                         UserStatus, Workspace, WorkspaceState)
 
 
@@ -38,13 +38,15 @@ def env(monkeypatch):
     Local = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
     db = Local()
-    u = User(email="new@example.com", password_hash="x", status=UserStatus.APPROVED,
+    u = User(password_hash="x", status=UserStatus.APPROVED,
              is_admin=True)
     db.add(u)
     db.commit()
     ws = Workspace(user_id=u.id, idx=3, incus_project="ws-3", state=WorkspaceState.ON,
                    mem_mib=2048)
     db.add(ws)
+    db.add(OpenRouterAccount(user_id=u.id, key_hash="supplier-hash",
+                             key="secret", limit_dirty=False))
     db.commit()
 
     api = appmod.app
@@ -54,18 +56,15 @@ def env(monkeypatch):
     api.dependency_overrides.clear()
 
 
-def test_credit_grant_marks_an_existing_hermes_cap_for_immediate_refresh(env):
+def test_credit_grant_marks_the_account_openrouter_cap_for_immediate_refresh(env):
     client, db, ws, _ = env
-    ws.hermes_enabled = True
-    ws.hermes_key_hash = "supplier-hash"
-    db.commit()
-
     r = client.post(f"/api/admin/users/{ws.user_id}/credit",
                     json={"credits": 500_000, "note": "paid"})
 
     assert r.status_code == 200
-    db.refresh(ws)
-    assert ws.hermes_limit_dirty is True
+    account = db.get(OpenRouterAccount, ws.user_id)
+    db.refresh(account)
+    assert account.limit_dirty is True
 
 
 def test_admin_can_power_off_a_customer_workspace(env, monkeypatch):
@@ -98,15 +97,15 @@ def test_openrouter_admin_settings_have_no_discount_and_use_supplier_names(env):
     client, db, ws, _ = env
     response = client.put("/api/admin/openrouter", json={
         "usd_to_toman": 175000,
-        "workspace_id": "or-workspace",
-        "guardrail_id": "or-guardrail",
-        "max_output_usd": 30,
     })
     assert response.status_code == 200, response.text
     data = response.json()
     assert data["usd_to_toman"] == 175000
-    assert data["workspace_id"] == "or-workspace"
-    assert data["guardrail_id"] == "or-guardrail"
+    # The default model joined this endpoint when it became the ONE place a
+    # model is chosen for every OpenRouter-backed service - Hermes, OpenClaw,
+    # OpenCode and Open WebUI - rather than four settings to keep in step.
+    assert set(data) == {"usd_to_toman", "discount_percent",
+                         "default_model", "fallback_model"}
     assert data["discount_percent"] == 0
 
 

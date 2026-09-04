@@ -12,7 +12,7 @@ import { icon } from "../ui.js";
 import { t } from "../i18n.js";
 
 export const SECTIONS = [
-  { key: "",            path: "/console/admin",            ic: "sliders" },
+  { key: "",            path: "/console/admin",            ic: "cog" },
   { key: "users",       path: "/console/admin/users",      ic: "users" },
   { key: "policy",      path: "/console/admin/policy",     ic: "chart" },
   { key: "storage",     path: "/console/admin/storage",    ic: "folder" },
@@ -21,7 +21,7 @@ export const SECTIONS = [
   { key: "codex",       path: "/console/admin/codex",      ic: "codex" },
   { key: "hermes",      path: "/console/admin/hermes",     ic: "hermes" },
   { key: "openclaw",    path: "/console/admin/openclaw",   ic: "openclaw" },
-  { key: "tickets",     path: "/console/admin/tickets",    ic: "chat" },
+  { key: "tickets",     path: "/console/admin/tickets",    ic: "lifebuoy" },
   { key: "backup",      path: "/console/admin/backup",     ic: "archive" },
 ];
 

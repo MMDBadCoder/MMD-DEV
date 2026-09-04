@@ -28,9 +28,9 @@ def env():
     Local = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
     db = Local()
-    alice = User(email="alice@example.com", password_hash="x", status=UserStatus.APPROVED)
-    bob = User(email="bob@example.com", password_hash="x", status=UserStatus.APPROVED)
-    ops = User(email="ops@example.com", password_hash="x", is_admin=True,
+    alice = User(username="alice", phone="09111111111", password_hash="x", status=UserStatus.APPROVED)
+    bob = User(username="bob", phone="09222222222", password_hash="x", status=UserStatus.APPROVED)
+    ops = User(username="ops", phone="09333333333", password_hash="x", is_admin=True,
                status=UserStatus.APPROVED)
     db.add_all([alice, bob, ops])
     db.commit()
@@ -199,7 +199,7 @@ def test_the_queue_shows_every_customer(env):
     as_user(ops)
     rows = client.get("/api/admin/tickets").json()
     assert {t["subject"] for t in rows["tickets"]} == {"alice's problem", "bob's problem"}
-    assert {t["user_email"] for t in rows["tickets"]} == {"alice@example.com", "bob@example.com"}
+    assert {t["user_username"] for t in rows["tickets"]} == {"alice", "bob"}
 
 
 def test_the_queue_filters_by_status_and_counts(env):
@@ -222,10 +222,10 @@ def test_an_unknown_status_is_refused(env):
                       json={"status": "deleted"}).status_code == 422
 
 
-def test_the_customer_email_is_never_exposed_to_the_customer_view(env):
+def test_staff_only_identity_is_never_exposed_to_the_customer_view(env):
     """The staff serialiser adds it; the customer one must not, or one
     customer's ticket JSON becomes a way to read another's address."""
     client, *_ = env
     tk = _open(client)
     out = client.get(f"/api/tickets/{tk['id']}").json()["ticket"]
-    assert "user_email" not in out
+    assert "user_phone" not in out

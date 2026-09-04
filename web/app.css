@@ -83,7 +83,7 @@ body{
 }
 /* Islands that must stay left-to-right inside an RTL page: terminal output,
    host:port addresses, package names, anything copied into a shell. */
-.ltr,.mono,code,pre,input[type="number"],input[type="email"],input[type="password"]{
+.ltr,.mono,code,pre,input[type="number"],input[type="password"]{
   direction:ltr;text-align:left;
 }
 [dir="rtl"] .mono,[dir="rtl"] .ltr{unicode-bidi:isolate}
@@ -393,6 +393,9 @@ kbd{display:inline-block;padding:1px 7px;border:1px solid var(--border-strong);
 .tabs2 .badge{font-size:11px;padding:1px 7px;border-radius:999px;
   background:var(--surface-2);border:1px solid var(--border);font-weight:600}
 .tabs2 .badge.on{background:var(--ok-soft);border-color:var(--ok);color:var(--ok)}
+/* Seven AI destinations do not fit on one desktop row. They belong inside the
+   page boundary and wrap as complete touch targets instead of being clipped. */
+.ai-tabs{flex-wrap:wrap}
 
 /* ---- file rows ---- */
 tbody tr[data-row] a{color:var(--ink)}
@@ -749,3 +752,42 @@ a.card.attn:hover { border-color: var(--brand); }
    that body happens to be - a note, a form, or the allowlist line. Previously
    each tab spaced its own button and they did not match. */
 .telegram-option .tg-actions { margin-top: 14px; }
+
+/* --- embedded Grafana ---------------------------------------------------- */
+/* The frame is given an explicit height because an iframe has no intrinsic
+   one: left to itself it collapses to 150px and the dashboard looks broken. */
+.gf-card { display: flex; flex-direction: column; overflow: hidden; }
+.gf-bar {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--border);
+}
+.gf-title { display: flex; align-items: center; gap: 7px; font-weight: 650; }
+.gf-actions { display: flex; align-items: center; gap: 8px; }
+.gf-card iframe {
+  display: block; border: 0; width: 100%;
+  height: clamp(420px, calc(100vh - 320px), 900px); background: transparent;
+}
+.gf-note { margin: 0; padding: 8px 14px; border-top: 1px solid var(--border); }
+/* In fullscreen the card IS the viewport, so the frame takes what is left
+   after the toolbar rather than a clamped share of a page that no longer
+   exists. */
+.gf-card.gf-full { border-radius: 0; }
+.gf-card.gf-full iframe { height: calc(100vh - 92px); max-height: none; }
+.gf-card:fullscreen { background: var(--surface); }
+
+/* --- sortable table headers ---------------------------------------------- */
+/* The whole header is the target, not just the text: a click zone the size of
+   a word is a click zone people miss. */
+th.sortable { padding: 0; }
+th.sortable > button {
+  display: flex; align-items: center; gap: 6px; width: 100%;
+  padding: 10px 12px; background: none; border: 0; cursor: pointer;
+  font: inherit; color: inherit; text-align: inherit;
+}
+th.sortable.num > button { justify-content: flex-end; }
+th.sortable > button:hover { background: var(--surface-2); }
+th.sortable .arrow { font-size: 10px; opacity: .35; }
+/* The active column's arrow is the one piece of state here, so it is the one
+   thing that gets full contrast. */
+th.sortable.sorted .arrow { opacity: 1; }
+th.sortable.sorted > button { font-weight: 700; }

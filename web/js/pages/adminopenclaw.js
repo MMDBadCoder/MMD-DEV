@@ -1,8 +1,8 @@
 /* OpenClaw administration.
  *
  * Deliberately one setting. OpenClaw spends the customer's managed OpenRouter
- * key, so everything commercial - the exchange rate, the spend cap, the model
- * guardrail - belongs to OpenRouter and is configured on that page. Repeating
+ * key, so everything commercial - the exchange rate and spend cap - belongs
+ * to OpenRouter and is configured on that page. Repeating
  * any of it here would create a second place to change a number that has one
  * correct value, and the two would drift.
  *

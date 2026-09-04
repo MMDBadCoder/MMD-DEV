@@ -62,6 +62,8 @@ test("every dynamically-built key prefix has all its variants", () => {
                "ticket_opened", "ticket_replied", "ticket_status",
                "ai_claude_install", "ai_claude_unlink", "apt_repair",
                "reset_started", "reset_done", "reset_failed", "reset_refused",
+               "workspace_create_started", "workspace_create_done",
+               "workspace_delete_started", "workspace_delete_done",
                "ai_price_update", "ai_price_add", "ai_price_delete"],
     // Token categories, built as t("ai.tok." + category) from the API's list.
     "ai.tok.": ["input", "cache_write_5m", "cache_write_1h", "cache_read", "output"],
@@ -135,7 +137,10 @@ test("customer-facing labels are in Persian", () => {
       !["Ubuntu", "Docker", "Claude", "Code", "Codex", "systemd", "apt", "root",
         "Vazirmatn", "MMD", "DEV", "TCP", "UDP", "SSH", "vCPU", "API", "http",
         "https", "port", "Remote", "Desktop", "Connection", "PowerShell",
-        "Windows", "Hermes", "OpenRouter", "OpenClaw"].includes(w));
+        "Windows", "Hermes", "OpenRouter", "OpenClaw",
+        // The two managed web agents, added after this list was written.
+        // Product names in the same category as the four above.
+        "OpenCode", "Open", "WebUI"].includes(w));
     if (!persian && v.length > 3) offenders.push(`${k} = ${v}`);
     else if (latinWords.length > 2) offenders.push(`${k} has untranslated words: ${latinWords}`);
   }

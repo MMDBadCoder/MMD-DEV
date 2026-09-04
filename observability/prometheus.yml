@@ -1,0 +1,17 @@
+global:
+  # 60s, not the 5m this started at. Five minutes is fine for balances, which
+  # move hourly, but the latency histograms and failure counters added later
+  # are the reason to look at this at all - and a 90-second outage can hide
+  # entirely between two five-minute samples.
+  scrape_interval: 60s
+  evaluation_interval: 60s
+  scrape_timeout: 30s
+
+scrape_configs:
+  - job_name: mmd-control-plane
+    metrics_path: /internal/metrics
+    authorization:
+      credentials_file: /etc/mmd/prometheus-token
+    static_configs:
+      - targets: [127.0.0.1:8000]
+

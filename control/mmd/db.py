@@ -30,8 +30,15 @@ SCHEMA_PATCHES: tuple[str, ...] = (
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS full_name VARCHAR(120)",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(11)",
     "CREATE UNIQUE INDEX IF NOT EXISTS ix_users_phone ON users (phone)",
+    # Contact identity is phone-only. This intentionally follows the username
+    # and phone backfills from older releases; the ORM no longer references the
+    # column, and a clean database never creates it.
+    "ALTER TABLE users DROP COLUMN IF EXISTS email",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_bot_token VARCHAR(256)",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_user_id VARCHAR(15)",
+    "ALTER TABLE credit_transactions ADD COLUMN IF NOT EXISTS scope_key VARCHAR(64)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_scoped_charge_once_per_period "
+    "ON credit_transactions (scope_key, period_start, kind)",
     "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS hermes_enabled BOOLEAN DEFAULT FALSE",
     "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS hermes_installed BOOLEAN DEFAULT FALSE",
     "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS hermes_key_hash VARCHAR(128)",
@@ -58,7 +65,45 @@ SCHEMA_PATCHES: tuple[str, ...] = (
     "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS openclaw_telegram_enabled BOOLEAN DEFAULT FALSE",
     "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS openclaw_telegram_installed BOOLEAN DEFAULT FALSE",
     "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS openclaw_telegram_error TEXT",
+    "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS opencode_enabled BOOLEAN DEFAULT FALSE",
+    "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS opencode_installed BOOLEAN DEFAULT FALSE",
+    "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS opencode_password VARCHAR(64)",
+    "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS opencode_error TEXT",
+    "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS openwebui_enabled BOOLEAN DEFAULT FALSE",
+    "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS openwebui_installed BOOLEAN DEFAULT FALSE",
+    "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS openwebui_password VARCHAR(64)",
+    "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS openwebui_error TEXT",
     "ALTER TABLE exposed_ports ADD COLUMN IF NOT EXISTS web_ready BOOLEAN NOT NULL DEFAULT FALSE",
+    # The SMS outbox. create_all makes the table on a fresh database; this is
+    # what gives it to one that already exists.
+    "CREATE TABLE IF NOT EXISTS sms_messages ("
+    "id SERIAL PRIMARY KEY, "
+    "user_id INTEGER REFERENCES users(id) ON DELETE SET NULL, "
+    "phone VARCHAR(11) NOT NULL, kind VARCHAR(32) NOT NULL, "
+    "body VARCHAR(320) NOT NULL, status VARCHAR(16) NOT NULL DEFAULT 'queued', "
+    "attempts INTEGER NOT NULL DEFAULT 0, error VARCHAR(255), "
+    "provider_message_id VARCHAR(32), dedupe_key VARCHAR(128) UNIQUE, "
+    "next_attempt_at TIMESTAMPTZ, "
+    "created_at TIMESTAMPTZ NOT NULL DEFAULT now(), sent_at TIMESTAMPTZ)",
+    "CREATE INDEX IF NOT EXISTS ix_sms_pending ON sms_messages (status, next_attempt_at)",
+    # Everything on by default, so an empty map is the normal state.
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS sms_prefs JSONB NOT NULL DEFAULT '{}'::jsonb",
+    "CREATE TABLE IF NOT EXISTS sms_codes ("
+    "id SERIAL PRIMARY KEY, phone VARCHAR(11) NOT NULL, "
+    "purpose VARCHAR(16) NOT NULL, code_hash VARCHAR(128) NOT NULL, "
+    "expires_at TIMESTAMPTZ NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, "
+    "consumed_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT now())",
+    "CREATE INDEX IF NOT EXISTS ix_sms_code_lookup ON sms_codes (phone, purpose)",
+    "CREATE INDEX IF NOT EXISTS ix_sms_codes_created_at ON sms_codes (created_at)",
+    # Move every existing supplier key to its owner before new code stops
+    # consulting the legacy workspace columns. The insert is deliberately
+    # conflict-free so restarts and partially deployed releases are harmless.
+    "INSERT INTO openrouter_accounts "
+    "(user_id, key_hash, key, usage_usd, credit_blocked, limit_dirty, error) "
+    "SELECT user_id, hermes_key_hash, hermes_key, COALESCE(hermes_usage_usd, 0), "
+    "COALESCE(hermes_credit_blocked, FALSE), COALESCE(hermes_limit_dirty, TRUE), "
+    "hermes_error FROM workspaces WHERE hermes_key_hash IS NOT NULL "
+    "ON CONFLICT (user_id) DO NOTHING",
     # Published ports now carry both protocols. Customer-published rows written
     # before that are widened; the reserved SSH and RDP rows are left alone,
     # because both are TCP services and a UDP rule there would forward to a port
@@ -74,6 +119,12 @@ SCHEMA_PATCHES: tuple[str, ...] = (
     "UPDATE exposed_ports SET protocol = 'both' "
     "WHERE kind = 'USER' AND protocol IN ('tcp', 'udp')",
 )
+
+
+# Patches that could not be applied on this boot. A skipped patch is a silent
+# failure by design - the process must still start - so it is counted here and
+# exported, rather than living only in a log line nobody reads.
+SCHEMA_PATCH_FAILURES: list[str] = []
 
 
 def init_db() -> None:
@@ -97,11 +148,13 @@ def _patch_schema() -> None:
     """
     from sqlalchemy import text
     log = logging.getLogger("mmd.db")
+    SCHEMA_PATCH_FAILURES.clear()
     for stmt in SCHEMA_PATCHES:
         try:
             with engine.begin() as conn:
                 conn.execute(text(stmt))
         except Exception as exc:  # noqa: BLE001
+            SCHEMA_PATCH_FAILURES.append(stmt[:120])
             # SQLite (the tests) rejects some of this syntax, and a patch that
             # cannot apply must not stop the process booting. Logged at WARNING
             # with the reason, because "silently skipped" is how the above went

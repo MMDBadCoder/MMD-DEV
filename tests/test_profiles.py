@@ -20,11 +20,11 @@ def env(monkeypatch):
     Base.metadata.create_all(engine)
     Local = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
     db = Local()
-    admin = User(email="admin@example.com", username="admin-user",
+    admin = User(username="admin-user",
                  full_name="Admin User", phone="09111111111",
                  password_hash="stored-password", is_admin=True,
                  status=UserStatus.APPROVED)
-    customer = User(email="customer@example.com", username="customer",
+    customer = User(username="customer",
                     full_name="Customer One", phone="09222222222",
                     password_hash="stored-password",
                     status=UserStatus.APPROVED)
@@ -48,21 +48,20 @@ def env(monkeypatch):
 
 def test_customer_can_change_identity_only_with_the_current_password(env):
     client, db, customer, _, _ = env
-    body = {"email": "new@example.com", "full_name": "New Name",
+    body = {"full_name": "New Name",
             "phone": "09333333333", "current_password": "wrong"}
     assert client.put("/api/profile", json=body).status_code == 401
 
     body["current_password"] = "old-password"
     assert client.put("/api/profile", json=body).status_code == 200
     db.refresh(customer)
-    assert (customer.email, customer.full_name, customer.phone) == (
-        "new@example.com", "New Name", "09333333333")
+    assert (customer.full_name, customer.phone) == ("New Name", "09333333333")
 
 
 def test_phone_is_exactly_an_eleven_digit_iranian_mobile(env):
     client, _, _, _, _ = env
     response = client.put("/api/profile", json={
-        "email": "customer@example.com", "full_name": "Customer One",
+        "full_name": "Customer One",
         "phone": "9123456789", "current_password": "old-password"})
     assert response.status_code == 422
 
@@ -70,38 +69,47 @@ def test_phone_is_exactly_an_eleven_digit_iranian_mobile(env):
 def test_signup_requires_and_stores_full_name_and_mobile(env):
     client, db, _, _, _ = env
     missing = client.post("/api/auth/register", json={
-        "email": "missing@example.com", "username": "missing-user",
+        "username": "missing-user",
         "password": "long-password"})
     assert missing.status_code == 422
 
-    created = client.post("/api/auth/register", json={
-        "email": "signup@example.com", "username": "signup-user",
+    # Signup now proves the number first: phone is the sole contact identity
+    # and a sign-in credential, so it cannot be self-asserted.
+    unverified = client.post("/api/auth/register", json={
+        "username": "signup-user",
         "password": "long-password", "full_name": "Signup Customer",
-        "phone": "09555555555"})
+        "phone": "09555555555", "code": "00000"})
+    assert unverified.status_code == 400
+    assert db.query(User).filter_by(username="signup-user").one_or_none() is None
+
+    from mmd import smscode
+    code = smscode.issue(db, "09555555555", "signup")
+    db.commit()
+    created = client.post("/api/auth/register", json={
+        "username": "signup-user",
+        "password": "long-password", "full_name": "Signup Customer",
+        "phone": "09555555555", "code": code})
     assert created.status_code == 200
-    user = db.query(User).filter_by(email="signup@example.com").one()
+    user = db.query(User).filter_by(username="signup-user").one()
     assert (user.full_name, user.phone) == ("Signup Customer", "09555555555")
 
 
-def test_sign_in_accepts_username_and_rejects_email_as_the_identifier(env):
+def test_sign_in_accepts_username_or_phone(env):
     client, _, customer, _, _ = env
     signed_in = client.post("/api/auth/login", json={
-        "username": "CUSTOMER", "password": "old-password"})
+        "identifier": "CUSTOMER", "password": "old-password"})
     assert signed_in.status_code == 200
 
-    email = client.post("/api/auth/login", json={
-        "username": customer.email, "password": "old-password"})
-    assert email.status_code == 401
-    legacy_shape = client.post("/api/auth/login", json={
-        "email": customer.email, "password": "old-password"})
-    assert legacy_shape.status_code == 422
+    phone = client.post("/api/auth/login", json={
+        "identifier": customer.phone, "password": "old-password"})
+    assert phone.status_code == 200
 
 
 def test_admin_can_change_customer_identity_without_learning_the_password(env):
     client, db, customer, admin, _ = env
     appmod.app.dependency_overrides[appmod.current_user] = lambda: admin
     response = client.put(f"/api/admin/users/{customer.id}/profile", json={
-        "email": "edited@example.com", "full_name": "Edited Customer",
+        "full_name": "Edited Customer",
         "phone": "09444444444"})
     assert response.status_code == 200
     db.refresh(customer)

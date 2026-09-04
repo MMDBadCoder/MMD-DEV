@@ -32,12 +32,13 @@ and the auth endpoints. Accessing another account's resource returns **404**, no
 
 | Method | Path | Notes |
 |---|---|---|
-| `POST` | `/api/auth/register` | `{email, username, password, full_name, phone}`. Phone is an 11-digit Iranian mobile beginning `09`. The first account ever created becomes admin. Returns `{status, code}`; duplicate email and phone responses are indistinguishable from success so accounts cannot be enumerated |
-| `POST` | `/api/auth/login` | `{username, password}`. Username is the only login identifier; email and phone are profile data. Sets the session cookie |
+| `POST` | `/api/auth/register` | `{username, password, full_name, phone}`. Phone is a unique 11-digit Iranian mobile beginning `09`. The first account ever created becomes admin. Duplicate username or phone returns a field-specific conflict code |
+| `POST` | `/api/auth/login` | `{identifier, password}`. `identifier` is either username or phone. Sets the session cookie |
+| `GET` | `/api/auth/phone-available` | Checks phone syntax and uniqueness for signup |
 | `POST` | `/api/auth/logout` | |
 | `POST` | `/api/auth/password` | Requires the current password |
 | `GET` | `/api/me` | Identity, admin flag, balance, unread ticket counts, application version, Telegram configured flag and user ID; never the bot token |
-| `PUT` | `/api/profile` | `{email, full_name, phone, current_password}`. Changes customer identity after password confirmation |
+| `PUT` | `/api/profile` | `{full_name, phone, current_password}`. Changes customer identity after password confirmation |
 | `PUT` | `/api/profile/telegram` | `{bot_token?, user_id?, clear?}`. Stores or clears reusable account-level Telegram settings. A blank token preserves the existing one |
 
 ## Public
@@ -52,6 +53,8 @@ and the auth endpoints. Accessing another account's resource returns **404**, no
 | Method | Path | Notes |
 |---|---|---|
 | `GET` | `/api/workspace` | State, size, rates, `blocked`, `can_power_on` |
+| `POST` | `/api/workspace` | Create the customer's optional workspace. `{cpu_milli, mem_mib}`; returns a durable operation |
+| `POST` | `/api/workspace/delete` | Permanently remove the workspace after username/password confirmation while preserving the account and OpenRouter key |
 | `POST` | `/api/workspace/power` | `{on: bool}`. Runs the affordability gate and the admission check |
 | `POST` | `/api/workspace/tier` | `{cpu_milli, mem_mib}`. Live-applied when running; memory cannot shrink while on |
 | `POST` | `/api/workspace/reset` | **Factory reset.** `{confirm, password}` — validates immediately, then returns a durable `operation` |
@@ -75,15 +78,15 @@ checked server-side before anything is queued:
 { "confirm": "owner@example.com", "password": "…" }
 ```
 
-`confirm` must equal the account's own email (case and surrounding whitespace are
+`confirm` must equal the account's own username (case and surrounding whitespace are
 forgiven, nothing else). `password` is the account password. A refused attempt is
 written to the audit log. Permitted from `on`, `off` and `error` — `error` is
 where starting over is most useful.
 
-Kept: reserved ports, saved public keys, size, credit, ledger. Gone: filesystem,
-packages, all Docker data, Hermes installation, its OpenRouter key and dashboard
-credentials. Reset returns Hermes to unselected; the customer may enable it
-again after the rebuilt machine is ready.
+Kept: reserved ports, saved public keys, size, credit, ledger and the
+account-level OpenRouter key. Gone: filesystem, packages, all Docker data,
+Hermes/OpenClaw installations and their dashboard credentials. Reset returns
+workspace applications to unselected without disrupting external OpenRouter use.
 
 ## Operations
 
@@ -151,7 +154,7 @@ is denied the file API. Paths are validated server-side.
 
 | Method | Path | Notes |
 |---|---|---|
-| `GET` | `/api/workspace/ai` | Claude Code state: installed, version, signed in, expiry |
+| `GET` | `/api/workspace/ai` | Account-level OpenRouter state plus optional workspace service states. Works without a workspace |
 | `POST` | `/api/workspace/ai/codex` | `{action}` — `install` or `unlink`. Copies the host's allowlisted Codex grant into the workspace. `ai_host_unlinked` when the platform is not signed in |
 | `POST` | `/api/workspace/ai/openclaw` | `{action}` — `enable` or `disable`. Records intent; the worker installs. `needs_openrouter` until the managed key exists |
 | `POST` | `/api/workspace/ai/claude` | `{action: "install"｜"unlink"}`. Installs the CLI and carries the platform sign-in across |
@@ -161,7 +164,7 @@ Administrator AI configuration is separated by responsibility:
 
 | Method | Path | Notes |
 |---|---|---|
-| `GET/PUT` | `/api/admin/openrouter` | USD-to-Toman conversion, OpenRouter workspace/guardrail IDs and model-price ceiling. OpenRouter has no platform discount |
+| `GET/PUT` | `/api/admin/openrouter` | USD-to-Toman conversion. OpenRouter has no platform discount or model restriction; account credit controls the key's supplier-side spend cap |
 | `GET/PUT` | `/api/admin/hermes` | Hermes default model and adoption state |
 | `GET/POST/PUT/DELETE` | `/api/admin/ai-pricing` | Claude Code model prices; Claude's discount is stored through the restricted settings endpoint |
 
@@ -195,25 +198,23 @@ removes the gateway service and Telegram credentials without disabling Hermes.
 | Method | Path | Notes |
 |---|---|---|
 | `GET` | `/api/admin/users` | |
-| `PUT` | `/api/admin/users/{id}/profile` | Change the customer's email, full name and phone; audited |
-| `POST` | `/api/admin/users/{id}/approve` | Provisions a machine and hands it back **off** |
+| `PUT` | `/api/admin/users/{id}/profile` | Change the customer's full name and phone; audited |
+| `POST` | `/api/admin/users/{id}/approve` | Activates the account and schedules its OpenRouter key. Does not create compute |
 | `POST` | `/api/admin/users/{id}/reject` | |
 | `POST` | `/api/admin/users/{id}/admin` | Promote or demote |
 | `POST` | `/api/admin/users/{id}/credit` | Grant credit. Marks an active Hermes key for supplier-cap refresh on the next worker pass |
 | `DELETE` | `/api/admin/users/{id}` | |
-| `GET` | `/api/admin/capacity` | Reserved against schedulable capacity |
-| `GET` | `/api/admin/metrics` | `?minutes=`. Actual usage summed across every workspace, in cores and GB, scaled against sellable capacity |
 | `GET`/`PUT` | `/api/admin/settings` | Rate card, overcommit ratios, host reserve |
 | `GET` | `/api/admin/activity` | Global audit log |
-| `GET` | `/api/admin/metrics/per-user` | Per-customer usage series |
 | `GET` | `/api/admin/operations` | In-flight and recent long operations |
 | `GET` | `/api/admin/storage` | Pool total/used/free, per-workspace usage, overcommit ratio |
-| `GET`/`PUT` | `/api/admin/openrouter` | Exchange rate, per-workspace spend cap, model guardrail |
+| `GET`/`PUT` | `/api/admin/openrouter` | Exchange rate; customer keys have credit-derived spend caps but unrestricted model choice |
 | `GET` | `/api/admin/hermes` | Adoption counts and the managed-key state |
 | `PUT` | `/api/admin/hermes` | Hermes' default model |
 | `GET`/`PUT` | `/api/admin/openclaw` | OpenClaw's default model (provider-prefixed) and adoption counts |
 | `GET` | `/api/admin/ai-pricing` | Per-service price tables; `?service=claude｜codex` |
 | `POST`/`PUT`/`DELETE` | `/api/admin/ai-pricing[/{id}]` | Add, change or remove a model price |
+| _(removed)_ | `/api/admin/metrics`, `/api/admin/metrics/per-user`, `/api/admin/capacity` | Superseded by Prometheus. The same readings are exported at `/internal/metrics` as `mmd_workspace_cpu_seconds_total`, `mmd_workspace_memory_bytes` and `mmd_capacity_*`, and shown on the embedded dashboards. See [METRICS.md](METRICS.md) |
 | `GET`/`PUT` | `/api/admin/backup` | Database-backup schedule. The bot token is **never returned** — only `bot_token_set` and the last four characters |
 | `POST` | `/api/admin/backup/run` | Dump and send one backup immediately; returns `{ok, error?, config}` |
 | `GET` | `/api/admin/tickets` | Queue, filterable by status, with counts |

@@ -11,10 +11,10 @@ If you read nothing else, read [Ten things that will bite you](#ten-things-that-
 ## What this is
 
 A commercial product, already sold to real customers, running on **one** Ubuntu
-server. Each customer buys an isolated Ubuntu machine — root, `apt`, Docker, AI
-coding tools preinstalled — billed by the hour in **Toman**, controllable from a
-Persian web dashboard, able to power fully off to near-zero cost without losing
-a byte.
+server. An approved customer receives an account-level OpenRouter key and may
+optionally create an isolated Ubuntu machine — root, `apt`, Docker and AI coding
+tools — billed by the hour in **Toman** and controlled from a Persian dashboard.
+Deleting that machine never deletes the account, credit or OpenRouter key.
 
 Three facts shape almost every decision:
 
@@ -225,10 +225,11 @@ Stated plainly so you do not "fix" a decision or assume a gap is an oversight:
 
 - **Single host, no HA.** One failure domain. ZFS snapshots exist; off-host
   backups do not.
-- **Docker volumes are sparse zvols** with no `refreservation`, so the 4 GiB
-  Docker allocation is not truly reserved the way the 6 GiB rootfs is. Known;
-  changing it alters disk accounting on live volumes, so it is the operator's
-  call.
+- **Workspace datasets are thin-provisioned.** The 6 GiB rootfs and 8 GiB
+  Docker allowances use `refquota` without `refreservation`. The worker's pool
+  guard, rather than a physical per-customer reservation, is the admission
+  control. Changing this alters disk accounting on live datasets, so it is the
+  operator's call.
 - **Shared Claude subscription.** The AI feature copies the *platform's* OAuth
   grant into customer machines. Any customer with root — which is all of them —
   can read that token. There is no way to give a container a credential and also

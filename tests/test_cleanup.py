@@ -11,7 +11,7 @@ from sqlalchemy import create_engine, select  # noqa: E402
 from sqlalchemy.orm import Session            # noqa: E402
 
 from mmd import worker                        # noqa: E402
-from mmd.models import (AiUsageMark, AuditLog, Base, CreditAccount,
+from mmd.models import (AiUsageMark, AuditLog, Base, CreditAccount, OpenRouterAccount,
                         CreditTransaction, ExposedPort, Notification, Operation, PortKind,
                         SshKey, Ticket, TicketMessage, TxKind, User,
                         UserStatus, UsageSample, Workspace, WorkspaceState)
@@ -21,16 +21,16 @@ def populated():
     engine = create_engine("sqlite://")
     Base.metadata.create_all(engine)
     db = Session(engine, expire_on_commit=False)
-    admin = User(email="admin@example.com", username="admin", password_hash="x",
+    admin = User(username="admin", password_hash="x",
                  status=UserStatus.APPROVED, is_admin=True)
-    victim = User(email="gone@example.com", username="gone", password_hash="x",
+    victim = User(username="gone", password_hash="x",
                   status=UserStatus.DELETING)
     db.add_all([admin, victim]); db.commit()
     ws = Workspace(user_id=victim.id, idx=7, incus_project="ws-7",
-                   state=WorkspaceState.OFF, hermes_key_hash="hash",
-                   hermes_key="secret")
+                   state=WorkspaceState.OFF)
     db.add(ws); db.commit()
     db.add_all([
+        OpenRouterAccount(user_id=victim.id, key_hash="hash", key="secret"),
         CreditAccount(user_id=victim.id, balance_micro=1),
         CreditTransaction(user_id=victim.id, workspace_id=ws.id,
                           kind=TxKind.GRANT, amount_micro=1),
@@ -76,7 +76,7 @@ def test_account_deletion_revokes_unpublishes_destroys_then_erases(monkeypatch):
     assert events.index("revoke") < events.index("firewall") < events.index("destroy")
     assert db.get(User, victim.id) is None
     assert db.get(User, admin.id) is not None
-    for model in (Workspace, CreditAccount, CreditTransaction, UsageSample,
+    for model in (Workspace, OpenRouterAccount, CreditAccount, CreditTransaction, UsageSample,
                   ExposedPort, SshKey, AiUsageMark, Ticket, TicketMessage,
                   Notification, Operation, AuditLog):
         assert db.scalar(select(model).limit(1)) is None, model.__name__
@@ -84,7 +84,7 @@ def test_account_deletion_revokes_unpublishes_destroys_then_erases(monkeypatch):
 
 def test_cleanup_failure_keeps_identity_needed_for_retry(monkeypatch):
     db, _, victim, ws, op = populated()
-    ws.hermes_key_hash = None
+    db.get(OpenRouterAccount, victim.id).key_hash = None
     db.commit()
     monkeypatch.setattr(worker.svc, "sync_published_ports",
                         lambda db, **kw: {"ok": False})

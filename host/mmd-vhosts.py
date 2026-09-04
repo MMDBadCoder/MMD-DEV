@@ -62,6 +62,8 @@ HERMES_PORT = 9119
 # The OpenClaw gateway's fixed port inside a workspace. Must agree with
 # provisioner.OPENCLAW_PORT and app.OPENCLAW_PORT.
 OPENCLAW_PORT = 18789
+OPENCODE_PORT = 4096
+OPENWEBUI_PORT = 3001
 
 # A failed issuance is retried on a growing delay. Let's Encrypt's limit is per
 # registered domain, so one customer whose DNS is wrong could otherwise spend
@@ -380,7 +382,7 @@ def desired(db, CONFIG, usernames) -> dict[str, list[tuple[str, str, int, int | 
         # Hermes: only once the worker has actually minted a key and the
         # dashboard has credentials. Publishing the name earlier would serve a
         # 502 at an address we had just told the customer was ready.
-        if (ws.hermes_enabled and ws.hermes_key_hash
+        if (ws.hermes_enabled and ws.hermes_installed
                 and ws.hermes_dash_user and ws.hermes_dash_password):
             host = usernames.hermes_host(user.username, domain)
             out.setdefault(user.username, []).append(
@@ -395,6 +397,14 @@ def desired(db, CONFIG, usernames) -> dict[str, list[tuple[str, str, int, int | 
             out.setdefault(user.username, []).append(
                 (f"openclaw.{user.username}.{domain}",
                  f"10.42.0.{ws.idx + 10}", OPENCLAW_PORT, None))
+        if ws.opencode_enabled and ws.opencode_installed:
+            out.setdefault(user.username, []).append(
+                (usernames.opencode_host(user.username, domain),
+                 f"10.42.0.{ws.idx + 10}", OPENCODE_PORT, None))
+        if ws.openwebui_enabled and ws.openwebui_installed:
+            out.setdefault(user.username, []).append(
+                (usernames.openwebui_host(user.username, domain),
+                 f"10.42.0.{ws.idx + 10}", OPENWEBUI_PORT, None))
         for port in db.execute(select(ExposedPort).where(
                 ExposedPort.workspace_id == ws.id,
                 ExposedPort.kind == PortKind.USER)).scalars():

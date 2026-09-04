@@ -34,7 +34,7 @@ def env(monkeypatch):
     Local = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
     db = Local()
-    u = User(email="dev@example.com", password_hash="x", status=UserStatus.APPROVED,
+    u = User(password_hash="x", status=UserStatus.APPROVED,
              is_admin=True)
     db.add(u)
     db.commit()
@@ -125,53 +125,6 @@ def test_a_short_window_excludes_older_samples(env):
     assert client.get("/api/workspace/metrics?minutes=5").json()["samples"] == 6
     assert client.get("/api/workspace/metrics?minutes=360").json()["samples"] == 7
 
-
-def test_the_refresh_cadence_is_sent_to_the_interface(env):
-    """So the page redraws in step with the data instead of guessing."""
-    client, *_ = env
-    assert client.get("/api/workspace/metrics").json()["sample_seconds"] == 20
-
-
-# --- the host-wide view ----------------------------------------------------
-def test_admin_metrics_sums_every_workspace(env):
-    client, db, ws = env
-    other = User(email="two@example.com", password_hash="x", status=UserStatus.APPROVED)
-    db.add(other)
-    db.commit()
-    ws2 = Workspace(user_id=other.id, idx=8, incus_project="ws-8",
-                    state=WorkspaceState.ON, cpu_milli=1000, mem_mib=1024)
-    db.add(ws2)
-    db.commit()
-    now = svc.now()
-    for i in range(6):
-        db.add(UsageSample(workspace_id=ws2.id, ts=now - timedelta(seconds=20 * (5 - i)),
-                           cpu_seconds_total=50.0 + 10.0 * i, mem_bytes=1073741824))
-    db.commit()
-
-    d = client.get("/api/admin/metrics").json()
-    assert d["workspaces"] == 2
-    # Both machines burn 0.5 cores and hold 1 GiB, so the host total is double.
-    assert max(p["value"] for p in d["cpu"]) == pytest.approx(1.0, abs=0.05)
-    assert max(p["value"] for p in d["memory"]) == pytest.approx(2.0, abs=0.05)
-
-
-def test_admin_metrics_scales_against_sellable_capacity(env):
-    """Not the raw host total - the host reserve is not for sale."""
-    client, *_ = env
-    d = client.get("/api/admin/metrics").json()
-    cap = client.get("/api/admin/capacity").json()
-    assert d["cpu_cores"] == cap["schedulable_cores"]
-    assert d["memory_gb"] == pytest.approx(cap["schedulable_mem_gib"], abs=0.01)
-
-
-def test_admin_metrics_is_admin_only(env):
-    """The route must not be reachable by an ordinary customer."""
-    import inspect
-    src = inspect.getsource(appmod.admin_metrics)
-    assert "require_admin" in src
-
-
-# --- the cadence behind it -------------------------------------------------
 def test_faster_sampling_did_not_change_settlement_timing():
     """Sampling went from 60s to 20s so a five-minute chart has enough points.
     The multipliers must keep settlement at 5 minutes and reconciliation at 15,

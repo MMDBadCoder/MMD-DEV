@@ -35,7 +35,7 @@ def db():
                            poolclass=StaticPool)
     Base.metadata.create_all(engine)
     s = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)()
-    u = User(email="a@example.com", password_hash="x",
+    u = User(password_hash="x",
              status=UserStatus.APPROVED, username="ali")
     s.add(u)
     s.commit()

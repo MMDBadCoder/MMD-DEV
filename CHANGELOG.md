@@ -2,6 +2,143 @@
 
 Notable changes. Dates are the day the work landed on the production host.
 
+## [1.7.0] — 2026-09-04
+
+### Added
+
+- **Prometheus and Grafana, with 67 exported metric families and eight
+  dashboards.** The control plane exposes `/internal/metrics` behind a bearer
+  token; Prometheus scrapes it every 60 seconds on loopback and Grafana serves
+  the dashboards on loopback behind the administrator session. Each dashboard
+  is embedded in the admin tab it is about — customers and credit under Users,
+  the pool under Storage, capacity under Tariffs — rather than one page nobody
+  can read. `docs/METRICS.md` lists every series and is generated from a live
+  scrape, so it describes what the endpoint emits rather than what it was
+  meant to.
+  - Grafana has **its own login**. It previously trusted anonymous access
+    behind the reverse proxy, which quietly merged two different systems' idea
+    of "administrator": anything that reached it was already a Viewer. The
+    credential is shown, masked, on the admin overview.
+  - Labels are bounded at the call site: route **templates** never paths,
+    status **classes** never codes, provisioner **verbs** from the fixed
+    allowlist. A scanner walking random URLs cannot mint series.
+  - The worker is a separate process, so it writes a metric snapshot the
+    exporter folds in at render time. That merge is deliberately
+    non-mutating — folding cumulative counters into the exporter's own
+    registry would add one worker-lifetime per scrape.
+
+- **SMS notifications through Kavenegar**, with a per-customer preference page.
+  23 message templates, each verified by test to fit **one segment** — Persian
+  and emoji are UCS-2, so a segment is 70 UTF-16 code units, not 70 characters,
+  and counting the wrong unit silently doubles the bill. No line mixes Persian
+  and Latin letters, which reads badly in an RTL client and shaped the wording
+  as much as the layout.
+  - Twelve of the 23 are switchable by the customer. Security messages and
+    login codes are not: an interface that appears to silence a takeover
+    warning is worse than one with no switch.
+  - The provider key is worker-only via `LoadCredential`, like the OpenRouter
+    management key. The internet-facing API queues messages into an outbox and
+    cannot send.
+  - A **temporary allowlist** gates real delivery while the feature is proven.
+    Suppressed messages are still recorded as `skipped`, so the trial shows
+    what would have been sent. Clear `MMD_SMS_ALLOWLIST` to remove it.
+
+- **Phone verification at signup, and sign-in by SMS code.** Codes are hashed
+  at rest, single-use, expiring, attempt-limited and rate-limited per phone,
+  with the limit in the table rather than in memory so it survives a restart.
+  Requesting a login code answers identically whether or not the number has an
+  account.
+
+- **A worker watchdog** (`mmd-watchdog.timer`) that texts every administrator
+  when the loop stops ticking. Its own unit on purpose: a check inside the
+  worker cannot report the worker being dead, and it sends directly because
+  the process that drains the outbox is the one that stopped.
+
+- **Admin-configurable default model for every OpenRouter-backed service.**
+  One setting on the OpenRouter tab now governs Hermes, OpenClaw, OpenCode and
+  Open WebUI. Each wants the id in a different shape — bare for Hermes and
+  Open WebUI, `openrouter/`-prefixed for OpenClaw and OpenCode — which is a
+  formatting detail handled per service rather than four settings to keep in
+  step. Claude Code and Codex have their own starting model on their pricing
+  tabs, written only at install and only when the customer has no config of
+  their own.
+
+- **Sortable columns and in-place filtering on the admin users table.**
+
+### Changed
+
+- **An account, an OpenRouter key and a workspace are now three lifecycles.**
+  Approval creates an account-scoped OpenRouter identity without creating
+  compute; customers create or permanently delete their machine whenever they
+  choose, and deleting or factory-resetting it preserves the account, balance
+  and supplier key. Metering, credit blocking and re-enabling all work without
+  a workspace. Full account deletion is the only action that revokes the key.
+
+- **OpenRouter keys are no longer restricted by model.** Customers use the key
+  outside the workspace, where a Hermes-shaped allowlist made it incomplete —
+  non-agent endpoints such as TTS were refused. Existing keys keep their secret
+  while the old allowlist is cleared once. Credit-derived dollar caps and
+  zero-credit disabling remain.
+
+- **Phone is the sole contact identity**, and sign-in accepts username or
+  phone. Customer email had no delivery workflow yet appeared in signup,
+  profile editing and destructive confirmations; the column is removed rather
+  than left nullable.
+
+- **OpenCode and Open WebUI** join Hermes and OpenClaw as managed agents, each
+  spending the customer's existing OpenRouter key.
+
+- Reserved infrastructure hostnames — `ports`, `ssh`, `rdp`, `backup` and
+  others — cannot be registered as usernames, and the signup form no longer
+  reveals a Hermes address while checking a name.
+
+- **Workspace disk reclaimed 34 GB on the host.** The ZFS pool is a file vdev
+  that had never been trimmed, so every block it had ever touched stayed
+  allocated: 68 GiB apparent, 69 GiB written, for 33 GiB of data. `zpool trim`
+  took the host from 97% full to 63%, and `autotrim=on` keeps it there. This is
+  also why the 44.8 GiB reclaimed by thin provisioning in 1.6 never appeared —
+  it was freed inside the pool and the file never shrank.
+
+- **Sample retention 7 days → 2.** `usage_samples` was 96% of the database.
+  Settlement only reads the hour it is closing; everything older existed for
+  charts that Prometheus now draws. 48,836 rows pruned.
+
+- **The admin pages stopped drawing their own charts.** The tariff page's host
+  and per-workspace series, the storage tab's pool bar and distribution rows,
+  and the per-customer credit chart were all redrawn on every visit with no
+  history. They are dashboards now; the forms beside them stayed, because a
+  form is something an operator changes rather than watches.
+
+- The first-run checklist is **three steps** and stays finished once completed.
+  It was recomputed from live state, so powering a machine down brought the
+  whole thing back.
+
+### Fixed
+
+- **`mmd_workspace_memory_bytes` reported stale memory for stopped machines** —
+  the newest sample regardless of age, so a workspace switched off yesterday
+  still claimed 429 MB. Memory is a gauge and now reports zero when the machine
+  is off; CPU is a counter and correctly keeps its last value.
+
+- **OpenCode could not answer.** It was installed with an OpenRouter key but no
+  model, so it had nothing to call and replied with something that read like
+  the prompt echoed back. Its config is now written at install.
+
+- Nav icons that did not mean what their page did: a shield for the account, a
+  bell for SMS, a speech bubble for support — which read as messaging, next to
+  the SMS page — and a group of people for administration.
+
+### Removed
+
+- `/api/admin/metrics`, `/api/admin/metrics/per-user` and
+  `/api/admin/capacity`. All three had no caller left once the charts moved to
+  Grafana; the per-user one loaded every sample in the window and grouped them
+  in Python on each request. The same readings are exported as
+  `mmd_workspace_*` and `mmd_capacity_*`.
+
+- The پایش tab. Each dashboard now sits beside the tab it describes, so a
+  separate monitoring page was a second place to look for the same thing.
+
 ## [1.6.0] — 2026-08-31
 
 ### Added

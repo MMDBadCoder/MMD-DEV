@@ -26,26 +26,108 @@ function shell({ title, sub, fields, cta, altText, altHref, altLabel, msg }) {
   </div></div>`;
 }
 
+/* Requesting a one-time code, shared by sign-in and sign-up.
+ *
+ * The button becomes a countdown rather than staying live, because the server
+ * refuses a resend inside sixty seconds and a button that looks available but
+ * always fails reads as broken rather than as rate limited. */
+function wireCodeRequest({ button, phoneOf, purpose, onSent }) {
+  const b = $(button);
+  if (!b) return;
+  b.onclick = async () => {
+    const phone = phoneOf();
+    if (!/^09[0-9]{9}$/.test(phone)) {
+      $("#msg").innerHTML = note("bad", t("auth.err.phone"));
+      return;
+    }
+    b.disabled = true;
+    const label = b.textContent;
+    b.textContent = t("auth.code.sending");
+    try {
+      await post("/api/auth/request-code", { phone, purpose });
+      $("#msg").innerHTML = note("ok", t("auth.code.sent", phone));
+      onSent?.();
+      let left = 60;
+      b.textContent = `${t("auth.code.resend")} (${left})`;
+      const tick = setInterval(() => {
+        left -= 1;
+        if (left <= 0) {
+          clearInterval(tick);
+          b.disabled = false; b.textContent = t("auth.code.resend");
+        } else b.textContent = `${t("auth.code.resend")} (${left})`;
+      }, 1000);
+    } catch (err) {
+      $("#msg").innerHTML = note("bad", esc(err.message));
+      b.disabled = false; b.textContent = label;
+    }
+  };
+}
+
 export function signInPage(_p, msg) {
+  // Two ways in, one session. Password for people who remember it, a code for
+  // people who do not - phone is already the identity, so the second costs
+  // nothing extra to offer.
   renderBare(shell({
     title: t("auth.signin.title"), sub: t("auth.signin.sub"),
     cta: t("auth.signin.cta"),
     altText: t("auth.noaccount"), altHref: "/signup", altLabel: t("auth.createone"),
     msg,
     fields: `
-      <div class="field"><label for="username">${t("auth.username")}</label>
-        <input id="username" class="ltr" dir="ltr" autocomplete="username" autofocus></div>
-      <div class="field"><label for="pw">${t("auth.password")}</label>
-        <input id="pw" type="password" autocomplete="current-password"></div>`,
+      <div class="tabs2 auth-tabs" style="margin-bottom:14px">
+        <a href="#" id="tab-pw" class="active">${t("auth.tab.password")}</a>
+        <a href="#" id="tab-sms">${t("auth.tab.sms")}</a>
+      </div>
+      <div id="pane-pw">
+        <div class="field"><label for="identifier">${t("auth.identifier")}</label>
+          <input id="identifier" class="ltr" dir="ltr" autocomplete="username" autofocus></div>
+        <div class="field"><label for="pw">${t("auth.password")}</label>
+          <input id="pw" type="password" autocomplete="current-password"></div>
+      </div>
+      <div id="pane-sms" hidden>
+        <div class="field"><label for="sms-phone">${t("auth.phone.label")}</label>
+          <input id="sms-phone" class="ltr" dir="ltr" type="tel" inputmode="numeric"
+                 autocomplete="tel" maxlength="11" placeholder="09123456789"></div>
+        <div class="btn-row" style="margin-bottom:12px">
+          <button type="button" class="btn" id="sms-send">${t("auth.code.send")}</button>
+        </div>
+        <div class="field"><label for="sms-code">${t("auth.code.label")}</label>
+          <input id="sms-code" class="ltr mono" dir="ltr" inputmode="numeric"
+                 autocomplete="one-time-code" maxlength="8"></div>
+        <p class="tiny dim" style="margin:0 0 10px">${t("auth.code.hint")}</p>
+      </div>`,
   }));
+
+  let mode = "password";
+  const show = (which) => {
+    mode = which;
+    $("#pane-pw").hidden = which !== "password";
+    $("#pane-sms").hidden = which !== "sms";
+    $("#tab-pw").className = which === "password" ? "active" : "";
+    $("#tab-sms").className = which === "sms" ? "active" : "";
+    $("#msg").innerHTML = "";
+  };
+  $("#tab-pw").onclick = (e) => { e.preventDefault(); show("password"); };
+  $("#tab-sms").onclick = (e) => { e.preventDefault(); show("sms"); };
+
+  wireCodeRequest({
+    button: "#sms-send", purpose: "login",
+    phoneOf: () => $("#sms-phone").value.trim(),
+  });
 
   $("#form").onsubmit = async (e) => {
     e.preventDefault();
-    const btn = $("#form button");
+    const btn = $("#form button[type=submit]");
     btn.disabled = true; btn.textContent = t("auth.signin.busy");
     try {
-      await post("/api/auth/login", {
-        username: $("#username").value.trim().toLowerCase(), password: $("#pw").value });
+      if (mode === "password") {
+        await post("/api/auth/login", {
+          identifier: $("#identifier").value.trim().toLowerCase(),
+          password: $("#pw").value });
+      } else {
+        await post("/api/auth/login-sms", {
+          phone: $("#sms-phone").value.trim(),
+          code: $("#sms-code").value.trim() });
+      }
       await refreshMe();
       navigate("/console");
     } catch (err) {
@@ -65,9 +147,8 @@ export function signUpPage() {
         <input id="fullname" autocomplete="name" maxlength="120" autofocus></div>
       <div class="field"><label for="phone">${t("auth.phone")}</label>
         <input id="phone" class="ltr" dir="ltr" type="tel" inputmode="numeric"
-               autocomplete="tel" maxlength="11" placeholder="09123456789"></div>
-      <div class="field"><label for="email">${t("auth.email")}</label>
-        <input id="email" type="email" autocomplete="email"></div>
+               autocomplete="tel" maxlength="11" placeholder="09123456789">
+        <p class="tiny dim" style="margin:6px 0 0" id="phonehint">${t("auth.phone.hint")}</p></div>
       <div class="field"><label for="uname">${t("auth.username")}</label>
         <input id="uname" class="ltr" dir="ltr" autocomplete="username"
                maxlength="32" placeholder="ali-hosseini">
@@ -77,13 +158,25 @@ export function signUpPage() {
                minlength="${MIN_PW}" placeholder="${t("auth.password.placeholder")}">
         <p class="tiny dim" style="margin:6px 0 0">${t("auth.password.hint")}</p></div>
       <div class="field"><label for="pw2">${t("auth.password.confirm")}</label>
-        <input id="pw2" type="password" autocomplete="new-password"></div>`,
+        <input id="pw2" type="password" autocomplete="new-password"></div>
+      <div class="btn-row" style="margin:4px 0 12px">
+        <button type="button" class="btn" id="code-send">${t("auth.code.send")}</button>
+      </div>
+      <div class="field"><label for="code">${t("auth.code.label")}</label>
+        <input id="code" class="ltr mono" dir="ltr" inputmode="numeric"
+               autocomplete="one-time-code" maxlength="8"></div>
+      <p class="tiny dim" style="margin:0 0 10px">${t("auth.code.hint")}</p>`,
   }));
 
-  // Tells the customer a name is taken before they submit, and shows what the
-  // address will be - the username becomes part of a hostname, which is not
-  // obvious from a field labelled "username".
+  wireCodeRequest({
+    button: "#code-send", purpose: "signup",
+    phoneOf: () => $("#phone").value.trim(),
+  });
+
+  // Availability belongs to identity. Optional products must not define the
+  // signup journey merely because they also use this DNS-safe name.
   let unameTimer = null;
+  let phoneTimer = null;
   $("#uname").oninput = () => {
     clearTimeout(unameTimer);
     const hint = $("#unamehint");
@@ -94,24 +187,39 @@ export function signUpPage() {
         const r = await get(`/api/auth/username-available?name=${encodeURIComponent(v)}`);
         hint.className = r.available ? "tiny ok-text" : "tiny bad-text";
         hint.textContent = r.available
-          ? t("auth.username.free", `hermes.${r.username}.mmd-ai.ir`)
+          ? t("auth.username.free")
           : (r.reason || t("auth.err.username_taken"));
       } catch { /* the submit will say */ }
+    }, 350);
+  };
+  $("#phone").oninput = () => {
+    clearTimeout(phoneTimer);
+    const hint = $("#phonehint");
+    const v = $("#phone").value.trim();
+    if (!v) { hint.textContent = t("auth.phone.hint"); hint.className = "tiny dim"; return; }
+    if (!/^09[0-9]{9}$/.test(v)) { hint.textContent = t("auth.err.phone"); hint.className = "tiny bad-text"; return; }
+    phoneTimer = setTimeout(async () => {
+      try {
+        const r = await get(`/api/auth/phone-available?phone=${encodeURIComponent(v)}`);
+        hint.className = r.available ? "tiny ok-text" : "tiny bad-text";
+        hint.textContent = t(r.available ? "auth.phone.free" : "auth.err.phone_taken");
+      } catch { /* submit remains authoritative */ }
     }, 350);
   };
 
   $("#form").onsubmit = async (e) => {
     e.preventDefault();
-    const email = $("#email").value.trim(), pw = $("#pw").value, pw2 = $("#pw2").value;
+    const pw = $("#pw").value, pw2 = $("#pw2").value;
+    const code = $("#code").value.trim();
     const username = $("#uname").value.trim().toLowerCase();
     const fullName = $("#fullname").value.trim(), phone = $("#phone").value.trim();
     const fail = (m) => { $("#msg").innerHTML = note("bad", esc(m)); };
 
     // Checked here so the answer is instant and specific, rather than a server
     // round trip returning a validation blob.
-    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return fail(t("auth.err.email"));
     if (fullName.length < 2) return fail(t("auth.err.fullname"));
     if (!/^09[0-9]{9}$/.test(phone)) return fail(t("auth.err.phone"));
+    if (!code) return fail(t("auth.code.needed"));
     // Mirrors mmd/usernames.py. The server checks again - this is only so the
     // answer is instant.
     if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(username) || username.length < 3)
@@ -123,7 +231,7 @@ export function signUpPage() {
     btn.disabled = true; btn.textContent = t("auth.signup.busy");
     try {
       const r = await post("/api/auth/register",
-        { email, username, password: pw, full_name: fullName, phone });
+        { username, password: pw, full_name: fullName, phone, code });
       $("#form").innerHTML = "";
       // Keyed off the server's CODE. This used to compare the server's English
       // sentence, so any rewording of it would have shown the wrong message.

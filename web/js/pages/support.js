@@ -72,7 +72,7 @@ export async function supportPage(params) {
       <thead><tr><th>${t("tk.subject")}</th><th>${t("tk.status")}</th>
         <th>${t("tk.updated")}</th></tr></thead>
       <tbody>${rows}</tbody></table></div></div>`
-      : `<div class="card">${empty(t("tk.none"), icon.chat,
+      : `<div class="card">${empty(t("tk.none"), icon.lifebuoy,
           { href: "/console/support?new=1", label: t("tk.new.btn"), icon: "plus" })}</div>`}`);
 
   const form = $("#tk-form");

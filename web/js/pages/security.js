@@ -21,8 +21,6 @@ export async function securityPage() {
         <div class="field"><label for="profile-phone">${t("auth.phone")}</label>
           <input id="profile-phone" class="ltr" dir="ltr" type="tel" inputmode="numeric"
                  maxlength="11" value="${esc(me.phone || "")}"></div>
-        <div class="field"><label for="profile-email">${t("sec.email")}</label>
-          <input id="profile-email" class="ltr" dir="ltr" type="email" value="${esc(me.email)}"></div>
         <div class="field"><label for="profile-password">${t("sec.current.confirm")}</label>
           <input id="profile-password" type="password" autocomplete="current-password"></div>
         <button class="btn primary" type="submit">${t("sec.profile.save")}</button>
@@ -70,12 +68,11 @@ export async function securityPage() {
     e.preventDefault();
     const fullName = $("#profile-name").value.trim();
     const phone = $("#profile-phone").value.trim();
-    const email = $("#profile-email").value.trim();
     const fail = (m) => { $("#profilemsg").innerHTML = note("bad", esc(m)); };
     if (fullName.length < 2) return fail(t("auth.err.fullname"));
     if (!/^09[0-9]{9}$/.test(phone)) return fail(t("auth.err.phone"));
     try {
-      await put("/api/profile", { full_name: fullName, phone, email,
+      await put("/api/profile", { full_name: fullName, phone,
         current_password: $("#profile-password").value });
       await refreshMe();
       toast(t("sec.profile.saved"), "ok"); securityPage();

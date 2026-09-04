@@ -21,13 +21,13 @@ from sqlalchemy.pool import StaticPool             # noqa: E402
 from mmd import app as appmod                      # noqa: E402
 from mmd import ports as PORTS                     # noqa: E402
 from mmd import service as svc, worker             # noqa: E402
-from mmd.models import (Base, ExposedPort, Operation, PortKind, SshKey, User,  # noqa: E402
+from mmd.models import (Base, ExposedPort, OpenRouterAccount, Operation, PortKind, SshKey, User,  # noqa: E402
                         UserStatus, Workspace, WorkspaceState)
 from mmd.security import hash_password             # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 PASSWORD = "correct-horse-battery"
-EMAIL = "owner@example.com"
+USERNAME = "owner"
 
 
 @pytest.fixture
@@ -57,7 +57,7 @@ def env(monkeypatch):
     Local = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
     db = Local()
-    u = User(email=EMAIL, password_hash=hash_password(PASSWORD),
+    u = User(username=USERNAME, phone="09123456789", password_hash=hash_password(PASSWORD),
              status=UserStatus.APPROVED)
     db.add(u)
     db.commit()
@@ -71,6 +71,8 @@ def env(monkeypatch):
                    hermes_telegram_token="temporary-token",
                    hermes_telegram_users="123456789")
     db.add(ws)
+    db.add(OpenRouterAccount(user_id=u.id, key_hash="account-hash",
+                             key="account-secret", credit_blocked=False))
     db.commit()
     PORTS.reserve_service_ports(db, ws.id)
     db.add(SshKey(workspace_id=ws.id, key_type="ssh-ed25519", body="AAAA",
@@ -85,7 +87,7 @@ def env(monkeypatch):
 
 
 def _ok_body():
-    return {"confirm": EMAIL, "password": PASSWORD}
+    return {"confirm": USERNAME, "password": PASSWORD}
 
 
 def _finish_reset(db, ws):
@@ -99,7 +101,7 @@ def _finish_reset(db, ws):
 def test_the_wrong_password_is_refused(env):
     client, db, ws, *_ = env
     r = client.post("/api/workspace/reset",
-                    json={"confirm": EMAIL, "password": "not-it"})
+                    json={"confirm": USERNAME, "password": "not-it"})
     assert r.status_code == 403
     assert r.json()["detail"]["code"] == "bad_password"
     db.refresh(ws)
@@ -117,7 +119,7 @@ def test_the_wrong_typed_confirmation_is_refused(env):
 def test_neither_field_may_be_omitted(env):
     client, *_ = env
     assert client.post("/api/workspace/reset",
-                       json={"confirm": EMAIL}).status_code == 422
+                       json={"confirm": USERNAME}).status_code == 422
     assert client.post("/api/workspace/reset",
                        json={"password": PASSWORD}).status_code == 422
     assert client.post("/api/workspace/reset", json={}).status_code == 422
@@ -126,7 +128,7 @@ def test_neither_field_may_be_omitted(env):
 def test_an_empty_password_cannot_satisfy_it(env):
     """Guards against a client that sends "" for a field it did not collect."""
     client, *_ = env
-    r = client.post("/api/workspace/reset", json={"confirm": EMAIL, "password": ""})
+    r = client.post("/api/workspace/reset", json={"confirm": USERNAME, "password": ""})
     assert r.status_code == 422
 
 
@@ -135,7 +137,7 @@ def test_the_typed_confirmation_ignores_case_and_padding_only(env):
     letter - but nothing else is accepted."""
     client, db, ws, *_ = env
     r = client.post("/api/workspace/reset",
-                    json={"confirm": f"  {EMAIL.upper()}  ", "password": PASSWORD})
+                    json={"confirm": f"  {USERNAME.upper()}  ", "password": PASSWORD})
     assert r.status_code == 200
 
 
@@ -144,7 +146,7 @@ def test_a_refused_attempt_is_recorded(env):
     own activity log."""
     from mmd.models import AuditLog
     client, db, ws, *_ = env
-    client.post("/api/workspace/reset", json={"confirm": EMAIL, "password": "no"})
+    client.post("/api/workspace/reset", json={"confirm": USERNAME, "password": "no"})
     actions = [a.action for a in db.scalars(select(AuditLog))]
     assert "reset_refused" in actions
     assert "reset_started" not in actions
@@ -215,63 +217,34 @@ def test_the_services_are_switched_back_off(env):
     assert ws.auto_stop_at is None
 
 
-def test_reset_revokes_and_forgets_the_old_hermes_identity(env, monkeypatch):
+def test_reset_removes_hermes_but_preserves_account_openrouter(env, monkeypatch):
     client, db, ws, *_ = env
-    ws.hermes_key_hash = "old-hash"
-    ws.hermes_key = "old-secret"
     ws.hermes_dash_user = "old-user"
     ws.hermes_dash_password = "old-password"
     db.commit()
-    deleted = []
-
-    class Router:
-        def __init__(self, key): assert key == "management"
-        def __enter__(self): return self
-        def __exit__(self, *_): pass
-        def get_key(self, key):
-            return SimpleNamespace(usage_usd=0.0)
-        def delete_key(self, key): deleted.append(key)
-
-    monkeypatch.setattr(worker, "CONFIG", SimpleNamespace(openrouter_key="management"))
-    monkeypatch.setattr(worker, "OpenRouter", Router)
     client.post("/api/workspace/reset", json=_ok_body())
     _finish_reset(db, ws)
     db.refresh(ws)
 
-    assert deleted == ["old-hash"]
     assert ws.hermes_enabled is False
     assert ws.hermes_installed is False
-    assert ws.hermes_key_hash is None
-    assert ws.hermes_key is None
     assert ws.hermes_dash_user is None
     assert ws.hermes_dash_password is None
-    assert ws.hermes_limit_dirty is False
+    account = db.get(OpenRouterAccount, ws.user_id)
+    assert account.key_hash == "account-hash"
+    assert account.key == "account-secret"
 
 
-def test_failed_hermes_revocation_leaves_reset_retryable_and_unselected(env, monkeypatch):
+def test_supplier_outage_cannot_block_a_factory_reset(env, monkeypatch):
     client, db, ws, *_ = env
-    ws.hermes_key_hash = "live-hash"
-    ws.hermes_key = "live-secret"
-    db.commit()
-
-    class Router:
-        def __init__(self, key): pass
-        def __enter__(self): return self
-        def __exit__(self, *_): pass
-        def get_key(self, key):
-            raise worker.OpenRouterError("supplier unavailable")
-
-    monkeypatch.setattr(worker, "CONFIG", SimpleNamespace(openrouter_key="management"))
-    monkeypatch.setattr(worker, "OpenRouter", Router)
     client.post("/api/workspace/reset", json=_ok_body())
     op = _finish_reset(db, ws)
     db.refresh(ws)
 
-    assert ws.state is WorkspaceState.ERROR
+    assert ws.state is WorkspaceState.OFF
     assert ws.hermes_enabled is False
-    assert ws.hermes_key_hash == "live-hash"
-    assert op.status == "failed"
-    assert op.error_code == "reset_ai_cleanup_failed"
+    assert db.get(OpenRouterAccount, ws.user_id).key_hash == "account-hash"
+    assert op.status == "succeeded"
 
 
 def test_a_running_machine_is_billed_for_the_time_it_ran(env, monkeypatch):

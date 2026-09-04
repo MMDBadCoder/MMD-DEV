@@ -9,6 +9,12 @@ export async function portsPage() {
   let d;
   try { d = await get("/api/workspace/ports"); }
   catch (e) {
+    if (e.code === "no_workspace") {
+      render(`<div class="page-head"><h1>${t("ports.title")}</h1></div>
+        <div class="card empty"><p>${t("workspace.empty.short")}</p>
+          <a class="btn primary" href="/console">${icon.plus}${t("workspace.create")}</a></div>`);
+      return;
+    }
     render(`<div class="page-head"><h1>${t("ports.title")}</h1></div>${recoveryNote(e, { retry: true })}`);
     wireRecovery(portsPage);
     return;

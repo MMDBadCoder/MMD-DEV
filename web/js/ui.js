@@ -73,6 +73,8 @@ export const icon = {
               + '<path d="M12 2.2c-.5 5.6-.3 9.6 0 12.3"/>'
               + '<path d="M17.5 3.2c1 4.8.2 8.4-2.4 11.3"/>'
               + '<path d="M6.6 14.6c1.7 3.5 9.1 3.5 10.8 0"/>'),
+  opencode: P('<path d="M8 7 3 12l5 5M16 7l5 5-5 5M14 4l-4 16"/>'),
+  openwebui: P('<path d="M3 5h18v14H3zM3 9h18"/><circle cx="6" cy="7" r=".5"/><path d="M8 14h8M10 17h4"/>'),
   lock: P('<rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/>'),
   save: P('<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/>'),
   arrow: P('<path d="M5 12h14M13 6l6 6-6 6"/>'),
@@ -92,6 +94,25 @@ export const icon = {
   telegram: P('<path d="M22 2 15 22l-4-9-9-4z"/><path d="M22 2 11 13"/>'),
   bell: P('<path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21h4"/>'),
   link: P('<path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/>'),
+
+  // Four nav marks that were standing in for concepts they do not mean.
+  //
+  // `user` is ONE person, for the account page. `users` - a group - was doing
+  // that job on the admin link and reads as "the customer list", which is a
+  // page inside administration rather than administration itself.
+  user: P('<circle cx="12" cy="8" r="4"/><path d="M4 21v-1a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v1"/>'),
+  // A handset, not a bubble. The SMS page was wearing `bell`, which means
+  // "notification" in every interface that has one, and a bubble here would
+  // be indistinguishable from support beside it.
+  phone: P('<rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M11 18.5h2"/><path d="M9 6h6"/>'),
+  // A lifebuoy: the one shape that reads as HELP rather than as messaging.
+  // Support was wearing `chat`, a speech bubble, which is what a customer
+  // would reasonably read as "send a message" - the same thing the SMS page
+  // beside it does.
+  lifebuoy: P('<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3.6"/>'
+              + '<path d="M5.6 5.6l3.9 3.9M14.5 14.5l3.9 3.9M18.4 5.6l-3.9 3.9M9.5 14.5l-3.9 3.9"/>'),
+  // A cog for administration. Settings, not people.
+  cog: P('<circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1A1.6 1.6 0 0 0 9 19.4a1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1A1.6 1.6 0 0 0 4.6 9a1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H9a1.6 1.6 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V9a1.6 1.6 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z"/>'),
 };
 
 /* Machine state as a pill with a coloured dot.

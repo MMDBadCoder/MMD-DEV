@@ -27,7 +27,7 @@ from sqlalchemy.pool import StaticPool                     # noqa: E402
 from mmd import app as appmod                              # noqa: E402
 from mmd import service as svc                             # noqa: E402
 from mmd import usernames                                  # noqa: E402
-from mmd.models import (Base, User, UserStatus, Workspace,  # noqa: E402
+from mmd.models import (Base, OpenRouterAccount, User, UserStatus, Workspace,  # noqa: E402
                         WorkspaceState)
 
 
@@ -47,13 +47,15 @@ def env(monkeypatch):
     Base.metadata.create_all(engine)
     Local = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
     db = Local()
-    u = User(email="a@example.com", password_hash="x",
+    u = User(password_hash="x",
              status=UserStatus.APPROVED, username="ali")
     db.add(u)
     db.commit()
     ws = Workspace(user_id=u.id, idx=3, incus_project="ws-3",
                    state=WorkspaceState.ON, mem_mib=2048)
     db.add(ws)
+    db.add(OpenRouterAccount(user_id=u.id, key="sk-or-test", key_hash="or-hash",
+                             credit_blocked=False))
     db.commit()
 
     api = appmod.app
@@ -64,10 +66,77 @@ def env(monkeypatch):
 
 
 # --- both appear on the page ----------------------------------------------
-def test_the_ai_endpoint_reports_all_four_services(env):
+def test_the_ai_endpoint_reports_account_and_workspace_services(env):
     client, *_ = env
     d = client.get("/api/workspace/ai").json()
-    assert set(d) == {"claude", "hermes", "codex", "openclaw"}
+    assert set(d) == {"has_workspace", "openrouter", "claude", "hermes", "codex", "openclaw",
+                      "opencode", "openwebui"}
+
+
+@pytest.mark.parametrize("service", ["opencode", "openwebui"])
+def test_a_customer_can_enable_each_openrouter_backed_web_service(env, service):
+    client, db, ws, *_ = env
+    response = client.post(f"/api/workspace/managed-ai/{service}",
+                           json={"action": "enable"})
+    assert response.status_code == 200
+    db.refresh(ws)
+    assert getattr(ws, f"{service}_enabled") is True
+    state = response.json()[service]
+    assert state["needs_openrouter"] is False
+    assert state["host"].startswith("opencode." if service == "opencode" else "openweb.")
+
+
+def test_openrouter_credentials_are_never_returned_in_managed_service_state(env):
+    client, *_ = env
+    body = client.get("/api/workspace/ai").json()
+    assert "sk-or-test" not in str(body["opencode"])
+    assert "sk-or-test" not in str(body["openwebui"])
+
+
+def test_openwebui_reports_its_memory_requirement(env):
+    client, db, ws, *_ = env
+    ws.mem_mib = 1024
+    db.commit()
+    state = client.get("/api/workspace/ai").json()["openwebui"]
+    assert state["needs_memory"] is True
+    assert state["minimum_memory_mib"] == 2048
+
+    ws.mem_mib = 2048
+    db.commit()
+    assert client.get("/api/workspace/ai").json()["openwebui"]["needs_memory"] is False
+
+
+def test_opencode_credentials_are_streamed_into_a_regular_file(monkeypatch):
+    """Incus gives exec a pipe for stdin, so reopening `/dev/stdin` as an
+    `install` source fails on the real host although a mocked installer passes."""
+    import importlib.util
+    import json
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    spec = importlib.util.spec_from_file_location(
+        "managed_web_prov", root / "control" / "provisioner" / "provisioner.py")
+    prov = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(prov)
+    calls = []
+
+    def fake_run(command, timeout=0, stdin_text=None):
+        calls.append((command, stdin_text))
+        return True, ""
+
+    monkeypatch.setattr(prov, "_run", fake_run)
+    result = prov._verb_ai_managed_web("ws-1", {
+        "service": "opencode", "action": "install",
+        "openrouter_key": "sk-or-secret", "password": "strong-password",
+    })
+
+    assert result["ok"] is True
+    credential_call = next(c for c in calls if c[1] and "openrouter" in c[1])
+    command = credential_call[0][-1]
+    assert "cat > /home/dev/.local/share/opencode/auth.json" in command
+    assert "/dev/stdin" not in command
+    assert json.loads(credential_call[1]) == {
+        "openrouter": {"type": "api", "key": "sk-or-secret"}}
 
 
 # --- Codex: the Claude shape ----------------------------------------------
@@ -132,8 +201,11 @@ def test_openclaw_cannot_be_enabled_without_the_managed_key(env):
     """It spends the OpenRouter key. Without one there is nothing to configure
     it with, and a gateway that cannot reach a model is a dashboard that only
     produces errors."""
-    client, db, ws, _u, _c = env
-    assert ws.hermes_key is None
+    client, db, ws, u, _c = env
+    account = db.get(OpenRouterAccount, u.id)
+    account.key = None
+    account.key_hash = None
+    db.commit()
     r = client.post("/api/workspace/ai/openclaw", json={"action": "enable"})
     assert r.status_code == 409
     assert r.json()["detail"]["code"] == "needs_openrouter"
@@ -143,9 +215,6 @@ def test_openclaw_enable_records_intent_and_does_not_install(env):
     """Installing is an npm download and a service start - minutes of work that
     must not be held open on a customer's HTTP request."""
     client, db, ws, _u, calls = env
-    ws.hermes_key = "sk-or-test"
-    db.commit()
-
     r = client.post("/api/workspace/ai/openclaw", json={"action": "enable"})
     assert r.status_code == 200, r.text
     d = r.json()["openclaw"]
@@ -159,7 +228,6 @@ def test_disabling_clears_the_password_immediately(env):
     """So the interface stops showing a secret the moment the customer switches
     it off, rather than when the worker next runs."""
     client, db, ws, _u, _c = env
-    ws.hermes_key = "sk-or-test"
     ws.openclaw_enabled = True
     ws.openclaw_installed = True
     ws.openclaw_password = "sekrit"

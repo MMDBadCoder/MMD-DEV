@@ -19,10 +19,12 @@ import { $, esc, note, toast, fmtFa, fmtNum, stamp, icon, confirmDialog } from "
 import { t } from "../i18n.js";
 import { render } from "../main.js";
 import { adminHead } from "./adminnav.js";
+import { grafanaConfig, dashboardCard, mountDashboard } from "../grafana.js";
 
 const MIB = 1024 * 1024;
 
 export async function adminBackupPage() {
+  const _gf = await grafanaConfig();
   let d;
   try { d = await get("/api/admin/backup"); }
   catch (e) {
@@ -111,7 +113,10 @@ export async function adminBackupPage() {
       <p class="small">${t("adm.bk.about.restore")}</p>
       <p class="small mono ltr" dir="ltr">pg_restore -d mmd --clean --if-exists mmd-YYYYmmdd-HHMMSS.dump</p>
       <p class="small">${t("adm.bk.about.limit", fmtNum(d.max_bytes / MIB, 0))}</p>
-    </div>`);
+    </div>
+
+    ${dashboardCard(_gf, "backup")}`);
+  mountDashboard();
 
   $("#bk-save").onclick = async () => {
     const b = $("#bk-save");

@@ -25,13 +25,15 @@ _VALID = re.compile(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?$")
 # whether or not those hosts exist yet, because taking one back later means
 # renaming a live customer's dashboard.
 RESERVED = {
-    "www", "api", "admin", "root", "hermes", "claude", "codex", "openclaw",
+    "www", "api", "admin", "root", "ports", "hermes", "claude", "codex", "openclaw",
     "mail", "smtp", "imap",
     "ftp", "ns", "ns1", "ns2", "dns", "mx", "cdn", "static", "assets", "app",
     "dashboard", "console", "panel", "support", "help", "docs", "status",
     "billing", "pay", "payment", "account", "accounts", "login", "signin",
     "signup", "register", "auth", "oauth", "sso", "test", "demo", "example",
     "localhost", "mmd", "mmddev", "openrouter", "anthropic", "system",
+    "ssh", "rdp", "terminal", "gateway", "proxy", "registry", "health",
+    "monitor", "monitoring", "storage", "backup",
 }
 
 
@@ -80,23 +82,6 @@ def validate(raw: str) -> str:
     return name
 
 
-def derive_from_email(email: str) -> str:
-    """A starting username for an account that predates the field.
-
-    Used to backfill existing customers, who never got to choose. The local part
-    is sanitised rather than rejected - `seyfoori.amir.h` becomes
-    `seyfoori-amir-h`, because the alternative is an account with no address.
-    """
-    local = normalise(email).split("@", 1)[0]
-    name = re.sub(r"[^a-z0-9-]+", "-", local).strip("-")
-    name = re.sub(r"-{2,}", "-", name)[:MAX_LEN].strip("-")
-    if len(name) < MIN_LEN:
-        name = (name + "-user")[:MAX_LEN].strip("-")
-    if name in RESERVED or name.isdigit():
-        name = f"{name}-1"[:MAX_LEN].strip("-")
-    return name
-
-
 def make_unique(candidate: str, taken: set[str]) -> str:
     """Append the smallest numeric suffix that clears a collision."""
     if candidate not in taken:
@@ -123,3 +108,11 @@ def openclaw_host(username: str, domain: str) -> str:
     then refuses to connect.
     """
     return f"openclaw.{normalise(username)}.{domain}"
+
+
+def opencode_host(username: str, domain: str) -> str:
+    return f"opencode.{normalise(username)}.{domain}"
+
+
+def openwebui_host(username: str, domain: str) -> str:
+    return f"openweb.{normalise(username)}.{domain}"

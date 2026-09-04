@@ -137,7 +137,7 @@ def env():
     Base.metadata.create_all(engine)
     Local = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
     db = Local()
-    u = User(email="a@example.com", password_hash="x", status=UserStatus.APPROVED,
+    u = User(password_hash="x", status=UserStatus.APPROVED,
              username="ali")
     db.add(u)
     db.commit()

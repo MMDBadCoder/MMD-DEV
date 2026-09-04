@@ -27,6 +27,7 @@ import { aiPricingPage } from "./pages/aipricing.js";
 import { adminStoragePage } from "./pages/adminstorage.js";
 import { adminOpenClawPage } from "./pages/adminopenclaw.js";
 import { adminBackupPage } from "./pages/adminbackup.js";
+import { smsPrefsPage } from "./pages/smsprefs.js";
 
 export const state = { me: null, operations: [], notifications: [], notificationUnread: 0 };
 
@@ -92,8 +93,12 @@ const NAV = [
   { href: "/console/ports", key: "nav.ports", ic: "plug" },
   { href: "/console/billing", key: "nav.billing", ic: "card" },
   { href: "/console/activity", key: "nav.activity", ic: "clock" },
-  { href: "/console/account", key: "nav.account", ic: "shield" },
-  { href: "/console/support", key: "nav.support", ic: "chat" },
+  // One person for the account, a handset for SMS, a lifebuoy for support.
+  // These were a shield, a bell and a speech bubble - security, notifications
+  // and messaging, none of which is what the page does.
+  { href: "/console/account", key: "nav.account", ic: "user" },
+  { href: "/console/sms", key: "nav.sms", ic: "phone" },
+  { href: "/console/support", key: "nav.support", ic: "lifebuoy" },
 ];
 
 function chrome(bodyHtml) {
@@ -110,7 +115,7 @@ function chrome(bodyHtml) {
       path === n.href || (n.href !== "/console" && path.startsWith(n.href + "/")) ? "active" : ""}">
       ${icon[n.ic]}<span>${t(n.key)}</span>${badge(n.key)}</a>`).join("")
     + (me?.is_admin ? `<a href="/console/admin" class="${path.startsWith("/console/admin") ? "active" : ""}">
-      ${icon.users}<span>${t("nav.admin")}</span>${
+      ${icon.cog}<span>${t("nav.admin")}</span>${
         me.unread_staff_tickets ? `<span class="navbadge">${fmtFa(me.unread_staff_tickets)}</span>` : ""
       }</a>` : "");
 
@@ -122,7 +127,7 @@ function chrome(bodyHtml) {
            short of editing the URL, and clicking the logo is what they tried. -->
       <a href="/" class="brand" style="color:inherit;text-decoration:none">
         <span class="logo">${icon.machine}</span><span>${t("brand")}</span>
-        <small class="app-version" dir="ltr">v${me?.version || "1.6.0"}</small></a>
+        <small class="app-version" dir="ltr">v${me?.version || "1.7.0"}</small></a>
       <nav class="nav">${nav}</nav>
       <div class="spacer"></div>
       <div class="header-right">
@@ -216,6 +221,7 @@ route("/console/admin/claude", { title: "قیمت‌گذاری Claude", view: ai
 route("/console/admin/openclaw", { title: "OpenClaw", view: adminOpenClawPage, admin: true });
 route("/console/admin/storage", { title: "فضای ذخیره‌سازی", view: adminStoragePage, admin: true });
 route("/console/admin/backup", { title: "پشتیبان‌گیری", view: adminBackupPage, admin: true });
+route("/console/sms", { title: "پیامک‌ها", view: smsPrefsPage });
 route("/console/admin/codex", { title: "قیمت‌گذاری Codex", admin: true,
                                 view: () => aiPricingPage({ service: "codex" }) });
 // The old address, kept so a bookmark or an open tab does not 404.

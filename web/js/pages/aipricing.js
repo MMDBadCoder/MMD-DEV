@@ -29,6 +29,8 @@ const numCell = (id, v) =>
 export async function aiPricingPage(params) {
   const service = params?.service === "codex" ? "codex" : "claude";
   const d = await get(`/api/admin/ai-pricing?service=${service}`);
+  const dm = await get(`/api/admin/agent-model/${service}`)
+    .catch(() => ({ default_model: "" }));
 
   const rows = d.prices.map((p) => `<tr data-row="${p.id}">
       <td><input class="ltr mono" dir="ltr" id="m-${p.id}" value="${esc(p.model)}"
@@ -40,6 +42,21 @@ export async function aiPricingPage(params) {
       </td></tr>`).join("");
 
   render(`${adminHead(service, t(`adm.ai.title.${service}`), t(`adm.ai.sub.${service}`))}
+
+    <div class="card">
+      <h3>${t("adm.ai.model.title")}</h3>
+      <p class="muted small" style="max-width:74ch;margin:2px 0 12px">${
+        t("adm.ai.model.sub")}</p>
+      <label class="field" style="max-width:420px"><span>${t("adm.ai.model.label")}</span>
+        <input id="agent-model" class="ltr mono" dir="ltr" maxlength="128"
+               value="${esc(dm.default_model || "")}"
+               placeholder="${esc(t("adm.ai.model.placeholder"))}"></label>
+      <div class="btn-row" style="margin-top:12px">
+        <button class="btn primary" id="agent-model-save">${t("adm.ai.save")}</button>
+      </div>
+      ${note("info", t("adm.ai.model.note"))}
+      <div id="agent-model-msg"></div>
+    </div>
 
     ${d.unpriced_models.length
       ? note("warn", `${t("adm.ai.unpriced", d.unpriced_models.length)}
@@ -79,6 +96,19 @@ export async function aiPricingPage(params) {
       </table></div>
       <div id="msg"></div>
     </div>`);
+
+  $("#agent-model-save").onclick = async () => {
+    const b = $("#agent-model-save");
+    b.disabled = true;
+    try {
+      await put(`/api/admin/agent-model/${service}`,
+                { default_model: $("#agent-model").value.trim() });
+      toast(t("adm.saved"), "ok");
+    } catch (err) {
+      $("#agent-model-msg").innerHTML = note("bad", esc(err.message));
+    }
+    b.disabled = false;
+  };
 
   $("#discount").oninput = () => {
     $("#dhint").textContent = t("adm.ai.discount.hint", Number($("#discount").value) || 0);

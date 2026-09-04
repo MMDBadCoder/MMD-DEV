@@ -1,0 +1,10 @@
+[Unit]
+Description=Check that the MMD-DEV worker is still ticking
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=5min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target

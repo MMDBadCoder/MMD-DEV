@@ -76,47 +76,11 @@ class _WS:
     user = _U()
 
 
-def test_key_name_identifies_the_workspace_in_openrouters_dashboard():
-    assert hermes.key_name(_WS()) == "mmd-ws7-ali"
+def test_key_name_identifies_the_account_in_openrouters_dashboard():
+    assert hermes.key_name(_WS()) == "mmd-user3-ali"
 
 
 def test_key_name_survives_a_user_with_no_username():
     ws = _WS()
     ws.user = type("U", (), {"username": None})()
-    assert hermes.key_name(ws) == "mmd-ws7-user-3"
-
-
-# --- the allowlist --------------------------------------------------------
-from mmd.openrouter import build_allowlist  # noqa: E402
-
-
-def _m(mid, out_usd, in_usd=1.0):
-    return {"id": mid, "pricing": {"prompt": in_usd / 1e6, "completion": out_usd / 1e6}}
-
-
-def test_floating_aliases_are_excluded():
-    """OpenRouter REJECTS "~vendor/model-latest" ids in a guardrail allowlist.
-
-    Measured: including even one fails the whole PATCH with a 400, so the
-    previous allowlist stays in force - a policy that looks configured and
-    enforces something else entirely. They are also wrong on their own terms:
-    an alias that repoints at a costlier model walks straight through a ceiling
-    that was checked when the list was written.
-    """
-    out = build_allowlist([_m("~anthropic/claude-opus-latest", 5.0),
-                           _m("anthropic/claude-sonnet-4.5", 15.0)],
-                          max_output_usd=40.0)
-    assert out == ["anthropic/claude-sonnet-4.5"]
-
-
-def test_price_ceiling_blocks_the_expensive_ones():
-    out = build_allowlist([_m("openai/o1-pro", 600.0), _m("openai/gpt-5.5", 30.0)],
-                          max_output_usd=40.0)
-    assert out == ["openai/gpt-5.5"]
-
-
-def test_unpriced_models_are_excluded_rather_than_assumed_free():
-    """An entry with no published price is usually one whose cost is not known
-    yet; guessing in the customer's favour is guessing with the operator's
-    money."""
-    assert build_allowlist([_m("vendor/mystery", 0.0, 0.0)], max_output_usd=40.0) == []
+    assert hermes.key_name(ws) == "mmd-user3-user-3"

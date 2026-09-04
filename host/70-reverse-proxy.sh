@@ -144,6 +144,27 @@ $([ "$hsts" = hsts ] && printf '    # Two years, and deliberately WITHOUT includ
     # adding it later needs no rework.
     # location ~ ^/ws/([a-z0-9-]+)/code/ { ... }
 
+    location = /_mmd_admin_auth {
+        internal;
+        proxy_pass http://127.0.0.1:8000/api/admin/auth-check;
+        proxy_pass_request_body off;
+        proxy_set_header Content-Length "";
+        proxy_set_header Cookie \$http_cookie;
+    }
+
+    # Grafana itself listens only on loopback. The dashboard session is the
+    # authorization boundary; anonymous Grafana viewing is safe only behind
+    # this admin-only subrequest.
+    location /grafana/ {
+        auth_request /_mmd_admin_auth;
+        proxy_pass http://127.0.0.1:3002;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        add_header X-Frame-Options SAMEORIGIN always;
+    }
+
     location / {
         proxy_pass http://127.0.0.1:8000;
         proxy_set_header Host \$host;

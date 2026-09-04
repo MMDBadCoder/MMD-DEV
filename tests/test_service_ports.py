@@ -28,7 +28,7 @@ def db(monkeypatch):
 
 @pytest.fixture
 def ws(db):
-    u = User(email="dev@example.com", password_hash="x", status=UserStatus.APPROVED)
+    u = User(password_hash="x", status=UserStatus.APPROVED)
     db.add(u)
     db.commit()
     w = Workspace(user_id=u.id, idx=1, incus_project="ws-1", state=WorkspaceState.OFF)
@@ -86,7 +86,7 @@ def test_a_half_reserved_workspace_is_completed_not_duplicated(db, ws):
 
 
 def test_two_workspaces_never_share_an_external_port(db, ws):
-    other_user = User(email="two@example.com", password_hash="x",
+    other_user = User(password_hash="x",
                       status=UserStatus.APPROVED)
     db.add(other_user)
     db.commit()

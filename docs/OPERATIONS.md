@@ -66,7 +66,7 @@ journalctl -u mmd-api -u mmd-worker -f
 Quick database view:
 
 ```sql
-SELECT w.incus_project, u.email, w.state, w.desired_on,
+SELECT w.incus_project, u.username, w.state, w.desired_on,
        c.balance_micro/1000000.0 AS toman
   FROM workspaces w
   JOIN users u ON u.id = w.user_id
@@ -314,6 +314,40 @@ zfs list -t snapshot
 
 ---
 
+## Monitoring
+
+Prometheus (`127.0.0.1:9091`) scrapes the control plane every 60 seconds;
+Grafana (`127.0.0.1:3002`) serves eight dashboards. Neither is reachable from
+the internet — nginx proxies `/grafana/` behind an `auth_request` that checks
+the administrator session, and Grafana has its own login on top of that.
+
+- **Where to look**: each dashboard is embedded in the admin tab it describes.
+  Admin → Overview carries the Grafana credential (masked) and the direct link.
+- **What is exported**: `docs/METRICS.md`, generated from a live scrape.
+- **Raw PromQL**: `ssh -L 9091:127.0.0.1:9091 <host>`, then `localhost:9091`.
+- **Rotating the Grafana password**: `grafana-cli admin reset-admin-password`
+  reports success in this build and writes a hash the server then rejects. Set
+  the PBKDF2-SHA256 hash directly (10000 iterations, 50 bytes, the user's own
+  salt) and clear the `login_attempt` table, or delete the user and let Grafana
+  recreate it from `admin_password` in `grafana.ini`.
+- **Regenerating dashboards**: `python3 observability/build_dashboards.py`,
+  then copy to `/var/lib/grafana/dashboards/` and restart Grafana.
+
+## SMS
+
+Messages are queued into an outbox by whoever causes them and sent by the
+worker, which is the only process holding the Kavenegar key.
+
+- **Nothing is arriving**: check `sms_messages` for `status`. `skipped` means
+  the number is outside the temporary trial allowlist — clear
+  `MMD_SMS_ALLOWLIST` to lift it. `failed` means five attempts were exhausted;
+  `error` carries the provider's reason.
+- **Cost**: Persian is UCS-2, so a segment is 70 UTF-16 code units. Every
+  template is held to one segment by test; going over doubles the price.
+- **The worker has stopped**: `mmd-watchdog.timer` texts every administrator
+  after 15 minutes without a heartbeat. It sends directly rather than queueing,
+  because the process that drains the outbox is the one that failed.
+
 ## Recovery
 
 ### After a host reboot
@@ -358,12 +392,15 @@ bash verify/p2-cert-scope.sh
                      times overcommit (cpu ×2, memory ×1)
   ⇒ 6.0 cores / 5.75 GiB schedulable
   ⇒ 5 concurrent workspaces at the default tier
-  ⇒ ~6 total accounts, capped by the 68 GiB pool
+  ⇒ account count is independent of compute; workspace admission is guarded by
+     current pool usage and aggregate thin-provisioned allowances
 ```
 
-Disk caps total accounts, because the reservation is held even when a workspace
-is off. Growing means attaching a second block device — the pool is loop-backed
-today only because `/dev/vda1` fills the disk.
+Workspace datasets are thin-provisioned (`refquota`, no `refreservation`). The
+worker refuses creation before aggregate allowances or actual pool use become
+unsafe. Accounts without a workspace consume no workspace disk. Growing means
+attaching a second block device — the pool is loop-backed today only because
+`/dev/vda1` fills the disk.
 
 Watch:
 

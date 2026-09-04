@@ -12,7 +12,9 @@ export async function resourcesPage() {
   const [tiers, w] = await Promise.all([get("/api/tiers"), get("/api/workspace")]);
   if (w.status === "pending" || w.status === "none") {
     render(`<div class="page-head"><h1>${t("res.title")}</h1></div>
-      ${note("info", t("machine." + w.status))}`);
+      ${note("info", t("machine." + w.status))}
+      ${w.status === "none" ? `<div class="btn-row"><a class="btn primary" href="/console">${
+        icon.plus}${t("workspace.create")}</a></div>` : ""}`);
     return;
   }
 
@@ -70,6 +72,13 @@ export async function resourcesPage() {
         <button class="btn danger" id="reset-btn">${icon.refresh}${t("reset.button")}</button>
       </div>
       <div id="reset-msg"></div>
+      <hr style="border:0;border-top:1px solid var(--border);margin:22px 0">
+      <div class="between" style="gap:18px">
+        <div><div style="font-weight:650">${t("workspace.delete.title")}</div>
+          <p class="muted small" style="margin:4px 0 0;max-width:52ch">${t("workspace.delete.body")}</p></div>
+        <button class="btn danger" id="delete-workspace">${icon.trash}${t("workspace.delete.button")}</button>
+      </div>
+      <div id="delete-workspace-msg"></div>
     </div>`);
 
   const priceOf = (cpu, mem) =>
@@ -107,8 +116,9 @@ export async function resourcesPage() {
       intro: t("reset.intro", w.label),
       destroys: [t("reset.d.files"), t("reset.d.packages"), t("reset.d.docker"),
                  t("reset.d.hermes")],
-      keeps: [t("reset.k.ports"), t("reset.k.keys"), t("reset.k.size"), t("reset.k.credit")],
-      expect: state.me?.email || "",
+      keeps: [t("reset.k.ports"), t("reset.k.keys"), t("reset.k.size"),
+              t("reset.k.credit"), t("reset.k.openrouter")],
+      expect: state.me?.username || "",
       label: t("reset.confirm"),
     });
     if (!answer) return;
@@ -125,6 +135,28 @@ export async function resourcesPage() {
       wireRecovery(() => $("#reset-btn").click(), $("#reset-msg"));
       btn.disabled = false;
       btn.innerHTML = `${icon.refresh}${t("reset.button")}`;
+    }
+  };
+
+  $("#delete-workspace").onclick = async () => {
+    const answer = await dangerDialog({
+      title: t("workspace.delete.title"), intro: t("workspace.delete.intro", w.label),
+      destroys: [t("reset.d.files"), t("reset.d.packages"), t("reset.d.docker"),
+                 t("workspace.delete.addresses"), t("workspace.delete.access")],
+      keeps: [t("workspace.delete.account"), t("workspace.delete.openrouter"),
+              t("reset.k.credit")],
+      expect: state.me?.username || "", label: t("workspace.delete.confirm"),
+    });
+    if (!answer) return;
+    const b = $("#delete-workspace");
+    b.disabled = true; b.innerHTML = `<span class="spinner"></span>${t("workspace.delete.working")}`;
+    try {
+      await post("/api/workspace/delete", answer);
+      toast(t("workspace.delete.queued"), "ok"); navigate("/console");
+    } catch (err) {
+      $("#delete-workspace-msg").innerHTML = recoveryNote(err, { retry: true });
+      wireRecovery(() => b.click(), $("#delete-workspace-msg"));
+      b.disabled = false; b.innerHTML = `${icon.trash}${t("workspace.delete.button")}`;
     }
   };
 

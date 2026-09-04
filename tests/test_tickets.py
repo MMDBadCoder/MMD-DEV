@@ -24,9 +24,9 @@ def db():
 
 @pytest.fixture
 def people(db):
-    customer = User(email="dev@example.com", password_hash="x",
+    customer = User(password_hash="x",
                     status=UserStatus.APPROVED)
-    staff = User(email="ops@example.com", password_hash="x", is_admin=True,
+    staff = User(password_hash="x", is_admin=True,
                  status=UserStatus.APPROVED)
     db.add_all([customer, staff])
     db.commit()

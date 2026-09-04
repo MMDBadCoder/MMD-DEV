@@ -6,7 +6,7 @@
  *
  *   1. an acknowledgement of each category of loss, ticked individually - so
  *      the list is read rather than dismissed;
- *   2. the account's own email, TYPED - it cannot be copied out of the dialog,
+ *   2. the account's own username, TYPED - it cannot be copied out of the dialog,
  *      and it identifies whose machine this is;
  *   3. the account password, verified by the server - which is the only part a
  *      stranger at an unlocked browser cannot supply.

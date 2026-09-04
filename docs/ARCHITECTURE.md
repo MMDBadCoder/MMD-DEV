@@ -68,8 +68,16 @@ decorative.
  instance "ws"   instance "ws"    instance "ws"
 
  mmd-worker (user `mmd`) ── metrics scrape · hourly settlement
-                            lifecycle · reconciliation
+                            lifecycle · reconciliation · SMS outbox
+ mmd-watchdog (timer)   ── notices when the worker stops, and says so
  PostgreSQL ── the authority on desired state and on money
+
+ Observability, all on loopback and never exposed:
+
+   mmd-api /internal/metrics ──► Prometheus :9091 ──► Grafana :3002
+        (bearer token)                                    │
+                                     nginx /grafana/ ◄────┘
+                                  (admin session + Grafana's own login)
 ```
 
 ### Three credentials, three blast radii
@@ -80,6 +88,14 @@ decorative.
 | `mmd-worker` | `mmd` | metrics cert + the restricted client cert | scrape usage, stop on exhaustion |
 | `mmd-provisioner` | `root` | unix socket (full admin) | create, reset, archive, restore, destroy |
 | `mmd-vhosts` | `root` | none — reads the database only | write `/etc/nginx/sites-enabled`, run certbot |
+| `mmd-watchdog` | `mmd` | none — reads the database only | send one SMS when the worker stops ticking |
+
+Two credentials are delivered by `LoadCredential` to the worker alone — the
+OpenRouter management key and the Kavenegar SMS key. Both spend money, and
+`mmd-api` runs as the same user, so any file mode that let the worker read them
+would let the internet-facing process read them too. `mmd-watchdog` holds the
+SMS key as well, because it has to report the failure of the process that would
+otherwise send the message.
 
 `mmd-vhosts` is a fourth component for one reason: it needs root *and* the
 internet, and neither of the others can give it both. `mmd-provisioner` is root
@@ -183,9 +199,10 @@ sells "your own machine" and keeps host specs invisible.
 ### Storage
 
 A ZFS pool on a **preallocated, non-sparse** file vdev, so ZFS can never believe
-it has space the host lacks. Per-volume defaults are `volume.zfs.use_refquota`
-and `volume.zfs.reserve_space` — a quota alone caps the owner but does not stop
-other tenants consuming free space; a real reservation needs `refreservation`.
+it has space the host lacks. Workspace datasets are thin-provisioned with hard
+`refquota` limits and no `refreservation`. A worker-side pool guard samples
+aggregate use and stops the largest running writers below the configured free
+space floor; per-tenant quotas alone cannot protect an overcommitted sum.
 
 Docker gets a **separate ext4-on-zvol volume** mounted at `/var/lib/docker`. On a
 ZFS-backed rootfs Docker selects the `zfs` graph driver and fails outright, since
@@ -225,7 +242,7 @@ implementation effort.
 
 ### Data model
 
-`users` · `workspaces` · `credit_accounts` · `credit_transactions` ·
+`users` · `openrouter_accounts` · `workspaces` · `credit_accounts` · `credit_transactions` ·
 `usage_samples` · `exposed_ports` · `ssh_keys` · `settings` · `audit_log` ·
 `tickets` · `ticket_messages`
 
@@ -233,19 +250,27 @@ Money is **integer micro-Toman** (`MICRO = 1_000_000`). Billing accrues per
 minute and settles hourly, so floats would drift and eventually disagree with
 the ledger.
 
-`credit_transactions` is unique on `(workspace_id, period_start, kind)`. That
-idempotency key is what makes a worker restart mid-hour safe rather than a
-double charge.
+Workspace charges are unique on `(workspace_id, period_start, kind)`.
+Account-level OpenRouter charges use `(scope_key, period_start, kind)`, because
+PostgreSQL considers NULL workspace IDs distinct and would otherwise permit a
+retry to charge twice.
 
 ### State machine
 
 ```
-provisioning ──► off ⇄ on
+approved account (OpenRouter available, no compute)
+                  │
+                  └── customer requests workspace
+                              │
+provisioning ──► off ⇄ on     │
                   │      │
                   │      └──► error ──┐   (reconciler adopts reality)
                   ├──► resetting ─────┤
                   └──► archiving ──► archived ──► deleting ──► deleted
 ```
+
+Workspace deletion returns to the approved-account state and preserves the
+OpenRouter account. Only full account deletion revokes that supplier key.
 
 `state` is what Incus actually reports; `desired_on` is what the customer asked
 for. The worker reconciles one toward the other, which is also how a host reboot

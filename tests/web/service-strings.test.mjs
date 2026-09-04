@@ -59,12 +59,12 @@ const signIn = AUTH.slice(AUTH.indexOf("export function signInPage"),
                           AUTH.indexOf("export function signUpPage"));
 const signUp = AUTH.slice(AUTH.indexOf("export function signUpPage"));
 
-test("sign-in uses only username and password", () => {
-  assert.ok(signIn.includes('id="username"'), signIn);
+test("sign-in uses only username-or-phone and password", () => {
+  assert.ok(signIn.includes('id="identifier"'), signIn);
   assert.ok(signIn.includes('id="pw"'), signIn);
   for (const field of ['id="email"', 'id="phone"', 'id="fullname"'])
     assert.ok(!signIn.includes(field), `${field} leaked into sign-in`);
-  assert.match(signIn, /username:\s*\$\("#username"\)/);
+  assert.match(signIn, /identifier:\s*\$\("#identifier"\)/);
 });
 
 test("sign-in does not call the username-availability endpoint", () => {
@@ -72,9 +72,11 @@ test("sign-in does not call the username-availability endpoint", () => {
 });
 
 test("sign-up collects every required identity field", () => {
-  for (const field of ['id="fullname"', 'id="phone"', 'id="email"', 'id="uname"', 'id="pw"'])
+  for (const field of ['id="fullname"', 'id="phone"', 'id="uname"', 'id="pw"'])
     assert.ok(signUp.includes(field), `${field} missing from signup`);
+  assert.ok(!signUp.includes('id="email"'));
   assert.ok(signUp.includes("username-available"));
+  assert.ok(signUp.includes("phone-available"));
 });
 
 test("the Hermes secrets are laid out one per row", () => {
@@ -213,4 +215,10 @@ test("the Telegram buttons carry Telegram's own mark", () => {
   const tg = AI_SRC.slice(AI_SRC.indexOf("function telegramSection"));
   const section = tg.slice(0, tg.indexOf("function repoll"));
   assert.ok(!section.includes("icon.chat"), "still using the generic chat bubble");
+});
+
+test("all seven AI tabs stay inside the page", () => {
+  const css = read("web/app.css");
+  assert.ok(AI_SRC.includes('class="tabs2 ai-tabs"'));
+  assert.match(css, /\.ai-tabs\s*\{[^}]*flex-wrap:\s*wrap/);
 });

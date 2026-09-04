@@ -24,11 +24,10 @@ test("the overview contains no commercial or capacity configuration", () => {
   assert.doesNotMatch(admin, /api\/admin\/ai-pricing|api\/admin\/settings|api\/admin\/capacity/);
 });
 
-test("OpenRouter owns exchange rate and supplier policy without a discount", () => {
+test("OpenRouter owns exchange rate without restricting model choice", () => {
   assert.match(openrouter, /api\/admin\/openrouter/);
   assert.match(openrouter, /usd_to_toman/);
-  assert.match(openrouter, /workspace_id/);
-  assert.match(openrouter, /guardrail_id/);
+  assert.doesNotMatch(openrouter, /workspace_id|guardrail_id|max_output_usd/);
   assert.doesNotMatch(openrouter, /discount_percent:/);
 });
 
@@ -37,10 +36,18 @@ test("Claude owns the only editable AI discount", () => {
   assert.doesNotMatch(claude, /id="usdrate"|openrouter_discount_percent/);
 });
 
-test("capacity policy, rates and monitoring share their dedicated page", () => {
+test("the tariff page keeps the form and delegates the charts", () => {
+  // The rate card is a form - something an operator changes - so it stays in
+  // the app. The usage and capacity readings beneath it were redrawn on every
+  // visit with no history; Prometheus already stores the same series, so the
+  // page now embeds a dashboard instead of drawing them.
   assert.match(policy, /api\/admin\/settings/);
-  assert.match(policy, /api\/admin\/capacity/);
-  assert.match(policy, /api\/admin\/metrics/);
+  // Matched on the CALL, not the bare path: the file's header comment still
+  // names the old endpoints when explaining why they went, and that history
+  // is worth keeping.
+  assert.doesNotMatch(policy, /get\("\/api\/admin\/capacity/);
+  assert.doesNotMatch(policy, /get\(`?\/api\/admin\/metrics/);
+  assert.match(policy, /dashboardCard\(_gf, "policy"\)/);
 });
 
 test("Hermes links to OpenRouter's highest-discount model view", () => {

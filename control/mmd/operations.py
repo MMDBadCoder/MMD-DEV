@@ -6,8 +6,9 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .models import Operation
+from .models import Operation, User
 from . import notifications
+from . import sms as smslib
 
 ACTIVE = ("queued", "running")
 
@@ -55,6 +56,11 @@ def finish(db: Session, op: Operation, now: datetime) -> None:
         notifications.emit(db, user_id=op.user_id, kind="operation",
                            code=f"{op.kind}_succeeded", severity="success",
                            href="/console", dedupe_key=f"operation:{op.id}")
+        # Only creation. Provisioning takes minutes and the customer has very
+        # likely closed the tab; every other operation finishes while they are
+        # still watching, and texting those would be noise.
+        if op.kind == "workspace_create":
+            _text(db, op.user_id, "workspace_ready", f"opdone:{op.id}")
 
 
 def fail(db: Session, op: Operation, code: str, now: datetime) -> None:
@@ -68,3 +74,22 @@ def fail(db: Session, op: Operation, code: str, now: datetime) -> None:
                            code=f"{op.kind}_failed", severity="critical",
                            detail={"error_code": code}, href="/console/support",
                            dedupe_key=f"operation:{op.id}")
+        _text(db, op.user_id, "operation_failed", f"opfail:{op.id}")
+
+
+def _text(db: Session, user_id: int, kind: str, dedupe_key: str) -> None:
+    """Queue a message about an operation, honouring the owner's preferences.
+
+    Swallows its own failures: an operation's outcome is already recorded, and
+    a notification problem must not turn a succeeded operation into a failed
+    one.
+    """
+    user = db.get(User, user_id)
+    if user is None:
+        return
+    try:
+        smslib.queue(db, user_id=user.id, phone=user.phone, kind=kind,
+                     user=user, dedupe_key=dedupe_key)
+        db.commit()
+    except smslib.SmsError:
+        pass

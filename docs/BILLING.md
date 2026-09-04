@@ -11,9 +11,10 @@ permitted to compute a price.
 
 ### 1. Disk bills every hour, in every state
 
-On, off, or archived. A stopped workspace still holds its full ZFS
-`refreservation` — the space is genuinely unavailable to anyone else — so this
-is the one cost that never falls to zero. Archived disk bills at a reduced rate.
+On, off, or archived. A stopped workspace still owns a hard disk allowance and
+retains its data, even though the ZFS pool is thin-provisioned rather than
+physically reserved per customer. This charge exists only while a workspace or
+archive exists; an approved OpenRouter-only account has no disk charge.
 
 ### 2. CPU and memory bill only while on, in two components
 
@@ -91,29 +92,30 @@ breakdown; history is not rewritten because a price changed.
 ```
 CPU     0.5, 1, 2, 3 vCPU          (stored as millicores: 500, 1000, 2000, 3000)
 Memory  0.5, 1, 2, 3, 4, 5, 6 GiB
-Disk    6 GiB root + 4 GiB Docker  (fixed)
+Disk    6 GiB root + 8 GiB Docker  (fixed)
 ```
 
-Default tier is **1 core / 1 GiB / 10 GiB**.
+Default tier is **1 core / 1 GiB / 14 GiB**.
 
 ---
 
 ## Worked example — the default tier
 
 ```
-disk         10 GiB × 3                        =  30
+disk         14 GiB × 3                        =  42
 cpu reserve   1 core × 200                     = 200
 mem reserve   1 GiB  × 100                     = 100
                                                  ───
-off, per hour                                     30 Toman
+off, per hour                                     42 Toman
 
-idle on-hour  = 330 + measured usage near zero  ≈ 330 Toman
-full-capacity = 330 + (1 × 100) + (1 × 50)      = 480 Toman   ← the gate
-archived      = 10 GiB × 1.5                    =  15 Toman
+idle on-hour  = 342 + measured usage near zero  ≈ 342 Toman
+full-capacity = 342 + (1 × 100) + (1 × 50)      = 492 Toman   ← the gate
+archived      = 14 GiB × 1.5                    =  21 Toman
 ```
 
-So a machine that is never switched on costs **30 Toman/hour**, roughly 21,600
-Toman a month, and the balance must hold **480 Toman** before it will start.
+So an existing machine that is never switched on costs **42 Toman/hour**, and
+the balance must hold **492 Toman** before it will start. An account whose
+customer deleted or never created a workspace has no machine charge.
 
 ---
 
