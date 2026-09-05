@@ -36,7 +36,6 @@ export async function adminMonitorPage() {
 `);
   mountDashboard();
 
-  wireWindowPicker(document, (m) => { saveWindow(m); adminMonitorPage(); });
   $("#save-policy").onclick = async () => {
     clearFormErrors($("#policy-settings"));
     const body = {};

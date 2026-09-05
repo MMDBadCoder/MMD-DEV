@@ -152,6 +152,8 @@ CATALOGUE: dict[str, Template] = {t.kind: t for t in [
        lambda d: f"کد تأیید شما\n{d.get('code', '')}"),
     _t("login_code", "auth", "customer", False,
        lambda d: f"کد ورود شما\n{d.get('code', '')}"),
+    _t("password_reset_code", "auth", "customer", False,
+       lambda d: f"کد بازیابی گذرواژه\n{d.get('code', '')}"),
 
     # --- to the operator ---
     _t("admin_signup_pending", "admin", "admin", True,

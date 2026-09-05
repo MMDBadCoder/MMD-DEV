@@ -171,11 +171,13 @@ def test_a_new_ticket_is_unread_to_staff_and_read_to_its_author(env):
     assert client.get("/api/admin/tickets").json()["tickets"][0]["unread"] is True
 
 
-def test_opening_the_thread_clears_the_mark(env):
+def test_reading_a_thread_is_an_explicit_mutation(env):
     client, as_user, alice, bob, ops, _ = env
     tk = _open(client)
     as_user(ops)
     client.get(f"/api/admin/tickets/{tk['id']}")
+    assert client.get("/api/admin/tickets").json()["tickets"][0]["unread"] is True
+    client.post(f"/api/admin/tickets/{tk['id']}/read")
     assert client.get("/api/admin/tickets").json()["tickets"][0]["unread"] is False
 
 
@@ -187,6 +189,8 @@ def test_an_answer_shows_as_unread_to_the_customer(env):
     as_user(alice)
     assert client.get("/api/tickets").json()["tickets"][0]["unread"] is True
     client.get(f"/api/tickets/{tk['id']}")
+    assert client.get("/api/tickets").json()["tickets"][0]["unread"] is True
+    client.post(f"/api/tickets/{tk['id']}/read")
     assert client.get("/api/tickets").json()["tickets"][0]["unread"] is False
 
 

@@ -34,6 +34,10 @@ test("transient and background feedback is announced", () => {
   assert.match(html, /id="toasts"[^>]+aria-live="polite"/);
   assert.match(ui, /setAttribute\("role", kind === "bad" \? "alert" : "status"\)/);
   assert.match(main, /operation-strip[^>]+role="status"[^>]+aria-live="polite"/);
+  assert.match(main, /account-phone-prompt[^>]+role="status"/);
+  assert.match(main, /id="background-status"[^>]+aria-live="polite"/);
+  assert.match(main, /background\.refresh\.failed/);
+  assert.match(css, /\.sr-only/);
 });
 
 test("sign-in choices implement the tab keyboard pattern", () => {

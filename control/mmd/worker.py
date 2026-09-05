@@ -1041,12 +1041,6 @@ async def _factory_reset(db, op: Operation, ws: Workspace) -> None:
     # The account-level OpenRouter key deliberately survives this operation.
     ws.hermes_installed = False
     ws.hermes_vhost_ready = False
-    # Legacy duplicates migrated to OpenRouterAccount at startup. Clear them
-    # from the rebuilt machine row without touching the account credential.
-    ws.hermes_key = None
-    ws.hermes_key_hash = None
-    ws.hermes_credit_blocked = False
-    ws.hermes_limit_dirty = False
     ws.hermes_telegram_enabled = False
     ws.hermes_telegram_installed = False
     ws.hermes_telegram_token = None
@@ -1188,10 +1182,13 @@ async def reconcile_once() -> None:
 
                 if ws.state in (WorkspaceState.ERROR, WorkspaceState.STARTING,
                                 WorkspaceState.STOPPING):
+                    previous_state = ws.state.value
+                    observed_state = (WorkspaceState.ON if actually_on
+                                      else WorkspaceState.OFF)
                     log.info("%s was %s; Incus reports %s - adopting that",
-                             ws.incus_project, ws.state.value,
+                             ws.incus_project, previous_state,
                              "running" if actually_on else "stopped")
-                    ws.state = WorkspaceState.ON if actually_on else WorkspaceState.OFF
+                    ws.state = observed_state
                     ws.error = None
                     # Billing follows the observed state, not the stuck one: a
                     # machine recorded as running must have a period to bill
@@ -1200,7 +1197,11 @@ async def reconcile_once() -> None:
                         ws.period_start = svc.now()
                     if not actually_on:
                         ws.period_start = None
-                    db.commit()
+                    svc.audit(db, None, "workspace_state_adopted", ws.incus_project,
+                              previous_state=previous_state,
+                              observed_state=observed_state.value)
+                    m.inc("mmd_workspace_state_adoptions_total",
+                          {"from": previous_state, "to": observed_state.value})
                 if actually_on and (ws.state == WorkspaceState.OFF
                                     or not ws.desired_on):
                     # Running but the ledger says off - it is being billed as
@@ -1445,6 +1446,7 @@ async def backup_once() -> None:
 # render as zero, not as an absent series.
 m.inc("mmd_worker_tick_failures_total", None, 0)
 m.inc("mmd_worker_ticks_total", {"result": "failed"}, 0)
+m.inc("mmd_workspace_state_adoptions_total", {"from": "error", "to": "on"}, 0)
 
 
 async def main() -> None:

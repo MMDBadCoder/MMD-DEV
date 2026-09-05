@@ -22,6 +22,7 @@ export const SECTIONS = [
   { key: "hermes",      path: "/console/admin/hermes",     ic: "hermes" },
   { key: "openclaw",    path: "/console/admin/openclaw",   ic: "openclaw" },
   { key: "tickets",     path: "/console/admin/tickets",    ic: "lifebuoy" },
+  { key: "activity",    path: "/console/admin/activity",   ic: "clock" },
   { key: "backup",      path: "/console/admin/backup",     ic: "archive" },
 ];
 

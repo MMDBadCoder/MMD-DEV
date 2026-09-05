@@ -4,6 +4,38 @@ Notable changes. Dates are the day the work landed on the production host.
 
 ## Unreleased
 
+### Added
+
+- Added SMS password recovery with purpose-scoped, expiring, single-use codes;
+  successful recovery revokes existing sessions and sends the account security
+  notice. Legacy accounts without a verified phone now receive a persistent
+  action to complete their profile.
+- Added a searchable, paginated global audit trail to the admin panel, including
+  actor, target, technical action code and structured details.
+- Workspace state recovered from Incus reality now produces both an audit event
+  and the `mmd_workspace_state_adoptions_total` metric.
+
+### Fixed
+
+- Ticket GET endpoints no longer mutate unread state; customer and admin pages
+  explicitly mark an opened thread as read.
+- Removed the unused privileged admin-storage GET and a stale monitoring-window
+  callback that stopped the tariff form from wiring its Save action.
+- Customer copy consistently calls optional compute a machine and reserves
+  “host server” for physical-capacity messages.
+- Background operations, notification arrival, refresh failure and recovery are
+  announced through assistive-technology live regions.
+- Expired sessions stop background polling and return the stale tab to sign-in
+  instead of sending an unbounded stream of unauthorized requests.
+
+### Changed
+
+- Migrated and dropped five obsolete workspace columns that duplicated live
+  OpenRouter keys, usage and limit state; active Hermes service fields remain.
+- Prometheus retention is explicitly fixed at 15 days.
+- Removed 94 unreferenced Persian catalogue entries and added a regression test
+  that rejects new dead interface strings.
+
 ## [1.8.0] — 2026-09-05
 
 - Support and admin-profile forms now focus and describe the exact invalid

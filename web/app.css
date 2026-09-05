@@ -89,6 +89,9 @@ body{
 [dir="rtl"] .mono,[dir="rtl"] .ltr{unicode-bidi:isolate}
 a{color:var(--brand);text-decoration:none}
 a:hover{text-decoration:underline}
+.sr-only{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;
+  margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;
+  white-space:nowrap!important;border:0!important}
 .skip-link{position:fixed;z-index:500;inset-block-start:8px;inset-inline-start:8px;
   padding:9px 14px;border-radius:8px;background:var(--ink);color:var(--surface);
   transform:translateY(-150%);transition:transform .15s ease}

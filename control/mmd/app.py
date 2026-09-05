@@ -222,7 +222,7 @@ class SignUp(BaseModel):
 
 class CodeRequest(BaseModel):
     phone: str = Field(pattern=r"^09[0-9]{9}$")
-    purpose: str = Field(pattern=r"^(signup|login|profile)$")
+    purpose: str = Field(pattern=r"^(signup|login|profile|recovery)$")
 
 
 class SmsLogin(BaseModel):
@@ -244,6 +244,12 @@ class LoginBody(BaseModel):
 
 class PasswordChange(BaseModel):
     current_password: str
+    new_password: str = Field(min_length=10, max_length=200)
+
+
+class PasswordReset(BaseModel):
+    phone: str = Field(pattern=r"^09[0-9]{9}$")
+    code: str = Field(min_length=4, max_length=8)
     new_password: str = Field(min_length=10, max_length=200)
 
 
@@ -853,12 +859,13 @@ def request_code(body: CodeRequest, db: Session = Depends(get_session)) -> dict:
         code = smscode.issue(db, phone, body.purpose)
     except smscode.CodeError as e:
         fail(429, e.code, str(e))
-    if body.purpose == "login" and not exists:
+    if body.purpose in ("login", "recovery") and not exists:
         db.commit()
         return {"ok": True}
     smslib.queue(db, user_id=None, phone=phone,
-                 kind=("login_code" if body.purpose == "login"
-                       else "verification_code"),
+                 kind=("login_code" if body.purpose == "login" else
+                       "password_reset_code" if body.purpose == "recovery" else
+                       "verification_code"),
                  detail={"code": code})
     db.commit()
     return {"ok": True}
@@ -885,6 +892,37 @@ def login_sms(body: SmsLogin, response: Response,
     svc.audit(db, user.id, "sign_in_sms", user.username)
     _notify_new_login(db, user)
     return {"status": user.status.value, "is_admin": user.is_admin}
+
+
+@app.post("/api/auth/reset-password")
+def reset_password(body: PasswordReset,
+                   db: Session = Depends(get_session)) -> dict:
+    """Replace a forgotten password after proving ownership of the phone.
+
+    Verification deliberately precedes lookup, matching SMS sign-in: unknown
+    numbers and bad codes must not become an account-discovery endpoint.
+    Consuming the code and changing the password share one commit, so a failed
+    write cannot strand a customer with a spent recovery code.
+    """
+    try:
+        smscode.verify(db, body.phone, "recovery", body.code)
+    except smscode.CodeError as e:
+        m.inc("mmd_auth_failures_total",
+              {"method": "recovery", "reason": e.code})
+        fail(401, e.code, str(e))
+    user = db.scalar(select(User).where(User.phone == body.phone))
+    if user is None:
+        fail(401, "bad_credentials", "Incorrect phone or code")
+    user.password_hash = hash_password(body.new_password)
+    user.session_version += 1
+    try:
+        smslib.queue(db, user_id=user.id, phone=user.phone,
+                     kind="password_changed")
+    except smslib.SmsError:
+        pass
+    db.commit()
+    svc.audit(db, user.id, "password_reset", user.username)
+    return {"ok": True}
 
 
 @app.get("/api/auth/username-available")
@@ -2932,9 +2970,16 @@ def create_ticket(body: TicketCreate, user: User = Depends(current_user),
 def get_ticket(ticket_id: int, user: User = Depends(current_user),
                db: Session = Depends(get_session)) -> dict:
     tk = _my_ticket(db, user, ticket_id)
+    return {"ticket": _ticket_json(tk, staff=False, messages=True)}
+
+
+@app.post("/api/tickets/{ticket_id}/read")
+def read_ticket(ticket_id: int, user: User = Depends(current_user),
+                db: Session = Depends(get_session)) -> dict:
+    tk = _my_ticket(db, user, ticket_id)
     _mark_read(db, tk, staff=False)
     db.commit()
-    return {"ticket": _ticket_json(tk, staff=False, messages=True)}
+    return {"ok": True}
 
 
 @app.post("/api/tickets/{ticket_id}/messages")
@@ -2974,9 +3019,18 @@ def admin_get_ticket(ticket_id: int, _: User = Depends(require_admin),
     tk = db.get(Ticket, ticket_id)
     if tk is None:
         fail(404, "no_such_ticket", "No such ticket")
+    return {"ticket": _ticket_json(tk, staff=True, messages=True)}
+
+
+@app.post("/api/admin/tickets/{ticket_id}/read")
+def admin_read_ticket(ticket_id: int, _: User = Depends(require_admin),
+                      db: Session = Depends(get_session)) -> dict:
+    tk = db.get(Ticket, ticket_id)
+    if tk is None:
+        fail(404, "no_such_ticket", "No such ticket")
     _mark_read(db, tk, staff=True)
     db.commit()
-    return {"ticket": _ticket_json(tk, staff=True, messages=True)}
+    return {"ok": True}
 
 
 @app.post("/api/admin/tickets/{ticket_id}/messages")
@@ -3575,86 +3629,6 @@ def admin_grafana(_: User = Depends(require_admin),
             "configured": bool(_get("grafana_admin_password"))}
 
 
-@app.get("/api/admin/storage")
-def admin_storage(_: User = Depends(require_admin),
-                  db: Session = Depends(get_session)) -> dict:
-    """Where the pool has actually gone, and how far it is overcommitted.
-
-    Three different quantities that are easy to conflate, so all three are
-    returned rather than one derived number:
-
-      * ALLOWANCE - what each workspace may use. Hard: `refquota` enforces it.
-      * USED      - what it has written. Sampled by the worker.
-      * COMMITTED - the allowances summed. Deliberately larger than the pool
-                    since reservations were dropped, which is the whole point
-                    and also the whole risk.
-
-    `unattributed` closes the books: the pool holds the golden images and
-    Incus's own datasets as well as the workspaces, so the per-workspace rows
-    do NOT add up to pool usage on their own. A distribution chart whose parts
-    silently fail to sum to the whole is a chart that misleads.
-    """
-    resp = svc.call_provisioner({"verb": "disk_usage", "idx": 1}, timeout=120)
-    pool_raw = (resp.get("pool") or {}) if resp.get("ok") else {}
-    live = (resp.get("workspaces") or {}) if resp.get("ok") else {}
-
-    gib = 1024 ** 3
-    pool_used = (pool_raw.get("used") or 0) / gib
-    pool_free = (pool_raw.get("available") or 0) / gib
-
-    rows = []
-    for ws in db.scalars(select(Workspace).order_by(Workspace.idx)):
-        user = ws.user
-        # Prefer the reading just taken; fall back to the stored sample so the
-        # page still works when the provisioner is briefly unreachable.
-        d = live.get(str(ws.idx)) or {}
-        used_mib = ws.disk_used_mib
-        if d:
-            used_mib = (int(d.get("root_used") or 0)
-                        + int(d.get("docker_used") or 0)) // (1024 * 1024)
-        cap_gib = ws.disk_gib
-        rows.append({
-            "username": user.username if user else None,
-            "user_id": ws.user_id,
-            "idx": ws.idx,
-            "state": ws.state.value,
-            "cap_gib": cap_gib,
-            "root_gib": ws.root_gib,
-            "docker_gib": ws.docker_gib,
-            "used_gib": round((used_mib or 0) / 1024, 2),
-            "percent": (round((used_mib or 0) / (cap_gib * 1024) * 100)
-                        if cap_gib else 0),
-            "measured": used_mib is not None,
-            "checked_at": (ws.disk_checked_at.isoformat()
-                           if ws.disk_checked_at else None),
-        })
-
-    workspace_used = sum(r["used_gib"] for r in rows)
-    committed = sum(r["cap_gib"] for r in rows)
-    total = pool_used + pool_free
-
-    return {
-        "pool": {
-            "total_gib": round(total, 2),
-            "used_gib": round(pool_used, 2),
-            "free_gib": round(pool_free, 2),
-            "percent": round(pool_used / total * 100) if total else 0,
-        },
-        "workspace_used_gib": round(workspace_used, 2),
-        # Everything in the pool that is not a customer's data: the golden
-        # images every workspace is cloned from, and Incus's own datasets.
-        "unattributed_gib": round(max(pool_used - workspace_used, 0), 2),
-        "committed_gib": committed,
-        # >1 means the allowances promise more than the pool holds. That is
-        # intended, and it is exactly what the pool guard exists to survive.
-        "overcommit": round(committed / total, 2) if total else 0,
-        "warn_percent": CONFIG.disk_warn_percent,
-        "pool_floor_gib": CONFIG.pool_floor_gib,
-        "pool_at_risk": pool_free < CONFIG.pool_floor_gib,
-        "workspaces": sorted(rows, key=lambda r: -r["used_gib"]),
-    }
-
-
 @app.get("/api/admin/users/{user_id}")
 def admin_user_detail(user_id: int, minutes: int = 10080,
                       _: User = Depends(require_admin),
@@ -3946,13 +3920,30 @@ def admin_ai_price_delete(price_id: int, admin: User = Depends(require_admin),
 
 
 @app.get("/api/admin/activity")
-def admin_activity(limit: int = 200, _: User = Depends(require_admin),
+def admin_activity(limit: int = 100, offset: int = 0, q: str = "",
+                   _: User = Depends(require_admin),
                    db: Session = Depends(get_session)) -> dict:
     limit = max(1, min(limit, 1000))
-    rows = db.scalars(select(AuditLog).order_by(desc(AuditLog.ts)).limit(limit))
-    return {"events": [{"id": e.id, "ts": e.ts.isoformat() if e.ts else None,
-                        "actor_id": e.actor_id, "action": e.action,
-                        "target": e.target, "detail": e.detail or {}} for e in rows]}
+    offset = max(0, offset)
+    needle = q.strip()[:128]
+    base = (select(AuditLog, User.username)
+            .outerjoin(User, User.id == AuditLog.actor_id))
+    count = (select(func.count(AuditLog.id)).select_from(AuditLog)
+             .outerjoin(User, User.id == AuditLog.actor_id))
+    if needle:
+        match = (AuditLog.action.ilike(f"%{needle}%") |
+                 AuditLog.target.ilike(f"%{needle}%") |
+                 User.username.ilike(f"%{needle}%"))
+        base = base.where(match)
+        count = count.where(match)
+    total = db.scalar(count) or 0
+    rows = db.execute(base.order_by(desc(AuditLog.ts))
+                      .limit(limit).offset(offset)).all()
+    return {"total": total, "limit": limit, "offset": offset,
+            "events": [{"id": e.id, "ts": e.ts.isoformat() if e.ts else None,
+                        "actor_id": e.actor_id, "actor": username,
+                        "action": e.action, "target": e.target,
+                        "detail": e.detail or {}} for e, username in rows]}
 
 
 # --- static frontend -----------------------------------------------------

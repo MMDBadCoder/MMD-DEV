@@ -7,7 +7,7 @@ import { route, setGuard, setNotFound, setErrorHandler, startRouter, navigate,
          currentPath } from "./router.js";
 
 import { landingPage } from "./pages/landing.js";
-import { signInPage, signUpPage } from "./pages/auth.js";
+import { signInPage, signUpPage, forgotPasswordPage } from "./pages/auth.js";
 import { machinePage, teardownTerminal } from "./pages/machine.js";
 import { filesPage } from "./pages/files.js";
 import { resourcesPage } from "./pages/resources.js";
@@ -30,6 +30,7 @@ import { adminStoragePage } from "./pages/adminstorage.js";
 import { adminOpenClawPage } from "./pages/adminopenclaw.js";
 import { adminBackupPage } from "./pages/adminbackup.js";
 import { smsPrefsPage } from "./pages/smsprefs.js";
+import { adminActivityPage } from "./pages/adminactivity.js";
 
 export const state = { me: null, operations: [], notifications: [], notificationUnread: 0 };
 document.querySelector(".skip-link").textContent = t("nav.skip");
@@ -46,7 +47,10 @@ export async function refreshMe() {
 async function refreshOperations() {
   if (!state.me) { state.operations = []; return true; }
   try { state.operations = (await get("/api/operations")).operations || []; return true; }
-  catch { return false; }
+  catch (error) {
+    if (error.status === 401) state.me = null;
+    return false;
+  }
 }
 
 async function refreshNotifications() {
@@ -56,7 +60,10 @@ async function refreshNotifications() {
     state.notifications = out.notifications || [];
     state.notificationUnread = out.unread || 0;
     return true;
-  } catch { return false; }
+  } catch (error) {
+    if (error.status === 401) state.me = null;
+    return false;
+  }
 }
 
 function notificationCenter() {
@@ -161,7 +168,12 @@ function chrome(bodyHtml) {
     <aside class="mobile-nav-sheet" id="mobile-nav-sheet" hidden>
       <nav aria-label="${t("nav.more")}">${secondaryNav}</nav>
     </aside>
-    <main class="page" id="main-content" tabindex="-1">${operationStrip()}${bodyHtml}</main>`;
+    <main class="page" id="main-content" tabindex="-1">
+      <div class="sr-only" id="background-status" role="status" aria-live="polite" aria-atomic="true"></div>
+      ${operationStrip()}${!me?.phone ? `
+      <div class="note warn account-phone-prompt" role="status">
+        ${icon.alert}<div>${t("account.phone.missing")} <a href="/console/account">${t("account.phone.add")}</a></div>
+      </div>` : ""}${bodyHtml}</main>`;
 }
 
 export function render(bodyHtml) {
@@ -244,6 +256,7 @@ export function renderBare(html) {
 route("/", { title: null, view: landingPage, public: true });
 route("/signin", { title: t("auth.signin.cta"), view: signInPage, guest: true });
 route("/signup", { title: t("auth.signup.title"), view: signUpPage, guest: true });
+route("/forgot-password", { title: t("auth.forgot.title"), view: forgotPasswordPage, guest: true });
 route("/console", { title: t("nav.overview"), view: machinePage });
 route("/console/resources", { title: t("nav.resources"), view: resourcesPage });
 route("/console/connections", { title: t("nav.connections"), view: connectionsPage });
@@ -270,6 +283,7 @@ route("/console/admin/claude", { title: t("adm.nav.claude"), view: aiPricingPage
 route("/console/admin/openclaw", { title: t("adm.nav.openclaw"), view: adminOpenClawPage, admin: true });
 route("/console/admin/storage", { title: t("adm.nav.storage"), view: adminStoragePage, admin: true });
 route("/console/admin/backup", { title: t("adm.nav.backup"), view: adminBackupPage, admin: true });
+route("/console/admin/activity", { title: t("adm.nav.activity"), view: adminActivityPage, admin: true });
 route("/console/sms", { title: t("nav.sms"), view: smsPrefsPage });
 route("/console/admin/codex", { title: t("adm.nav.codex"), admin: true,
                                 view: () => aiPricingPage({ service: "codex" }) });
@@ -317,6 +331,7 @@ startRouter();
 let shellRefreshTimer = null;
 let shellRefreshRunning = false;
 let shellRefreshDelay = 3000;
+let shellRefreshFailed = false;
 async function refreshShell() {
   clearTimeout(shellRefreshTimer);
   if (shellRefreshRunning) return;
@@ -327,7 +342,13 @@ async function refreshShell() {
   shellRefreshRunning = true;
   const before = JSON.stringify(state.operations);
   const notificationsBefore = JSON.stringify(state.notifications);
+  const unreadBefore = state.notificationUnread;
   const results = await Promise.all([refreshOperations(), refreshNotifications()]);
+  if (!state.me) {
+    shellRefreshRunning = false;
+    navigate("/signin");
+    return;
+  }
   if (before !== JSON.stringify(state.operations)) {
     const old = document.querySelector(".operation-strip");
     const holder = document.createElement("div");
@@ -338,8 +359,15 @@ async function refreshShell() {
   if (notificationsBefore !== JSON.stringify(state.notifications)) {
     redrawNotificationCenter();
   }
+  const status = $("#background-status");
+  if (status && state.notificationUnread > unreadBefore)
+    status.textContent = t("notification.new", fmtFa(state.notificationUnread - unreadBefore));
+  const failed = !results.every(Boolean);
+  if (status && failed !== shellRefreshFailed)
+    status.textContent = t(failed ? "background.refresh.failed" : "background.refresh.restored");
+  shellRefreshFailed = failed;
   const active = state.operations.some((o) => ["queued", "running"].includes(o.status));
-  shellRefreshDelay = results.every(Boolean)
+  shellRefreshDelay = !failed
     ? (active ? 3000 : 10000)
     : Math.min(Math.max(shellRefreshDelay * 2, 6000), 60000);
   shellRefreshRunning = false;

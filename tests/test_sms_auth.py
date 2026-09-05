@@ -138,6 +138,20 @@ def test_requesting_a_login_code_does_not_reveal_whether_you_have_an_account():
     assert db2.scalar(select(SmsMessage)).kind == "login_code"
 
 
+def test_requesting_recovery_is_enumeration_safe_and_uses_its_own_message():
+    db = database()
+    body = appmod.CodeRequest(phone=PHONE, purpose="recovery")
+    assert appmod.request_code(body, db) == {"ok": True}
+    assert db.scalar(select(SmsMessage)) is None
+
+    db2 = database()
+    db2.add(User(username="u", phone=PHONE, password_hash=hash_password("old-password"),
+                 status=UserStatus.APPROVED))
+    db2.commit()
+    assert appmod.request_code(body, db2) == {"ok": True}
+    assert db2.scalar(select(SmsMessage)).kind == "password_reset_code"
+
+
 def test_signing_up_requires_the_code():
     db = database()
     body = appmod.SignUp(username="ali-test", password="correct-horse",
@@ -185,6 +199,39 @@ def test_a_wrong_code_does_not_sign_anyone_in():
 
     with pytest.raises(HTTPException):
         appmod.login_sms(appmod.SmsLogin(phone=PHONE, code="00000"), Resp(), db)
+
+
+def test_recovery_changes_password_revokes_sessions_and_warns_the_owner():
+    db = database()
+    user = User(username="u", phone=PHONE,
+                password_hash=hash_password("old-password"),
+                status=UserStatus.APPROVED, session_version=4)
+    db.add(user); db.commit()
+    code = issued(db, "recovery")
+
+    assert appmod.reset_password(appmod.PasswordReset(
+        phone=PHONE, code=code, new_password="new-password-strong"), db) == {"ok": True}
+
+    db.refresh(user)
+    assert user.session_version == 5
+    assert appmod.verify_password("new-password-strong", user.password_hash)
+    assert not appmod.verify_password("old-password", user.password_hash)
+    assert db.scalar(select(SmsMessage)).kind == "password_changed"
+
+
+def test_recovery_code_cannot_be_reused():
+    db = database()
+    db.add(User(username="u", phone=PHONE,
+                password_hash=hash_password("old-password"),
+                status=UserStatus.APPROVED))
+    db.commit()
+    code = issued(db, "recovery")
+    body = appmod.PasswordReset(phone=PHONE, code=code,
+                                new_password="new-password-strong")
+    appmod.reset_password(body, db)
+    with pytest.raises(HTTPException) as e:
+        appmod.reset_password(body, db)
+    assert e.value.detail["code"] == "sms_code_missing"
 
 
 @pytest.mark.parametrize("status", [UserStatus.REJECTED, UserStatus.SUSPENDED,

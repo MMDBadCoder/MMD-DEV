@@ -54,8 +54,9 @@ export async function adminTicketsPage(params) {
 async function staffTicketView(id) {
   let d;
   try { d = (await get(`/api/admin/tickets/${id}`)).ticket;
-    // Opening the thread is what marks it read, so the header counter is stale
-    // the moment this returns. Refresh before rendering rather than leaving the
+    await post(`/api/admin/tickets/${id}/read`, {});
+    // The explicit POST marks it read, so the header counter is stale the
+    // moment it returns. Refresh before rendering rather than leaving the
     // customer looking at a badge that still counts the message they just read.
     await refreshMe(); }
   catch (e) {

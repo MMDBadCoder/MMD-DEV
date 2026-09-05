@@ -89,6 +89,14 @@ def test_the_reconciler_stops_reality_when_the_customer_wants_off():
     assert "or not ws.desired_on" in src
 
 
+def test_recovered_transitional_state_is_observable():
+    """Self-healing must leave evidence; otherwise an intermittent host fault
+    disappears before an operator can understand or count it."""
+    src = inspect.getsource(worker.reconcile_once)
+    assert '"workspace_state_adopted"' in src
+    assert '"mmd_workspace_state_adoptions_total"' in src
+
+
 def test_the_session_probe_is_gone_too():
     """It existed only so the idle timer would not kill a live SSH session.
     With no timer there is nothing for it to serve, and a provisioner verb that

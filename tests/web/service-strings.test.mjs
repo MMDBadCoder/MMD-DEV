@@ -71,6 +71,12 @@ test("sign-in does not call the username-availability endpoint", () => {
   assert.ok(!signIn.includes("username-available"), signIn);
 });
 
+test("forgotten passwords have a phone-code recovery journey", () => {
+  assert.ok(signIn.includes('href="/forgot-password"'));
+  assert.ok(AUTH.includes('purpose: "recovery"'));
+  assert.ok(AUTH.includes('post("/api/auth/reset-password"'));
+});
+
 test("sign-up collects every required identity field", () => {
   for (const field of ['id="fullname"', 'id="phone"', 'id="uname"', 'id="pw"'])
     assert.ok(signUp.includes(field), `${field} missing from signup`);

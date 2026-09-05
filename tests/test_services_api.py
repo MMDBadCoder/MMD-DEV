@@ -550,8 +550,6 @@ def test_hermes_dashboard_is_not_ready_until_its_vhost_is_published(env):
     client, db, ws, _ = env
     ws.user.username = "ali"
     ws.hermes_enabled = True
-    ws.hermes_key = "secret"
-    ws.hermes_key_hash = "hash"
     ws.hermes_dash_user = "ali"
     ws.hermes_dash_password = "password"
     ws.hermes_vhost_ready = False

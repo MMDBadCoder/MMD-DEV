@@ -263,8 +263,6 @@ def test_disabling_clears_the_password_immediately(env):
 
 def test_openclaw_refuses_the_cli_verbs(env):
     client, db, ws, _u, _c = env
-    ws.hermes_key = "sk-or-test"
-    db.commit()
     for bad in ("install", "unlink", ""):
         assert client.post("/api/workspace/ai/openclaw",
                            json={"action": bad}).status_code == 422
@@ -275,7 +273,6 @@ def test_the_dashboard_address_is_only_offered_once_it_exists(env):
     gateway. Publishing the address on intent alone would hand the customer a
     link that 502s."""
     client, db, ws, _u, _c = env
-    ws.hermes_key = "sk-or-test"
     ws.openclaw_enabled = True
     db.commit()
     d = client.get("/api/workspace/ai").json()["openclaw"]
@@ -408,7 +405,6 @@ def test_a_row_with_no_password_is_not_treated_as_installed(env, monkeypatch):
     """
     from mmd import worker
     client, db, ws, _u, _c = env
-    ws.hermes_key = "sk-or-test"
     ws.openclaw_enabled = True
     ws.openclaw_installed = True
     ws.openclaw_password = None          # the state the bug produced
@@ -433,7 +429,6 @@ def test_a_complete_row_is_left_alone(env, monkeypatch):
     on every pass."""
     from mmd import worker
     client, db, ws, _u, _c = env
-    ws.hermes_key = "sk-or-test"
     ws.openclaw_enabled = True
     ws.openclaw_installed = True
     ws.openclaw_password = "already-set"

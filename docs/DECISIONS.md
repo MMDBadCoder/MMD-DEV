@@ -2622,3 +2622,30 @@ minute, and hidden tabs pause before refreshing immediately on return. Failed
 requests preserve the last successful state. This remains polling rather than
 introducing SSE/WebSockets because the current single-host scale does not
 justify another connection lifecycle or proxy boundary.
+
+## 2026-09-05 — Recovery, reads and self-healing leave explicit evidence
+
+A verified phone is the recovery credential. Password recovery uses a distinct,
+single-use SMS-code purpose, verifies the code before looking up the account,
+changes the password and consumes the code in one transaction, and advances
+`session_version` to revoke every previous session. Requests for unknown phone
+numbers deliberately return the same success shape without sending an SMS.
+Legacy accounts whose phone is null are prompted to add one; the system never
+invents or silently backfills identity data.
+
+Reading a support thread no longer changes unread state. The customer and admin
+pages now make an explicit POST after fetching the thread. This keeps GET safe
+for browser prefetching and makes the state transition visible in the API.
+
+Incus remains authoritative when a workspace is stuck in `error`, `starting`,
+or `stopping`, but adopting the observed state is no longer silent. Each
+adoption writes a system audit event and increments a bounded `from`/`to`
+counter. A recovered incident is still an incident worth diagnosing.
+
+## 2026-09-05 — Customer copy has one noun for compute
+
+The interface calls a customer's optional Incus environment a **machine**.
+“Workspace” remains the developer-facing model and API noun, but is not a
+second customer-facing concept. The physical Ubuntu host is always called the
+**host server**, never the bare word “server”, so a capacity refusal cannot be
+misread as a problem inside the customer's machine. Tests enforce both rules.

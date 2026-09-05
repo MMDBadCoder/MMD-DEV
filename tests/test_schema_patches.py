@@ -11,6 +11,7 @@ hand. Publishing a named application would then have failed with a NOT NULL
 violation at runtime.
 """
 import logging
+from pathlib import Path
 
 from sqlalchemy import create_engine, inspect, text
 
@@ -61,3 +62,17 @@ def test_every_shipped_patch_is_idempotent_in_shape(monkeypatch):
             assert "IF NOT EXISTS" in stmt, stmt
         if stmt.startswith("CREATE"):
             assert "IF NOT EXISTS" in stmt, stmt
+
+
+def test_workspace_schema_drops_only_the_superseded_openrouter_columns():
+    model_source = Path(__file__).resolve().parents[1].joinpath(
+        "control/mmd/models/__init__.py").read_text()
+    for name in ("hermes_key_hash", "hermes_key", "hermes_usage_usd",
+                 "hermes_credit_blocked", "hermes_limit_dirty"):
+        assert f"{name}: Mapped" not in model_source
+        assert any(f"DROP COLUMN IF EXISTS {name}" in stmt
+                   for stmt in dbmod.SCHEMA_PATCHES)
+    # Hermes itself still belongs to the workspace; its state and dashboard
+    # credentials must not be mistaken for the retired supplier account.
+    for name in ("hermes_enabled", "hermes_installed", "hermes_dash_password"):
+        assert f"{name}: Mapped" in model_source

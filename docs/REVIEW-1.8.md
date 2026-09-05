@@ -27,8 +27,27 @@ important ones against the code rather than the changelog:
 Health at the time of review: **624 tests pass**, all five services active, no
 errors in any service log in the past hour, host disk 75%, ZFS pool 49%.
 
-The rest of this document is what is still open, plus what the review found
-that 1.7 did not.
+### Implementation update — 2026-09-05
+
+The concrete, low-risk findings from this review have now been implemented and
+deployed. The suite has grown from 624 to **631 backend tests**, with all browser
+and static checks passing.
+
+| Finding | Current state |
+|---|---|
+| Missing password recovery / legacy phones (§2.2) | **Resolved safely.** SMS recovery is purpose-scoped, single-use, enumeration-safe and revokes old sessions. Legacy users are prompted to verify a phone; identity data was not invented by an admin backfill. |
+| Audit log has no UI (§2.3) | **Resolved.** Searchable, paginated admin page with actor, action, target and detail. |
+| Inconsistent machine noun (§2.5) | **Resolved and guarded.** Customer copy uses “machine”; the physical host is always “host server.” |
+| Dead supplier secrets (§3.1/§4.4) | **Resolved, with correction.** The five superseded OpenRouter key/limit fields were migrated and dropped. Active Hermes installation, dashboard and Telegram state was correctly retained. |
+| Mutating GETs / unused privileged storage GET (§3.3) | **Resolved.** Ticket read state has explicit POST endpoints and the unused storage handler was deleted. |
+| Dead translation catalogue (§4.3) | **Resolved.** 94 confirmed-unused entries were removed and an unreferenced-key test now prevents recurrence. `/api/health` is not dead: deployment uses it as the schema/startup barrier. |
+| Accidental Prometheus retention (§6.2) | **Resolved.** Retention is explicitly 15 days. Directory-size integration with the privileged pool guard remains a separate design item. |
+| Silent state adoption (§6.3) | **Resolved.** Every adoption writes an audit event and increments `mmd_workspace_state_adoptions_total`. |
+| Incomplete background announcements (§7) | **Resolved.** Operations, new notifications, refresh failure and recovery all use polite live regions. |
+| Expired-session polling (found during deployment verification) | **Resolved.** A 401 clears local session state, stops the active pass and routes the stale tab to sign-in. |
+
+The detailed sections below remain as review evidence. The final section is the
+short active list; completed work is no longer repeated there.
 
 ---
 
@@ -58,7 +77,7 @@ accounts ever power on, ever open a terminal, ever enable an agent), and be
 willing to retire a service that nobody adopts. Four of the seven could be
 collapsed into one "AI tools" page with a chooser.
 
-### 2.2 There is no password recovery, and 7 of 21 accounts cannot use SMS
+### 2.2 There is no password recovery, and 7 of 21 accounts cannot use SMS — **resolved**
 
 Confirmed by grep: **no forgotten-password endpoint or page exists.** Phone is
 now the sole contact identity and a sign-in credential, so the intended
@@ -88,7 +107,7 @@ database intervention.
 which already has hashing, expiry, attempt limits and rate limiting — the
 mechanism is done, only the journey is missing.
 
-### 2.3 The audit log is written but cannot be read
+### 2.3 The audit log is written but cannot be read — **resolved**
 
 `audit_log` holds **637 rows across 55 action types** and `/api/admin/activity`
 exists to serve it — but no admin page fetches it. `/console/activity` is the
@@ -111,7 +130,7 @@ page.
 **Suggested:** state a first-response target in the support UI, and alert when
 the oldest open ticket crosses it.
 
-### 2.5 One concept, three names
+### 2.5 One concept, three names — **resolved**
 
 The same thing is called three different things in customer-facing Persian:
 
@@ -136,7 +155,7 @@ and never bare **سرور**. This is a find-and-replace with a test, not a redes
 
 ## 3. Security
 
-### 3.1 Dead columns still hold live supplier keys — **fix this first**
+### 3.1 Dead columns still hold live supplier keys — **resolved**
 
 The `hermes_*` columns on `workspaces` were superseded by
 `openrouter_accounts` in 1.7. Nothing reads them any more. They still contain
@@ -168,7 +187,7 @@ credential everyone uses.
 Worth writing down as a known limit rather than discovering it during an
 offboarding.
 
-### 3.3 Read endpoints that mutate or reach into the privileged path
+### 3.3 Read endpoints that mutate or reach into the privileged path — **resolved where unsafe**
 
 Seven `GET` handlers either commit or call the root provisioner:
 
@@ -230,7 +249,7 @@ internet-facing process.
 `systemctl` PID lookups for the scrape interval. Not urgent; note it before the
 customer count changes by an order of magnitude.
 
-### 4.3 Dead code that is still routed
+### 4.3 Dead code that is still routed — **resolved or classified**
 
 Confirmed unreferenced by the SPA and by any probe:
 
@@ -244,7 +263,7 @@ Confirmed unreferenced by the SPA and by any probe:
 `/api/admin/activity` should gain a UI rather than be deleted. The other three
 are either dead or should be wired to something.
 
-**99 translation keys are also unreferenced** — verified after accounting for
+**94 translation keys were also unreferenced** — verified after accounting for
 concatenated *and* template-literal key construction. They cluster around the
 pages whose charts moved to Grafana (`adm.storage.*`, `adm.mon.*`, `adm.obs.*`,
 `adm.win.*`) and the two onboarding steps that were removed
@@ -254,12 +273,12 @@ eye.
 
 **Suggested:** a test that fails on an unreferenced key, then delete the 99.
 
-### 4.4 Legacy schema has not been retired
+### 4.4 Legacy schema has not been retired — **resolved with corrected scope**
 
-Sixteen `hermes_*` columns remain on `workspaces` alongside the
-`openrouter_accounts` table that replaced them (§3.1). `SCHEMA_PATCHES` still
-carries the `ALTER TABLE … ADD COLUMN` statements that create them, so a fresh
-install builds the dead columns on purpose.
+The original review over-counted this finding: eleven `hermes_*` columns are
+active service state and must remain. The five genuinely superseded key, hash,
+usage and limit fields have now been migrated to `openrouter_accounts` where
+needed and dropped. Fresh installs no longer create them.
 
 **Suggested:** one migration that clears and drops them, and remove the
 corresponding patch lines.
@@ -329,7 +348,7 @@ silent.
 already exists and is proven: 5xx rate, worker heartbeat age, backup age,
 pool free, oldest open ticket, operation backlog.
 
-### 6.2 Prometheus retention is undefined
+### 6.2 Prometheus retention is undefined — **retention resolved**
 
 `observability/prometheus.default` sets no `--storage.tsdb.retention.*` flag,
 so retention is the 15-day default. The TSDB is **5.5 MB** today.
@@ -341,7 +360,7 @@ rather than chosen, and nothing watches the directory's size.
 **Suggested:** set retention explicitly, and add the TSDB path to the disk
 guard's awareness.
 
-### 6.3 A workspace silently changed state
+### 6.3 A workspace silently changed state — **resolved**
 
 The worker log shows:
 
@@ -394,32 +413,26 @@ Worth saying explicitly, because a review that only lists problems misleads:
 
 ---
 
-## 9. Suggested order
+## 9. Remaining decisions — 7 items
 
-Grouped by cost against value, not by severity label.
+Only work intentionally deferred under the current scope remains:
 
-**Do first — hours, not days:**
+1. **Choose AI product focus (§2.1).** Activation instrumentation, interviews,
+   and any consolidation of seven services need a product decision.
+2. **Choose a support response target and alert route (§2.4/§6.1).** The code
+   exposes the required metrics, but an alert cannot responsibly invent its
+   threshold, quiet hours, escalation recipient or SMS budget.
+3. **Add PostgreSQL concurrency tests (§5.1).** This needs an isolated PostgreSQL
+   test database or container; SQLite cannot exercise row locks.
+4. **Decide whether to split `app.py` (§4.1).** Exporter extraction is feasible,
+   but is a structural refactor rather than a live customer fix.
+5. **Optimize exporter scale (§4.2).** Its measured 0.108-second scrape at 21
+   users is healthy; grouped queries become worthwhile after material growth.
+6. **Introduce per-operator Grafana identity (§3.2).** Revisit before adding a
+   third administrator; today it would add identity infrastructure for two users.
+7. **Account separately for Prometheus TSDB disk (§6.2).** Retention is bounded,
+   but feeding `/var/lib/prometheus` into the root-owned pool guard crosses the
+   privilege boundary and needs an explicit design.
 
-1. Clear and drop the legacy `hermes_*` columns (§3.1) — live keys in dead columns.
-2. Backfill the seven missing phone numbers (§2.2) — a third of customers have no recovery path.
-3. Delete the 99 dead translation keys and add the guard test (§4.3).
-4. Six alert rules on the existing SMS path (§6.1).
-5. Set Prometheus retention explicitly (§6.2).
-6. Delete `admin_storage`; move ticket read-marking off GET (§3.3).
-
-**Do next — days:**
-
-7. The forgotten-password journey on the existing code module (§2.2).
-8. An admin UI over the audit log (§2.3).
-9. Unify the workspace noun across the catalogue (§2.5).
-10. One PostgreSQL concurrency test for the financial invariant (§5.1).
-
-**Decide, then do — needs a product call:**
-
-11. What to do about seven AI services with almost no users (§2.1).
-12. Whether to split `app.py`, starting with the exporter (§4.1).
-13. Per-operator Grafana identity, before a third administrator (§3.2).
-
-**Deliberately excluded** from this list, per standing decisions: automated
-payment, backup encryption, off-host workspace backup, and any restructuring of
-the worker loop or migration system.
+Automated payment, backup encryption, off-host workspace backup, and worker or
+migration-system restructuring remain deliberately excluded by product decision.

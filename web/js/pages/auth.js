@@ -31,13 +31,13 @@ function shell({ title, sub, fields, cta, altText, altHref, altLabel, msg }) {
  * The button becomes a countdown rather than staying live, because the server
  * refuses a resend inside sixty seconds and a button that looks available but
  * always fails reads as broken rather than as rate limited. */
-function wireCodeRequest({ button, phoneOf, purpose, onSent }) {
+function wireCodeRequest({ button, phoneOf, purpose, onSent, phoneField }) {
   const b = $(button);
   if (!b) return;
   b.onclick = async () => {
     const phone = phoneOf();
     if (!/^09[0-9]{9}$/.test(phone)) {
-      formError(t("auth.err.phone"), { field: purpose === "signup" ? "#phone" : "#sms-phone" });
+      formError(t("auth.err.phone"), { field: phoneField || (purpose === "signup" ? "#phone" : "#sms-phone") });
       return;
     }
     b.disabled = true;
@@ -84,6 +84,7 @@ export function signInPage(_p, msg) {
           <input id="identifier" class="ltr" dir="ltr" autocomplete="username" autofocus></div>
         <div class="field"><label for="pw">${t("auth.password")}</label>
           <input id="pw" type="password" autocomplete="current-password"></div>
+        <p class="tiny" style="margin:-4px 0 12px"><a href="/forgot-password">${t("auth.forgot.link")}</a></p>
       </div>
       <div id="pane-sms" role="tabpanel" aria-labelledby="tab-sms" hidden>
         <div class="field"><label for="sms-phone">${t("auth.phone.label")}</label>
@@ -148,6 +149,55 @@ export function signInPage(_p, msg) {
       const field = mode === "sms" ? "#sms-code" : "#identifier";
       formError(err.message, { field });
       btn.disabled = false; btn.textContent = t("auth.signin.cta");
+    }
+  };
+}
+
+export function forgotPasswordPage() {
+  renderBare(shell({
+    title: t("auth.forgot.title"), sub: t("auth.forgot.sub"),
+    cta: t("auth.forgot.cta"),
+    altText: t("auth.hasaccount"), altHref: "/signin", altLabel: t("auth.gosignin"),
+    fields: `
+      <div class="field"><label for="recovery-phone">${t("auth.phone.label")}</label>
+        <input id="recovery-phone" class="ltr" dir="ltr" type="tel" inputmode="numeric"
+               autocomplete="tel" maxlength="11" placeholder="09123456789"></div>
+      <div class="btn-row" style="margin-bottom:12px">
+        <button type="button" class="btn" id="recovery-send">${t("auth.code.send")}</button>
+      </div>
+      <div class="field"><label for="recovery-code">${t("auth.code.label")}</label>
+        <input id="recovery-code" class="ltr mono" dir="ltr" inputmode="numeric"
+               autocomplete="one-time-code" maxlength="8"></div>
+      <div class="field"><label for="recovery-pw">${t("auth.forgot.new")}</label>
+        <input id="recovery-pw" type="password" autocomplete="new-password" minlength="${MIN_PW}"></div>
+      <div class="field"><label for="recovery-pw2">${t("auth.password.confirm")}</label>
+        <input id="recovery-pw2" type="password" autocomplete="new-password"></div>`,
+  }));
+
+  wireCodeRequest({
+    button: "#recovery-send", purpose: "recovery",
+    phoneOf: () => $("#recovery-phone").value.trim(),
+    phoneField: "#recovery-phone",
+  });
+  $("#form").onsubmit = async (event) => {
+    event.preventDefault();
+    clearFormErrors($("#form"));
+    const phone = $("#recovery-phone").value.trim();
+    const code = $("#recovery-code").value.trim();
+    const password = $("#recovery-pw").value;
+    if (!/^09[0-9]{9}$/.test(phone)) return formError(t("auth.err.phone"), { field: "#recovery-phone" });
+    if (!code) return formError(t("auth.code.needed"), { field: "#recovery-code" });
+    if (password.length < MIN_PW) return formError(t("auth.err.short", password.length), { field: "#recovery-pw" });
+    if (password !== $("#recovery-pw2").value) return formError(t("auth.err.mismatch"), { field: "#recovery-pw2" });
+    const button = $("#form button[type=submit]");
+    button.disabled = true; button.textContent = t("auth.forgot.busy");
+    try {
+      await post("/api/auth/reset-password", { phone, code, new_password: password });
+      $("#form").innerHTML = "";
+      $("#msg").innerHTML = note("ok", `${t("auth.forgot.done")}<br><a href="/signin">${t("auth.gosignin")}</a>`);
+    } catch (err) {
+      formError(err.message, { field: "#recovery-code" });
+      button.disabled = false; button.textContent = t("auth.forgot.cta");
     }
   };
 }

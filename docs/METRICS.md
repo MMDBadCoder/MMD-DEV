@@ -108,6 +108,7 @@ operation IDs.
 | `mmd_worker_heartbeat_age_seconds` | gauge | — | Seconds since the worker last ticked. `-1` means never. |
 | `mmd_worker_last_success_age_seconds` | gauge | — | Seconds since the last iteration that completed without raising. |
 | `mmd_worker_metrics_snapshot_age_seconds` | gauge | — | Age of the worker counter snapshot folded into this scrape. `-1` means missing or unreadable. |
+| `mmd_workspace_state_adoptions_total` | counter | `from`, `to` | Transitional workspace states healed from Incus reality. A non-zero rate reveals intermittent lifecycle failures even when reconciliation succeeds. |
 
 ## Support and notifications
 
@@ -175,7 +176,8 @@ already handles it.
 ## Counters seeded at zero
 
 `mmd_auth_failures_total`, `mmd_registration_conflicts_total` and
-`mmd_worker_tick_failures_total` are pre-registered with zero values so
+`mmd_worker_tick_failures_total` and `mmd_workspace_state_adoptions_total` are
+pre-registered with zero values so
 the series exists before the first failure. Otherwise the panel reads
 "No data", which on an operations dashboard is ambiguous in the worst
 way: it looks identical whether nothing is wrong or the exporter is

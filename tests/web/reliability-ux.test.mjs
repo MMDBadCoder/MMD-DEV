@@ -46,6 +46,11 @@ test("global polling is single-flight, retains good state, and backs off", () =>
   assert.doesNotMatch(main, /setInterval\(async/);
 });
 
+test("an expired session stops background polling and returns to sign-in", () => {
+  assert.match(main, /if \(error\.status === 401\) state\.me = null/g);
+  assert.match(main, /if \(!state\.me\) \{\s*shellRefreshRunning = false;\s*navigate\("\/signin"\)/);
+});
+
 test("notification links cannot leave the authenticated console", () => {
   assert.match(main, /startsWith\("\/console"\)/);
 });

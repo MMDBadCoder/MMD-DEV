@@ -42,15 +42,10 @@ SCHEMA_PATCHES: tuple[str, ...] = (
     "ON credit_transactions (scope_key, period_start, kind)",
     "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS hermes_enabled BOOLEAN DEFAULT FALSE",
     "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS hermes_installed BOOLEAN DEFAULT FALSE",
-    "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS hermes_key_hash VARCHAR(128)",
-    "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS hermes_key VARCHAR(256)",
-    "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS hermes_usage_usd DOUBLE PRECISION DEFAULT 0",
     "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS hermes_dash_user VARCHAR(64)",
     "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS hermes_dash_password VARCHAR(64)",
     "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS hermes_vhost_ready BOOLEAN NOT NULL DEFAULT FALSE",
     "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS hermes_error TEXT",
-    "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS hermes_credit_blocked BOOLEAN NOT NULL DEFAULT FALSE",
-    "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS hermes_limit_dirty BOOLEAN NOT NULL DEFAULT FALSE",
     "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS hermes_telegram_enabled BOOLEAN NOT NULL DEFAULT FALSE",
     "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS hermes_telegram_installed BOOLEAN NOT NULL DEFAULT FALSE",
     "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS hermes_telegram_token VARCHAR(256)",
@@ -102,15 +97,23 @@ SCHEMA_PATCHES: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS ix_sms_codes_created_at ON sms_codes (created_at)",
     "ALTER TABLE openrouter_accounts ADD COLUMN IF NOT EXISTS limit_usd DOUBLE PRECISION",
     "ALTER TABLE openrouter_accounts ADD COLUMN IF NOT EXISTS limit_synced_at TIMESTAMPTZ",
-    # Move every existing supplier key to its owner before new code stops
-    # consulting the legacy workspace columns. The insert is deliberately
-    # conflict-free so restarts and partially deployed releases are harmless.
-    "INSERT INTO openrouter_accounts "
-    "(user_id, key_hash, key, usage_usd, credit_blocked, limit_dirty, error) "
+    # Complete the 1.7 credential move before removing its five dead workspace
+    # columns. Dynamic SQL matters here: after the columns are dropped, a later
+    # boot must be able to parse this patch and take the false branch.
+    "DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns "
+    "WHERE table_schema = current_schema() AND table_name = 'workspaces' "
+    "AND column_name = 'hermes_key_hash') THEN "
+    "EXECUTE 'INSERT INTO openrouter_accounts "
+    "(user_id, key_hash, key, usage_usd, credit_blocked, limit_dirty) "
     "SELECT user_id, hermes_key_hash, hermes_key, COALESCE(hermes_usage_usd, 0), "
-    "COALESCE(hermes_credit_blocked, FALSE), COALESCE(hermes_limit_dirty, TRUE), "
-    "hermes_error FROM workspaces WHERE hermes_key_hash IS NOT NULL "
-    "ON CONFLICT (user_id) DO NOTHING",
+    "COALESCE(hermes_credit_blocked, FALSE), COALESCE(hermes_limit_dirty, TRUE) "
+    "FROM workspaces WHERE hermes_key_hash IS NOT NULL "
+    "ON CONFLICT (user_id) DO NOTHING'; END IF; END $$",
+    "ALTER TABLE workspaces DROP COLUMN IF EXISTS hermes_key_hash",
+    "ALTER TABLE workspaces DROP COLUMN IF EXISTS hermes_key",
+    "ALTER TABLE workspaces DROP COLUMN IF EXISTS hermes_usage_usd",
+    "ALTER TABLE workspaces DROP COLUMN IF EXISTS hermes_credit_blocked",
+    "ALTER TABLE workspaces DROP COLUMN IF EXISTS hermes_limit_dirty",
     # Published ports now carry both protocols. Customer-published rows written
     # before that are widened; the reserved SSH and RDP rows are left alone,
     # because both are TCP services and a UDP rule there would forward to a port

@@ -34,8 +34,9 @@ and the auth endpoints. Accessing another account's resource returns **404**, no
 |---|---|---|
 | `POST` | `/api/auth/register` | `{username, password, full_name, phone, code}`. Phone is a unique 11-digit Iranian mobile beginning `09` and `code` must verify it. The first account ever created becomes admin. Duplicate username or phone returns a field-specific conflict code |
 | `POST` | `/api/auth/login` | `{identifier, password}`. `identifier` is either username or phone. Sets the session cookie |
-| `POST` | `/api/auth/request-code` | `{phone, purpose}` where purpose is `signup`, `login`, or `profile`; responses avoid account enumeration |
+| `POST` | `/api/auth/request-code` | `{phone, purpose}` where purpose is `signup`, `login`, `profile`, or `recovery`; login and recovery responses avoid account enumeration |
 | `POST` | `/api/auth/login-sms` | `{phone, code}`. Sets the same versioned session cookie as password login |
+| `POST` | `/api/auth/reset-password` | `{phone, code, new_password}`. Consumes a recovery code, changes the password and revokes existing sessions |
 | `GET` | `/api/auth/username-available` | Checks public-hostname syntax, reserved names and uniqueness |
 | `GET` | `/api/auth/phone-available` | Checks phone syntax and uniqueness for signup |
 | `POST` | `/api/auth/logout` | |
@@ -200,7 +201,8 @@ removes the gateway service and Telegram credentials without disabling Hermes.
 |---|---|---|
 | `GET` | `/api/tickets` | Own tickets, with unread marks |
 | `POST` | `/api/tickets` | `{subject, body}`. Capped at 10 open tickets |
-| `GET` | `/api/tickets/{id}` | Marks read |
+| `GET` | `/api/tickets/{id}` | Read the thread without changing it |
+| `POST` | `/api/tickets/{id}/read` | Mark the thread read |
 | `POST` | `/api/tickets/{id}/messages` | Reply. Reopens a closed ticket |
 
 ## Administration
@@ -215,9 +217,8 @@ removes the gateway service and Telegram credentials without disabling Hermes.
 | `POST` | `/api/admin/users/{id}/credit` | Grant credit. Immediately attempts to refresh the account-level OpenRouter cap, while durable worker retry handles supplier failure; Hermes is only one possible consumer |
 | `DELETE` | `/api/admin/users/{id}` | |
 | `GET`/`PUT` | `/api/admin/settings` | Rate card, overcommit ratios, host reserve |
-| `GET` | `/api/admin/activity` | Global audit log |
+| `GET` | `/api/admin/activity` | Paginated global audit log. Accepts `limit`, `offset`, and a `q` search across actor username, action and target |
 | `GET` | `/api/admin/operations` | In-flight and recent long operations |
-| `GET` | `/api/admin/storage` | Pool total/used/free, per-workspace usage, overcommit ratio |
 | `GET` | `/api/admin/users/{id}` | One customer's identity, balance, workspace and service detail |
 | `GET` | `/api/admin/grafana` | Authenticated Grafana base path, dashboard map and masked/admin credential metadata |
 | `GET`/`PUT` | `/api/admin/agent-model/{service}` | Install-time default model for `claude` or `codex`; never rewrites an existing customer choice |
@@ -231,7 +232,8 @@ removes the gateway service and Telegram credentials without disabling Hermes.
 | `GET`/`PUT` | `/api/admin/backup` | Database-backup schedule. The bot token is **never returned** — only `bot_token_set` and the last four characters |
 | `POST` | `/api/admin/backup/run` | Dump and send one backup immediately; returns `{ok, error?, config}` |
 | `GET` | `/api/admin/tickets` | Queue, filterable by status, with counts |
-| `GET` | `/api/admin/tickets/{id}` | |
+| `GET` | `/api/admin/tickets/{id}` | Read the thread without changing it |
+| `POST` | `/api/admin/tickets/{id}/read` | Mark the thread read |
 | `POST` | `/api/admin/tickets/{id}/messages` | Reply; marks the ticket answered |
 | `PUT` | `/api/admin/tickets/{id}/status` | `open ｜ in_progress ｜ answered ｜ closed` |
 | `POST` | `/api/admin/workspaces/{id}/apt-repair` | Re-apply the apt configuration |

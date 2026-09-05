@@ -86,6 +86,25 @@ test("every dynamically-built key prefix has all its variants", () => {
   assert.deepEqual(missing, []);
 });
 
+test("the catalogue carries no unreferenced interface strings", () => {
+  const source = jsFiles(WEB).filter((f) => !f.endsWith("i18n.js"))
+    .map((f) => fs.readFileSync(f, "utf8")).join("\n");
+  // These families are selected from API data rather than a literal in a page.
+  // Validation keys are consumed inside this catalogue's error translator.
+  const runtimePrefixes = ["err.", "notification.", "notif.", "val."];
+  for (const match of source.matchAll(/\bt\(\s*"([^"]+\.)"\s*\+/g))
+    runtimePrefixes.push(match[1]);
+  for (const match of source.matchAll(/\bt\(\s*`([^`$]*\.)\$\{/g))
+    runtimePrefixes.push(match[1]);
+
+  const unused = allKeys().filter((key) =>
+    !runtimePrefixes.some((prefix) => key.startsWith(prefix))
+    && !source.includes(`"${key}"`)
+    && !source.includes(`'${key}'`)
+    && !source.includes(`\`${key}\``));
+  assert.deepEqual(unused, [], "translation keys with no interface consumer");
+});
+
 test("no catalogue value is an empty string", () => {
   for (const k of allKeys()) {
     const v = render(t(k, PROBE));
@@ -161,6 +180,14 @@ test("customer-facing Persian text is owned by the catalogue", () => {
 
 test("currency is Toman", () => {
   assert.equal(CURRENCY, "تومان");
+});
+
+test("customer copy calls compute a machine and names the physical host explicitly", () => {
+  for (const key of allKeys()) {
+    const value = render(t(key, PROBE)).replace(/<[^>]*>/g, " ");
+    assert.ok(!value.includes("فضای کاری"), `${key} uses the retired workspace noun`);
+    assert.ok(!/(^|\s)سرور(?! میزبان)/.test(value), `${key} uses an ambiguous bare server noun`);
+  }
 });
 
 // ---- server error codes -------------------------------------------------
