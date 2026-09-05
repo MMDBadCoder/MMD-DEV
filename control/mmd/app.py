@@ -13,12 +13,9 @@ import os
 import posixpath
 import re
 import secrets
-import shutil
-import subprocess
-import threading
 import time
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from fastapi import (Depends, FastAPI, File, HTTPException, Request, Response,
@@ -50,7 +47,7 @@ from .incus.client import IncusClient, IncusConfig, IncusError
 from .incus.execws import open_exec
 from .models import (AiModelPrice, AiUsageMark, AuditLog, CreditAccount,
                      CreditTransaction, ExposedPort, Notification, PortKind,
-                     Setting, SmsMessage, SshKey, Operation, OpenRouterAccount,
+                     Setting, SshKey, Operation, OpenRouterAccount,
                      Ticket, TicketMessage,
                      TicketStatus, TxKind, UsageSample,
                      User, UserStatus, Workspace, WorkspaceState)

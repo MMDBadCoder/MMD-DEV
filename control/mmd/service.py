@@ -25,7 +25,7 @@ from . import metrics
 from . import ports
 from .config import CONFIG
 from .models import (AuditLog, CreditAccount, CreditTransaction, ExposedPort,
-                     Setting, TxKind, User, Workspace, WorkspaceState, AiModelPrice, AiUsageMark)
+                     Setting, TxKind, Workspace, WorkspaceState, AiModelPrice, AiUsageMark)
 from .scheduler.admission import can_start, host_capacity
 
 UTC = timezone.utc

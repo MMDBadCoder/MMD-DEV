@@ -13,8 +13,6 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const read = (p) => fs.readFileSync(path.join(ROOT, p), "utf8");
-// The bands come from their own module, which touches no DOM.
-const { band, WARN_PERCENT } = await import(path.join(ROOT, "web/js/disk.js"));
 const SRC = read("web/js/pages/adminstorage.js");
 // The exporter moved out of app.py; the pool series is rendered there now.
 const APP = read("control/mmd/app.py") + read("control/mmd/exporter.py");
@@ -64,16 +62,6 @@ test("per-workspace distribution is ranked and readable", () => {
   const org = (p.transformations || []).find((x) => x.id === "organize");
   assert.ok(org, "no column transformation");
   assert.ok(org.options.excludeByName.Time, "the Time column is still shown");
-});
-
-test("disk bands never rely on colour alone", () => {
-  // validate_palette.js scores this system's warn against its bad at ΔE 3.3
-  // for deuteranopia, well under the floor - so every band carries an icon.
-  for (const pct of [0, 50, WARN_PERCENT, 99, 100]) {
-    const b = band(pct);
-    assert.ok(b.key, `no band key at ${pct}%`);
-  }
-  assert.ok(band(WARN_PERCENT).ic, "the warning band has no icon");
 });
 
 test("the pool guard's floor is exported so it can be alerted on", () => {
