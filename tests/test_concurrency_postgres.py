@@ -175,3 +175,60 @@ def test_a_locked_row_serialises_its_writers(pg):
     a.start(); b.start(); a.join(timeout=30); b.join(timeout=30)
 
     assert order.index("first-done") < order.index("second-acquired"), order
+
+
+def test_one_code_admits_one_session(pg):
+    """F-11. Six requests carry the same valid code at once.
+
+    The race is narrow, so this forces it rather than hoping for it: every
+    caller is held at a barrier AFTER `verify` has read the row and BEFORE it
+    checks the hash, which is exactly the window the lock closes. Without the
+    lock all six read an unconsumed row and all six consume it, and one code
+    admits six sessions. Reachable by a double-submitted form or a replayed
+    request, not only by an attacker.
+    """
+    from mmd import smscode
+    engine, Local, _uid = pg
+
+    phone = "09120000002"
+    with Local() as db:
+        code = smscode.issue(db, phone, "login")
+        db.commit()
+
+    callers = 6
+    barrier = threading.Barrier(callers, timeout=20)
+    real_hash = smscode._hash
+    accepted, refused, errors = [], [], []
+
+    def blocking_hash(*a, **kw):
+        # Reached once the row has been read. Holding every caller here puts
+        # them all inside the critical section at the same instant.
+        try:
+            barrier.wait()
+        except threading.BrokenBarrierError:
+            pass
+        return real_hash(*a, **kw)
+
+    smscode._hash = blocking_hash
+    try:
+        def attempt():
+            try:
+                with Local() as db:
+                    smscode.verify(db, phone, "login", code)
+                    accepted.append(1)
+            except smscode.CodeError:
+                refused.append(1)
+            except Exception as exc:  # noqa: BLE001
+                errors.append(exc)
+
+        threads = [threading.Thread(target=attempt) for _ in range(callers)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=40)
+    finally:
+        smscode._hash = real_hash
+
+    assert not errors, errors
+    assert len(accepted) == 1, f"{len(accepted)} callers consumed one code"
+    assert len(refused) == callers - 1

@@ -241,7 +241,6 @@ export function signUpPage() {
   // Availability belongs to identity. Optional products must not define the
   // signup journey merely because they also use this DNS-safe name.
   let unameTimer = null;
-  let phoneTimer = null;
   $("#uname").oninput = () => {
     clearTimeout(unameTimer);
     const hint = $("#unamehint");
@@ -257,19 +256,17 @@ export function signUpPage() {
       } catch { /* the submit will say */ }
     }, 350);
   };
+  // Format only. Whether the number is already registered is deliberately NOT
+  // checked here: an endpoint that answers it lets anyone test whether a phone
+  // belongs to a customer, one number at a time, without possessing it. The
+  // owner is told by SMS instead, and the code request reports the rest.
   $("#phone").oninput = () => {
-    clearTimeout(phoneTimer);
     const hint = $("#phonehint");
     const v = $("#phone").value.trim();
     if (!v) { hint.textContent = t("auth.phone.hint"); hint.className = "tiny dim"; return; }
-    if (!/^09[0-9]{9}$/.test(v)) { hint.textContent = t("auth.err.phone"); hint.className = "tiny bad-text"; return; }
-    phoneTimer = setTimeout(async () => {
-      try {
-        const r = await get(`/api/auth/phone-available?phone=${encodeURIComponent(v)}`);
-        hint.className = r.available ? "tiny ok-text" : "tiny bad-text";
-        hint.textContent = t(r.available ? "auth.phone.free" : "auth.err.phone_taken");
-      } catch { /* submit remains authoritative */ }
-    }, 350);
+    const ok = /^09[0-9]{9}$/.test(v);
+    hint.textContent = ok ? t("auth.phone.hint") : t("auth.err.phone");
+    hint.className = ok ? "tiny dim" : "tiny bad-text";
   };
 
   $("#form").onsubmit = async (e) => {

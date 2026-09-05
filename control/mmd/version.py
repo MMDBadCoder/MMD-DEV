@@ -1,3 +1,3 @@
 """One backend authority for the customer-visible product version."""
 
-APP_VERSION = "1.8.0"
+APP_VERSION = "1.9.0"

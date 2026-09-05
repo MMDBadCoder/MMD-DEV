@@ -82,7 +82,10 @@ test("sign-up collects every required identity field", () => {
     assert.ok(signUp.includes(field), `${field} missing from signup`);
   assert.ok(!signUp.includes('id="email"'));
   assert.ok(signUp.includes("username-available"));
-  assert.ok(signUp.includes("phone-available"));
+  // Format only, never membership: an endpoint answering "is this number
+  // registered" lets anyone test that without possessing the number.
+  assert.ok(!signUp.includes("phone-available"),
+            "signup is probing for existing accounts again");
 });
 
 test("the Hermes secrets are laid out one per row", () => {

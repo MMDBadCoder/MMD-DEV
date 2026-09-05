@@ -36,6 +36,55 @@ Notable changes. Dates are the day the work landed on the production host.
 - Removed 94 unreferenced Persian catalogue entries and added a regression test
   that rejects new dead interface strings.
 
+## [1.9.0] — 2026-09-05
+
+### Fixed
+
+- **Password sign-in had no abuse control of any kind.** SMS codes were rate
+  limited; passwords - the credential actually worth guessing - could be tried
+  indefinitely, and the only trace was a counter on a dashboard. Failures are
+  now counted per identifier in a rolling window (eight in fifteen minutes by
+  default), which reduces an attacker from unlimited guesses to thirty-two an
+  hour while a person who mistypes waits a quarter of an hour rather than
+  being locked out.
+  - Counted against the identifier **as typed**, matched or not. Throttling
+    only real accounts would make the throttle itself an oracle: "this one
+    slowed down, so it exists".
+  - Refused **before** the password is checked, so a throttled caller learns
+    nothing from how long the answer takes, and a correct password is refused
+    too - otherwise the throttle is bypassed by whoever finally guesses right.
+  - In the database, not in memory: an in-process counter resets on every
+    deploy, which is exactly when someone watching would try.
+
+- **One SMS code could admit several sessions.** `verify` read the code,
+  checked it, then marked it consumed, with no lock in between. Concurrent
+  requests carrying the same code all found it unconsumed and all passed.
+  Reachable by a double-submitted form or a replayed request, not only by an
+  attacker. The row is now locked before it is read.
+  - Proven rather than asserted: with the lock removed, the new test shows
+    **six callers consuming one code**.
+
+- **Phone numbers could be tested for membership.** `/api/auth/phone-available`
+  answered whether a number belonged to a customer, and requesting a signup
+  code for a registered number returned a distinct 409 - so anyone could
+  enumerate customers one number at a time without possessing any of them.
+  The endpoint is removed and the code request now answers identically either
+  way, sending the number's owner a sign-in reminder instead. Only the person
+  holding the phone learns anything.
+
+### Changed
+
+- Signup validates phone **format** in the browser and stops there. Whether a
+  number is already registered is reported by SMS to its owner, or at submit.
+
+### Removed
+
+- The 1.7 and 1.8 review documents. Every finding is either resolved, recorded
+  in `docs/DECISIONS.md`, or closed by an explicit product decision; a work
+  queue with nothing left in it is a file that only goes stale.
+- `web/js/disk.js`, 74 lines of CSS for markup no page emits, seven imports
+  the exporter extraction stranded, and one dead settings row.
+
 ## [1.8.0] — 2026-09-05
 
 - Support and admin-profile forms now focus and describe the exact invalid

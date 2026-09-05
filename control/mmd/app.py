@@ -24,7 +24,7 @@ from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from itsdangerous import BadSignature, URLSafeTimedSerializer
 from pydantic import BaseModel, Field
-from sqlalchemy import desc, func, or_, select
+from sqlalchemy import delete, desc, func, or_, select
 from sqlalchemy.orm import Session, aliased
 
 from . import hermes
@@ -47,7 +47,7 @@ from .incus.client import IncusClient, IncusConfig, IncusError
 from .incus.execws import open_exec
 from .models import (AiModelPrice, AiUsageMark, AuditLog, CreditAccount,
                      CreditTransaction, ExposedPort, Notification, PortKind,
-                     Setting, SshKey, Operation, OpenRouterAccount,
+                     LoginAttempt, Setting, SshKey, Operation, OpenRouterAccount,
                      Ticket, TicketMessage,
                      TicketStatus, TxKind, UsageSample,
                      User, UserStatus, Workspace, WorkspaceState)
@@ -475,6 +475,44 @@ def _notify_admins(db: Session, kind: str, detail: dict | None = None,
     db.commit()
 
 
+def _login_throttle(db: Session, identifier: str) -> None:
+    """Refuse a sign-in that has failed too often lately.
+
+    Counted against the identifier AS TYPED, matched or not. Throttling only
+    real accounts would turn the throttle into the very oracle the login path
+    is careful not to be: an attacker would learn which names exist by seeing
+    which ones slow down.
+
+    A rolling window rather than a lockout: a person who mistypes their
+    password eight times is not locked out for a day, they wait a quarter of
+    an hour. An attacker is reduced from unlimited guesses to 32 an hour.
+    """
+    if CONFIG.login_max_attempts <= 0:
+        return
+    since = svc.now() - timedelta(minutes=CONFIG.login_window_minutes)
+    recent = db.scalar(
+        select(func.count(LoginAttempt.id))
+        .where(LoginAttempt.identifier == identifier,
+               LoginAttempt.created_at >= since)) or 0
+    if recent >= CONFIG.login_max_attempts:
+        m.inc("mmd_auth_failures_total",
+              {"method": "password", "reason": "throttled"})
+        fail(429, "too_many_attempts",
+             "Too many sign-in attempts. Try again shortly.")
+
+
+def _record_login_failure(db: Session, identifier: str) -> None:
+    db.add(LoginAttempt(identifier=identifier[:64]))
+    db.commit()
+
+
+def _clear_login_failures(db: Session, identifier: str) -> None:
+    """A correct password clears the slate, so one bad day does not follow
+    someone into their next sign-in."""
+    db.execute(delete(LoginAttempt).where(LoginAttempt.identifier == identifier))
+    db.commit()
+
+
 def _issue_session(response: Response, user: User) -> None:
     """One definition, because password and SMS sign-in must produce exactly
     the same session - a second copy is how the two drift in cookie flags."""
@@ -563,10 +601,20 @@ def request_code(body: CodeRequest, db: Session = Depends(get_session)) -> dict:
     phone = body.phone
     exists = db.scalar(select(User).where(User.phone == phone)) is not None
     if body.purpose in ("signup", "profile") and exists:
-        # Not an enumeration leak: the signup form already reports a taken
-        # number through phone-available, and sending a signup code to an
-        # existing account would be a way to spam a customer.
-        fail(409, "phone_taken", "That phone number is already in use.")
+        # Answered as success, and a different message is sent instead.
+        #
+        # A 409 here was an enumeration oracle: anyone could learn whether a
+        # phone number belongs to a customer, one number at a time, without
+        # possessing the number. Refusing silently would leave the real owner
+        # waiting for a code that never comes, so they are told what actually
+        # happened - which is information only the number's owner receives.
+        try:
+            smscode.throttle(db, phone, body.purpose)
+        except smscode.CodeError as e:
+            fail(429, e.code, str(e))
+        smslib.queue(db, user_id=None, phone=phone, kind="already_registered")
+        db.commit()
+        return {"ok": True}
     try:
         # Throttled even when nothing will be sent, so the shape of the
         # response cannot be used to time-probe for existing accounts.
@@ -656,19 +704,13 @@ def username_available(name: str, db: Session = Depends(get_session)) -> dict:
             "code": "username_taken" if taken else None}
 
 
-@app.get("/api/auth/phone-available")
-def phone_available(phone: str, db: Session = Depends(get_session)) -> dict:
-    if not re.fullmatch(r"09[0-9]{9}", phone):
-        return {"available": False, "code": "phone_invalid"}
-    taken = db.scalar(select(User).where(User.phone == phone)) is not None
-    return {"available": not taken,
-            "code": "phone_taken" if taken else None}
-
-
 @app.post("/api/auth/login")
 def login(body: LoginBody, response: Response,
           db: Session = Depends(get_session)) -> dict:
     identifier = body.identifier.strip().lower()
+    # Before the password is even checked, so a throttled caller learns
+    # nothing from how long the answer takes.
+    _login_throttle(db, identifier)
     user = db.scalar(select(User).where(
         (User.username == identifier) | (User.phone == identifier)))
     if user is None or not verify_password(body.password, user.password_hash):
@@ -677,8 +719,10 @@ def login(body: LoginBody, response: Response,
         m.inc("mmd_auth_failures_total",
               {"method": "password",
                "reason": "no_such_user" if user is None else "bad_password"})
+        _record_login_failure(db, identifier)
         fail(401, "bad_credentials", "Incorrect username or password")
     _ensure_login_allowed(user)
+    _clear_login_failures(db, identifier)
     _issue_session(response, user)
     svc.audit(db, user.id, "sign_in", user.username)
     _notify_new_login(db, user)

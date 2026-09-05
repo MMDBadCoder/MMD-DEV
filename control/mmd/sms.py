@@ -150,6 +150,12 @@ CATALOGUE: dict[str, Template] = {t.kind: t for t in [
        lambda d: f"کد تأیید شما\n{d.get('code', '')}"),
     _t("verification_code", "auth", "customer", False,
        lambda d: f"کد تأیید شما\n{d.get('code', '')}"),
+    # Sent when someone asks to SIGN UP with a number that already has an
+    # account. The request is answered identically either way, so an attacker
+    # learns nothing; the real owner - the only person who receives this -
+    # learns the useful thing, which is that they should sign in instead.
+    _t("already_registered", "auth", "customer", False,
+       lambda d: f"👤 برای این شماره از قبل حساب دارید\nبا همین شماره وارد شوید\n{URL}"),
     _t("login_code", "auth", "customer", False,
        lambda d: f"کد ورود شما\n{d.get('code', '')}"),
     _t("password_reset_code", "auth", "customer", False,

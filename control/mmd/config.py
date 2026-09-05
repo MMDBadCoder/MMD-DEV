@@ -114,6 +114,13 @@ class Config:
     # every administrator.
     worker_stall_minutes: int = field(default_factory=lambda: int(
         _env("MMD_WORKER_STALL_MINUTES", "15")))
+    # Failed sign-ins tolerated per identifier before it is refused for the
+    # rest of the window. Generous enough for a person mistyping a password,
+    # far too small to guess one.
+    login_max_attempts: int = field(default_factory=lambda: int(
+        _env("MMD_LOGIN_MAX_ATTEMPTS", "8")))
+    login_window_minutes: int = field(default_factory=lambda: int(
+        _env("MMD_LOGIN_WINDOW_MINUTES", "15")))
     # A ticket unanswered for longer than this texts every administrator, once
     # a day. Zero disables it. Chosen by the operator rather than assumed: an
     # alert threshold nobody picked is one nobody trusts.

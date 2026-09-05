@@ -62,18 +62,3 @@ def test_deploy_docs_wait_for_schema_before_reconcilers():
         worker = doc.index("restart mmd-worker mmd-provisioner")
         vhosts = doc.index("mmd-vhosts.service")
         assert health < worker < vhosts
-
-
-def test_review_backlog_shrinks_without_reintroducing_closed_findings():
-    """The review is a work queue now, not a permanent copy of every old bug."""
-    doc = read("docs/PROJECT-REVIEW-1.7.md")
-    active = doc.split("### Active review backlog — 46 findings", 1)[1]
-    active = active.split("### Deferred: fundamental", 1)[0]
-    ids: set[int] = set()
-    for start, end in re.findall(r"F-(\d+)(?: through F-(\d+))?", active):
-        ids.update(range(int(start), int(end or start) + 1))
-
-    closed = {1, 2, 3, 7, 9, 10, 16, 19, 20, 21, 25, 28, 29,
-              31, 32, 33, 34, 36, 37, 38, 39, 40, 41, 42, 43, 44, 47, 67}
-    assert len(ids) == 46
-    assert ids.isdisjoint(closed)

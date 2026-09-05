@@ -326,3 +326,101 @@ def test_security_and_code_messages_cannot_be_switched_off():
                 appmod.SmsPreferences(prefs={locked: False}), user, db)
         user.sms_prefs = {locked: False}
         assert smslib.wants(user, locked) is True
+
+
+# --- F-08: password sign-in abuse control ----------------------------------
+def test_password_login_is_throttled_after_repeated_failures():
+    """It had none at all: SMS codes were rate-limited while passwords - the
+    credential actually worth guessing - could be tried indefinitely."""
+    from mmd.config import CONFIG
+    db = database()
+    db.add(User(username="target", phone=PHONE,
+                password_hash=hash_password("correct-horse"),
+                status=UserStatus.APPROVED))
+    db.commit()
+
+    class Resp:
+        def set_cookie(self, *_a, **_kw): pass
+
+    for _ in range(CONFIG.login_max_attempts):
+        with pytest.raises(HTTPException) as e:
+            appmod.login(appmod.LoginBody(identifier="target", password="wrong"),
+                         Resp(), db)
+        assert e.value.status_code == 401
+
+    # The next attempt is refused before the password is even considered.
+    with pytest.raises(HTTPException) as e:
+        appmod.login(appmod.LoginBody(identifier="target", password="wrong"),
+                     Resp(), db)
+    assert e.value.status_code == 429
+    assert e.value.detail["code"] == "too_many_attempts"
+
+    # Even the CORRECT password is refused while the window holds - otherwise
+    # the throttle would be trivially bypassed by the attacker who guesses it.
+    with pytest.raises(HTTPException) as e:
+        appmod.login(appmod.LoginBody(identifier="target",
+                                      password="correct-horse"), Resp(), db)
+    assert e.value.status_code == 429
+
+
+def test_the_throttle_counts_unknown_names_too():
+    """Throttling only real accounts would make the throttle an oracle:
+    'this one slowed down, so it exists'."""
+    from mmd.config import CONFIG
+    from mmd.models import LoginAttempt
+    db = database()
+
+    class Resp:
+        def set_cookie(self, *_a, **_kw): pass
+
+    for _ in range(CONFIG.login_max_attempts):
+        with pytest.raises(HTTPException):
+            appmod.login(appmod.LoginBody(identifier="ghost", password="x"),
+                         Resp(), db)
+    with pytest.raises(HTTPException) as e:
+        appmod.login(appmod.LoginBody(identifier="ghost", password="x"),
+                     Resp(), db)
+    assert e.value.status_code == 429
+    assert db.query(LoginAttempt).count() == CONFIG.login_max_attempts
+
+
+def test_a_correct_password_clears_the_slate():
+    from mmd.models import LoginAttempt
+    db = database()
+    db.add(User(username="ok-user", phone=PHONE,
+                password_hash=hash_password("correct-horse"),
+                status=UserStatus.APPROVED))
+    db.commit()
+
+    class Resp:
+        def set_cookie(self, *_a, **_kw): pass
+
+    for _ in range(3):
+        with pytest.raises(HTTPException):
+            appmod.login(appmod.LoginBody(identifier="ok-user", password="no"),
+                         Resp(), db)
+    assert db.query(LoginAttempt).count() == 3
+    appmod.login(appmod.LoginBody(identifier="ok-user",
+                                  password="correct-horse"), Resp(), db)
+    assert db.query(LoginAttempt).count() == 0
+
+
+# --- F-17: no membership oracle --------------------------------------------
+def test_requesting_a_signup_code_for_a_taken_number_reveals_nothing():
+    """A 409 here let anyone learn whether a phone belongs to a customer, one
+    number at a time, without possessing it. The answer is now identical
+    either way, and the owner - the only person who receives it - is told."""
+    db = database()
+    db.add(User(username="existing", phone=PHONE, password_hash="x",
+                status=UserStatus.APPROVED))
+    db.commit()
+
+    taken = appmod.request_code(
+        appmod.CodeRequest(phone=PHONE, purpose="signup"), db)
+    free = appmod.request_code(
+        appmod.CodeRequest(phone="09121110000", purpose="signup"), db)
+    assert taken == free == {"ok": True}
+
+    kinds = {r.phone: r.kind for r in db.scalars(select(SmsMessage))}
+    assert kinds[PHONE] == "already_registered"
+    assert kinds["09121110000"] == "verification_code"

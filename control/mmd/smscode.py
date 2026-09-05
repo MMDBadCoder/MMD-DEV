@@ -92,13 +92,24 @@ def issue(db, phone: str, purpose: str, now: datetime | None = None) -> str:
 
 def verify(db, phone: str, purpose: str, code: str,
            now: datetime | None = None) -> None:
-    """Consume the code, or raise. Success is silent."""
+    """Consume the code, or raise. Success is silent.
+
+    The row is LOCKED before it is read. Without that, two requests carrying
+    the same code both find it unconsumed, both pass every check, and both
+    mark it used - so one code admits two sessions. The window is small and
+    entirely reachable: a double-submitted form, a retried request, or someone
+    replaying a code they watched go past.
+
+    `with_for_update()` makes the second caller wait until the first has
+    committed, at which point `consumed_at` is set and it correctly fails.
+    """
     now = now or datetime.now(UTC)
     row = db.scalar(
         select(SmsCode)
         .where(SmsCode.phone == phone, SmsCode.purpose == purpose,
                SmsCode.consumed_at.is_(None))
-        .order_by(SmsCode.created_at.desc()))
+        .order_by(SmsCode.created_at.desc())
+        .with_for_update())
     if row is None:
         raise CodeError("sms_code_missing", "Request a code first.")
     expires = row.expires_at

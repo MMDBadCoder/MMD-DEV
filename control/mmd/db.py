@@ -94,6 +94,11 @@ SCHEMA_PATCHES: tuple[str, ...] = (
     "expires_at TIMESTAMPTZ NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, "
     "consumed_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT now())",
     "CREATE INDEX IF NOT EXISTS ix_sms_code_lookup ON sms_codes (phone, purpose)",
+    "CREATE TABLE IF NOT EXISTS login_attempts ("
+    "id SERIAL PRIMARY KEY, identifier VARCHAR(64) NOT NULL, "
+    "created_at TIMESTAMPTZ NOT NULL DEFAULT now())",
+    "CREATE INDEX IF NOT EXISTS ix_login_attempts_identifier "
+    "ON login_attempts (identifier, created_at)",
     "CREATE INDEX IF NOT EXISTS ix_sms_codes_created_at ON sms_codes (created_at)",
     "ALTER TABLE openrouter_accounts ADD COLUMN IF NOT EXISTS limit_usd DOUBLE PRECISION",
     "ALTER TABLE openrouter_accounts ADD COLUMN IF NOT EXISTS limit_synced_at TIMESTAMPTZ",

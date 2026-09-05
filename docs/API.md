@@ -35,10 +35,10 @@ and the auth endpoints. Accessing another account's resource returns **404**, no
 | `POST` | `/api/auth/register` | `{username, password, full_name, phone, code}`. Phone is a unique 11-digit Iranian mobile beginning `09` and `code` must verify it. The first account ever created becomes admin. Duplicate username or phone returns a field-specific conflict code |
 | `POST` | `/api/auth/login` | `{identifier, password}`. `identifier` is either username or phone. Sets the session cookie |
 | `POST` | `/api/auth/request-code` | `{phone, purpose}` where purpose is `signup`, `login`, `profile`, or `recovery`; login and recovery responses avoid account enumeration |
+| | | **Never reveals whether a number is registered.** A signup request for an existing number is answered as success and the owner is sent a sign-in reminder instead, so only the number's holder learns anything |
 | `POST` | `/api/auth/login-sms` | `{phone, code}`. Sets the same versioned session cookie as password login |
 | `POST` | `/api/auth/reset-password` | `{phone, code, new_password}`. Consumes a recovery code, changes the password and revokes existing sessions |
 | `GET` | `/api/auth/username-available` | Checks public-hostname syntax, reserved names and uniqueness |
-| `GET` | `/api/auth/phone-available` | Checks phone syntax and uniqueness for signup |
 | `POST` | `/api/auth/logout` | |
 | `POST` | `/api/auth/password` | Requires the current password |
 | `GET` | `/api/me` | Identity, admin flag, balance, unread ticket counts, application version, Telegram configured flag and user ID; never the bot token |

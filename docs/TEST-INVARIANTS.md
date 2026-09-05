@@ -1,9 +1,10 @@
 # Critical invariant test map
 
 Test counts are not a quality target by themselves. This map names the product
-promises that must remain covered when modules or test files move. The fast
-suite is SQLite/mock based; production-only gaps remain explicitly listed in
-`PROJECT-REVIEW-1.7.md`.
+promises that must remain covered when modules or test files move. The fast suite is SQLite-based, which cannot exercise row locks or lost
+updates - `FOR UPDATE` compiles to nothing there. Those live in
+`test_concurrency_postgres.py`, which runs against a real database and skips
+itself when `MMD_TEST_DATABASE_URL` is unset.
 
 | Invariant | Primary tests |
 |---|---|

@@ -529,6 +529,29 @@ class SmsMessage(Base):
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class LoginAttempt(Base):
+    """A failed sign-in, kept just long enough to slow the next one down.
+
+    Password sign-in had no abuse control of any kind: an attacker could try
+    passwords against a username indefinitely, and the only trace was a
+    counter on a dashboard. SMS codes were already throttled; passwords were
+    not, which is backwards - the password is the credential worth guessing.
+
+    Recorded against the IDENTIFIER as typed, whether or not it matches an
+    account. Throttling only known accounts would make the throttle itself an
+    oracle: "this one slowed down, so it exists".
+
+    In the database rather than in memory, for the same reason the SMS
+    throttle is: an in-process counter resets on every deploy, which is
+    exactly when someone watching would try.
+    """
+    __tablename__ = "login_attempts"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    identifier: Mapped[str] = mapped_column(String(64), index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True)
+
+
 class SmsCode(Base):
     """A one-time code sent to a phone, for signing up or signing in.
 
