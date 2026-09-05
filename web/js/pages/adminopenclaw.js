@@ -9,7 +9,7 @@
  * What OpenClaw owns is its product default: the model a customer's gateway
  * answers with. */
 import { get, put } from "../api.js";
-import { $, esc, note, toast, fmtFa } from "../ui.js";
+import { $, esc, note, toast, fmtFa, formError, clearFormErrors } from "../ui.js";
 import { t } from "../i18n.js";
 import { render } from "../main.js";
 import { adminHead } from "./adminnav.js";
@@ -36,7 +36,7 @@ export async function adminOpenClawPage() {
       </div>
     </div>
 
-    <div class="card">
+    <div class="card" id="openclaw-settings">
       <h3>${t("adm.oc.model")}</h3>
       <p class="tiny dim" style="margin:2px 0 14px;max-width:74ch">${t("adm.oc.model.sub")}</p>
       <label class="field" style="max-width:420px"><span>${t("adm.oc.model.label")}</span>
@@ -52,11 +52,22 @@ export async function adminOpenClawPage() {
 
   $("#oc-save").onclick = async () => {
     const b = $("#oc-save");
+    clearFormErrors($("#openclaw-settings"));
+    const model = $("#oc-model").value.trim();
+    if (!model) {
+      formError(t("adm.err.model"), { form: "#openclaw-settings",
+        messageRoot: "#oc-msg", field: "#oc-model" });
+      return;
+    }
     b.disabled = true;
     try {
-      await put("/api/admin/openclaw", { default_model: $("#oc-model").value.trim() });
+      await put("/api/admin/openclaw", { default_model: model });
       toast(t("adm.saved"), "ok");
-    } catch (err) { $("#oc-msg").innerHTML = note("bad", esc(err.message)); }
-    adminOpenClawPage();
+      adminOpenClawPage();
+    } catch (err) {
+      formError(err.message, { form: "#openclaw-settings",
+        messageRoot: "#oc-msg", field: "#oc-model" });
+      b.disabled = false;
+    }
   };
 }

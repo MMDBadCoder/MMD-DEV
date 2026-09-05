@@ -123,6 +123,32 @@ def test_openrouter_admin_settings_have_no_discount_and_use_supplier_names(env):
     assert data["discount_percent"] == 0
 
 
+def test_ai_admin_configuration_rejects_invalid_prices_and_blank_models(env):
+    client, _, _, _ = env
+
+    assert client.put("/api/admin/openrouter", json={
+        "usd_to_toman": -1,
+    }).status_code == 422
+    assert client.put("/api/admin/openrouter", json={
+        "default_model": "   ",
+    }).status_code == 400
+    assert client.put("/api/admin/hermes", json={
+        "default_model": "   ",
+    }).status_code == 400
+    assert client.put("/api/admin/openclaw", json={
+        "default_model": "   ",
+    }).status_code == 400
+    assert client.post("/api/admin/ai-pricing", json={
+        "service": "claude",
+        "model": "   ",
+        "input_usd": 0,
+        "cache_write_5m_usd": 0,
+        "cache_write_1h_usd": 0,
+        "cache_read_usd": 0,
+        "output_usd": 0,
+    }).status_code == 400
+
+
 def test_capacity_settings_do_not_repeat_ai_configuration(env):
     client, db, ws, _ = env
     db.add_all([Setting(key="usd_to_toman", value="175000"),

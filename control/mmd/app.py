@@ -3438,7 +3438,10 @@ def admin_openclaw_put(body: OpenClawConfig, admin: User = Depends(require_admin
     from under a customer mid-conversation is not an admin setting, it is an
     incident; they pick it up on their next install or repair.
     """
-    value = oclib.set_default_model(db, body.default_model)
+    model = body.default_model.strip()
+    if not model:
+        fail(400, "invalid_model", "The model name cannot be blank.")
+    value = oclib.set_default_model(db, model)
     db.commit()
     svc.audit(db, admin.id, "admin_openclaw_config", None, default_model=value)
     return admin_openclaw_get(admin, db)
@@ -3740,23 +3743,26 @@ def admin_hermes_get(_: User = Depends(require_admin),
 
 
 class HermesConfig(BaseModel):
-    default_model: str | None = None
+    default_model: str | None = Field(default=None, min_length=1, max_length=128)
 
 
 @app.put("/api/admin/hermes")
 def admin_hermes_put(body: HermesConfig, admin: User = Depends(require_admin),
                      db: Session = Depends(get_session)) -> dict:
     if body.default_model is not None:
-        hermes._set(db, hermes.SETTING_DEFAULT_MODEL, body.default_model.strip())
+        model = body.default_model.strip()
+        if not model:
+            fail(400, "invalid_model", "The model name cannot be blank.")
+        hermes._set(db, hermes.SETTING_DEFAULT_MODEL, model)
     db.commit()
     svc.audit(db, admin.id, "admin_hermes_config", None)
     return admin_hermes_get(admin, db)
 
 
 class OpenRouterConfig(BaseModel):
-    usd_to_toman: float | None = None
+    usd_to_toman: float | None = Field(default=None, ge=0)
     # The one model every OpenRouter-backed service starts on.
-    default_model: str | None = Field(default=None, max_length=128)
+    default_model: str | None = Field(default=None, min_length=1, max_length=128)
 
 
 @app.get("/api/admin/openrouter")
@@ -3776,7 +3782,10 @@ def admin_openrouter_put(body: OpenRouterConfig,
     if body.usd_to_toman is not None:
         hermes._set(db, "usd_to_toman", str(max(0.0, float(body.usd_to_toman))))
     if body.default_model is not None:
-        hermes.set_default_model(db, body.default_model)
+        model = body.default_model.strip()
+        if not model:
+            fail(400, "invalid_model", "The model name cannot be blank.")
+        hermes.set_default_model(db, model)
     db.commit()
     svc.audit(db, admin.id, "admin_openrouter_config", None)
     return admin_openrouter_get(admin, db)
@@ -3886,9 +3895,12 @@ def admin_ai_price_update(price_id: int, body: AiPriceRow,
     row = db.get(AiModelPrice, price_id)
     if row is None:
         fail(404, "no_such_price", "No such model price")
+    model = body.model.strip()
+    if not model:
+        fail(400, "invalid_model", "The model name cannot be blank.")
     for f in ("model", "input_usd", "cache_write_5m_usd", "cache_write_1h_usd",
               "cache_read_usd", "output_usd"):
-        setattr(row, f, getattr(body, f))
+        setattr(row, f, model if f == "model" else getattr(body, f))
     db.commit()
     svc.audit(db, admin.id, "ai_price_update", row.model)
     return {"ok": True}
@@ -3901,7 +3913,10 @@ def admin_ai_price_add(body: AiPriceRow, admin: User = Depends(require_admin),
     service = body.service or svc.AI_SERVICE
     if service not in aipricing.SERVICES:
         fail(400, "bad_service", "Unknown AI service.")
-    row = AiModelPrice(service=service, model=body.model,
+    model = body.model.strip()
+    if not model:
+        fail(400, "invalid_model", "The model name cannot be blank.")
+    row = AiModelPrice(service=service, model=model,
                        input_usd=body.input_usd,
                        cache_write_5m_usd=body.cache_write_5m_usd,
                        cache_write_1h_usd=body.cache_write_1h_usd,
@@ -3913,7 +3928,7 @@ def admin_ai_price_add(body: AiPriceRow, admin: User = Depends(require_admin),
     except Exception:  # noqa: BLE001
         db.rollback()
         fail(409, "price_exists", "A price for that model already exists.")
-    svc.audit(db, admin.id, "ai_price_add", body.model)
+    svc.audit(db, admin.id, "ai_price_add", model)
     return {"ok": True, "id": row.id}
 
 

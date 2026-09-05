@@ -1071,19 +1071,19 @@ release.
 | F-39 | Global operation/notification polling is single-flight, preserves last-good state, runs at three seconds only during active work, slows to ten seconds while idle, backs failures off to one minute, and pauses in hidden tabs. Cross-tab coordination or SSE is deliberately excluded until measurements justify more architecture. |
 | F-41 through F-44 | Reduced motion, skip navigation, `aria-sort`, chart data tables, Persian browser titles, and catalogue ownership of customer text are enforced. |
 | F-47 | Recoverable machine, AI, SSH, RDP, and backup prerequisites remain actionable and lead directly to credit, power, resources, OpenRouter, key entry, or Telegram configuration. Only truly impossible/current-state actions remain disabled. |
+| F-40 | The mobile-card table pattern now covers the named priority journeys—billing history, customer tickets, admin customers, published technical addresses, and SSH keys—while desktop tables and all row actions remain intact. |
 
 ### Partially implemented; bounded follow-up remains
 
 | Finding | Completed now | Remaining boundary |
 |---|---|---|
-| F-35 | Shared errors set `aria-invalid`/`aria-describedby`, retain values, and focus the invalid field on authentication, account security, support-ticket creation/reply, and admin profile editing. | Migrate configuration and lower-frequency admin forms when those pages are next changed. |
-| F-40 | Billing transactions, customer tickets, and the admin customer list become labelled row cards at phone widths while retaining desktop tables. | Convert lower-priority technical/admin tables only when real mobile use justifies each layout. |
+| F-35 | Shared errors set `aria-invalid`/`aria-describedby`, retain values, and focus the invalid field across authentication, account security, support, admin profiles, SMS, backup, capacity/tariffs, OpenRouter, Hermes, OpenClaw, and AI pricing configuration. API boundaries also reject negative exchange rates and blank model names. | Migrate remaining one-purpose journey controls when those pages are next changed; the shared form and major configuration surfaces are complete. |
 | F-45 | `docs/DESIGN-SYSTEM.md` and shared dialog, note, secret, status, empty, recovery, validation, and mobile-card table patterns define the contract. | Remove remaining page-local compositions when those pages are next changed. |
 | F-50 | Financial callers can now choose explicit transaction ownership, and usage metering uses it to commit charge plus checkpoint together. | Other helpers still mix commit-owning and caller-owned styles; complete this only during bounded module extraction. |
 | F-65 | Process uptime was already exported; worker snapshots are atomic and now expose age so stale counters differ from zero. | In-process API counters still reset by design; changing that needs an observability architecture decision. |
 | F-71 | Structural tests cover focus, names, tabs, charts, motion, mobile navigation, and recovery. | Real geometry/contrast needs a pinned browser/axe CI environment; no browser runtime is installed in the repository test environment. |
 | F-73 | `docs/TEST-INVARIANTS.md` maps critical promises to their primary tests. | Add branch coverage after choosing a CI coverage budget. |
-| F-74 | Stable translations and representative recovery actions are enforced for high-risk journeys. | Exhaustive endpoint-to-action coverage should grow with F-35, not through a generic support assertion. |
+| F-74 | Stable translations and representative recovery actions are enforced for high-risk journeys. Missing-workspace, Telegram, OpenRouter, and preparing/busy codes now have explicit tested destinations rather than a generic fallback. | Exhaustive endpoint-to-action coverage should grow with remaining page migrations, not through a generic support assertion. |
 
 ### Deliberately retained by owner decision
 
@@ -1093,7 +1093,7 @@ release.
 | F-20 | Keep credit/payment operator-mediated and manual; do not add a payment gateway. |
 | F-67 | Keep published application addresses HTTP-only; do not reintroduce an HTTPS promise the routing model cannot meet. |
 
-### Active review backlog — 47 findings
+### Active review backlog — 46 findings
 
 This is the only list to use when selecting more work. The long finding text
 above is historical evidence; completed and owner-closed items are excluded
@@ -1101,7 +1101,7 @@ from this shrinking backlog.
 
 | State | Findings |
 |---|---|
-| Partially implemented | F-35, F-40, F-45, F-50, F-65, F-71, F-73, F-74 |
+| Partially implemented | F-35, F-45, F-50, F-65, F-71, F-73, F-74 |
 | Deferred: fundamental/high-risk | F-04, F-05, F-06, F-08, F-11 through F-14, F-18, F-22, F-46, F-48, F-49, F-51 through F-60, F-64, F-66, F-69, F-70, F-72 |
 | Awaiting product/operations decision | F-15, F-17, F-23, F-24, F-26, F-27, F-30, F-61 through F-63, F-68 |
 
@@ -1152,14 +1152,14 @@ catalogue was frozen, so they do not receive retroactive finding numbers:
 |---|---|
 | SMS recipient coverage | Removed the temporary two-number delivery allowlist. Every valid Iranian mobile number can now receive queued messages; phone validation, per-message preferences, retries, and code abuse controls remain. Historical `skipped` trial rows are intentionally retained and are not replayed. |
 | Credit-change SMS | Replaced unconditional grant messages and the global cumulative-spend milestone with a per-customer step `n`, configured on Console → SMS. The worker sends one optional message with direction and new balance whenever `floor(balance / n)` changes. First deployment sight and step edits establish a silent baseline. The user-row lock, band update, and outbox insert prevent configuration races and duplicate delivery. |
-| Secondary recovery UX | Support and admin-profile validation identify and focus the exact field. SSH, RDP, and manual backup prerequisites remain keyboard-accessible and lead directly to the missing key, power, memory, or Telegram configuration instead of disappearing behind disabled buttons. |
+| Validation and recovery UX | Authentication, profile, support, SMS, backup, tariffs/capacity, AI model, and AI supplier forms identify and focus the exact invalid field while retaining entered values. Stable workspace and managed-AI prerequisite codes lead to the exact setup page or retry action. |
 | Polling efficiency | The global operation/notification refresh is single-flight, preserves last-known-good state, slows down while idle, backs off transient failures, pauses in hidden tabs, and resumes immediately when visible. |
-| Priority mobile tables | Billing history, customer tickets, and the admin customer list render as labelled cards at phone widths without changing the desktop table or removing row actions. |
-| Verification | The current complete suite passes 622 backend tests plus every frontend and static check. Production deployment established baselines for all 20 approved accounts and queued zero false `credit_step` messages. |
+| Priority mobile tables | Billing history, customer tickets, the admin customer list, published ports, and SSH keys render as labelled cards at phone widths without changing the desktop table or removing row actions. |
+| Verification | The current complete suite passes 624 backend tests plus every frontend and static check. Production deployment established baselines for all 20 approved accounts and queued zero false `credit_step` messages. |
 
 Every implemented batch passed `bash tests/run.sh` and was deployed API-first
-with a health barrier before restarting the worker, provisioner, and vhost
-timer. No customer workspace was used for verification.
+with a health barrier before restarting the relevant background services. No
+customer workspace was used for verification.
 
 ## Deferred implementation programme
 

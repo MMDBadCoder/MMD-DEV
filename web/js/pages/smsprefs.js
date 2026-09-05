@@ -11,7 +11,7 @@
  * appears to silence a takeover warning is worse than one with no switch,
  * because whoever took the account over would use it first. */
 import { get, put } from "../api.js";
-import { $, $$, esc, note, toast } from "../ui.js";
+import { $, $$, esc, note, toast, formError, clearFormErrors } from "../ui.js";
 import { t } from "../i18n.js";
 import { render } from "../main.js";
 
@@ -69,13 +69,14 @@ export async function smsPrefsPage() {
 
   $("#credit-step-form").onsubmit = async (event) => {
     event.preventDefault();
+    clearFormErrors($("#credit-step-form"));
     const input = $("#credit-step");
     const button = event.submitter;
     const value = Number(input.value);
     if (!Number.isInteger(value) || value < d.credit_step_min ||
         value > d.credit_step_max || value % 1000 !== 0) {
-      $("#credit-step-msg").innerHTML = note("bad", t("sms.credit.step.invalid"));
-      input.focus();
+      formError(t("sms.credit.step.invalid"), { form: "#credit-step-form",
+        messageRoot: "#credit-step-msg", field: "#credit-step" });
       return;
     }
     button.disabled = true;
@@ -84,7 +85,8 @@ export async function smsPrefsPage() {
       toast(t("sms.credit.step.saved"), "ok");
       $("#credit-step-msg").innerHTML = "";
     } catch (err) {
-      $("#credit-step-msg").innerHTML = note("bad", esc(err.message));
+      formError(err.message, { form: "#credit-step-form",
+        messageRoot: "#credit-step-msg", field: "#credit-step" });
     } finally {
       button.disabled = false;
     }

@@ -14,6 +14,23 @@ test("common recoveries point to the state that resolves the error", () => {
   assert.match(ui, /data-recovery-retry/);
 });
 
+test("workspace and managed AI prerequisites point to their exact setup page", () => {
+  const exact = {
+    no_workspace: "/console",
+    no_such_workspace: "/console",
+    telegram_not_configured: "/console/account",
+    telegram_bad_token: "/console/account",
+    telegram_bad_users: "/console/account",
+    needs_openrouter: "/console/ai/openrouter",
+  };
+  for (const [code, path] of Object.entries(exact))
+    assert.match(ui, new RegExp(`${code}: \\["recovery\\.[^"]+", "${path}"\\]`));
+
+  for (const code of ["openrouter_not_ready", "openclaw_not_ready", "busy",
+                      "one_key_at_a_time"])
+    assert.match(ui, new RegExp(`${code}: \\["recovery\\.retry", null\\]`));
+});
+
 test("high-risk pages use the shared actionable error component", () => {
   assert.match(connections, /recoveryNote/);
   assert.match(resources, /recoveryNote/);

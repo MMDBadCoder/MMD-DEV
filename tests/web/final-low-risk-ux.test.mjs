@@ -13,6 +13,12 @@ const adminUser = fs.readFileSync("web/js/pages/adminuser.js", "utf8");
 const backup = fs.readFileSync("web/js/pages/adminbackup.js", "utf8");
 const billing = fs.readFileSync("web/js/pages/billing.js", "utf8");
 const adminUsers = fs.readFileSync("web/js/pages/adminusers.js", "utf8");
+const adminHermes = fs.readFileSync("web/js/pages/adminhermes.js", "utf8");
+const adminOpenClaw = fs.readFileSync("web/js/pages/adminopenclaw.js", "utf8");
+const adminOpenRouter = fs.readFileSync("web/js/pages/adminopenrouter.js", "utf8");
+const ports = fs.readFileSync("web/js/pages/ports.js", "utf8");
+const adminMonitor = fs.readFileSync("web/js/pages/adminmonitor.js", "utf8");
+const aiPricing = fs.readFileSync("web/js/pages/aipricing.js", "utf8");
 
 test("an account without compute gets two equal first-run paths", () => {
   assert.match(machine, /journey-choice-grid/);
@@ -56,6 +62,18 @@ test("secondary forms connect validation failures to the affected field", () => 
   assert.match(adminUser, /field: badName \? "#admin-name" : "#admin-phone"/);
 });
 
+test("AI and SMS configuration forms use the shared accessible validation", () => {
+  for (const page of [adminHermes, adminOpenClaw, adminOpenRouter, adminMonitor,
+                      aiPricing, backup, sms]) {
+    assert.match(page, /clearFormErrors/);
+    assert.match(page, /formError/);
+    assert.match(page, /field:/);
+  }
+  assert.match(adminHermes, /class="card" id="hermes-settings"[\s\S]+id="model"/);
+  assert.match(adminOpenClaw, /class="card" id="openclaw-settings"[\s\S]+id="oc-model"/);
+  assert.match(backup, /class="card" id="backup-settings"[\s\S]+id="bk-int"/);
+});
+
 test("recoverable prerequisites do not hide behind disabled controls", () => {
   assert.match(connections, /location\.href = d\.rdp\.memory_ok \? "\/console" : "\/console\/resources"/);
   assert.match(connections, /\$\("#newkey"\)\.focus\(\)/);
@@ -63,9 +81,9 @@ test("recoverable prerequisites do not hide behind disabled controls", () => {
   assert.match(backup, /adm\.bk\.configure\.first/);
 });
 
-test("priority phone tables become labelled cards without changing desktop tables", () => {
+test("priority and technical phone tables become labelled cards without changing desktop tables", () => {
   assert.match(css, /table\.mobile-cards td::before\{content:attr\(data-label\)/);
-  for (const page of [billing, support, adminUsers]) {
+  for (const page of [billing, support, adminUsers, ports, connections]) {
     assert.match(page, /table class="mobile-cards"/);
     assert.match(page, /data-label=/);
   }

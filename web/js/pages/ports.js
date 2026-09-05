@@ -49,14 +49,14 @@ export async function portsPage() {
 
   const rows = d.ports.map((p) => `
     <tr>
-      <td class="mono ltr" dir="ltr">${p.internal_port}<span class="dim tiny"> ${
+      <td data-label="${t("ports.internal")}" class="mono ltr" dir="ltr">${p.internal_port}<span class="dim tiny"> ${
         esc((p.protocols || []).join("/").toUpperCase())}</span></td>
-      <td><span class="pill" style="font-size:12px;padding:3px 10px">${
+      <td data-label="${t("ports.kind")}"><span class="pill" style="font-size:12px;padding:3px 10px">${
         t("ports.kind." + p.kind)}</span></td>
-      <td>${addressCell(p)}</td>
-      <td class="muted small">${esc(p.note || "—")}</td>
-      <td class="muted small nowrap">${stamp(p.created_at)}</td>
-      <td class="num">${p.removable
+      <td data-label="${t("ports.address")}">${addressCell(p)}</td>
+      <td data-label="${t("ports.label")}" class="muted small">${esc(p.note || "—")}</td>
+      <td data-label="${t("ports.since")}" class="muted small nowrap">${stamp(p.created_at)}</td>
+      <td data-label="${t("common.actions")}" class="num">${p.removable
         ? `<button class="btn sm danger" data-del="${p.id}">${icon.trash}</button>`
         // Disabled rather than hidden: an absent control invites the question
         // "where did it go"; a disabled one with a reason answers it.
@@ -85,7 +85,7 @@ export async function portsPage() {
     <div class="card pad0">
       <div class="card-head"><h2>${t("ports.published")}</h2>
         <span class="dim small ltr" dir="ltr">${d.user_port_count} / ${d.max_ports}</span></div>
-      ${d.ports.length ? `<div class="table-wrap"><table>
+      ${d.ports.length ? `<div class="table-wrap"><table class="mobile-cards">
         <thead><tr><th>${t("ports.internal")}</th><th>${t("ports.kind")}</th>
           <th>${t("ports.address")}</th><th>${t("ports.label")}</th>
           <th>${t("ports.since")}</th><th></th></tr></thead>

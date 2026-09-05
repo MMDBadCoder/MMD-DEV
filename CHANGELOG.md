@@ -10,7 +10,14 @@ Notable changes. Dates are the day the work landed on the production host.
 - Global operation/notification polling is single-flight, pauses when hidden,
   retains last-good state, slows while idle, and backs off transient failures.
 - Billing history, customer tickets, and the admin customer list render as
-  labelled row cards on phones while retaining desktop tables.
+  labelled row cards on phones while retaining desktop tables. Published-port
+  addresses and SSH keys now use the same responsive pattern.
+- Admin supplier, model-price, backup, SMS, and tariff/capacity forms now
+  identify and focus invalid fields without discarding entered values. Negative
+  OpenRouter exchange rates and whitespace-only model names are rejected by
+  the API as well as the interface.
+- Missing-workspace, Telegram, OpenRouter, and background-preparation failures
+  now provide a tested link to the exact recovery page or a retry action.
 - Replaced cumulative-spend and unconditional top-up SMS messages with a
   configurable balance step per customer. Crossing `floor(balance / step)` in
   either direction reports the new balance within one worker cycle; deployment

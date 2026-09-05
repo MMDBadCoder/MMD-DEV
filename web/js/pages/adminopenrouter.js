@@ -1,6 +1,6 @@
 /* OpenRouter supplier billing configuration. */
 import { get, put } from "../api.js";
-import { $, esc, fmtMoney, note, toast } from "../ui.js";
+import { $, esc, fmtMoney, note, toast, formError, clearFormErrors } from "../ui.js";
 import { t, CURRENCY } from "../i18n.js";
 import { render } from "../main.js";
 import { adminHead } from "./adminnav.js";
@@ -16,6 +16,7 @@ export async function adminOpenRouterPage() {
   }
 
   render(`${adminHead("openrouter", t("adm.openrouter.title"), t("adm.openrouter.sub"))}
+    <div id="openrouter-settings">
     <div class="card">
       <h3>${t("adm.openrouter.billing")}</h3>
       <p class="muted small">${t("adm.openrouter.billing.sub")}</p>
@@ -37,20 +38,37 @@ export async function adminOpenRouterPage() {
       ${note("info", t("adm.or.model.note"))}
     </div>
 
-    <div class="btn-row"><button class="btn primary" id="or-save">${t("common.save")}</button></div>
+    <div class="btn-row"><button class="btn primary" id="or-save">${t("common.save")}</button></div></div>
     <div id="or-msg"></div>
 
     ${dashboardCard(_gf, "openrouter")}`);
   mountDashboard();
 
   $("#or-save").onclick = async () => {
-    const b = $("#or-save"); b.disabled = true;
+    const b = $("#or-save");
+    clearFormErrors($("#openrouter-settings"));
+    const rate = Number($("#or-rate").value);
+    const model = $("#or-model").value.trim();
+    if (!Number.isFinite(rate) || rate < 0) {
+      formError(t("adm.err.rate"), { form: "#openrouter-settings",
+        messageRoot: "#or-msg", field: "#or-rate" });
+      return;
+    }
+    if (!model) {
+      formError(t("adm.err.model"), { form: "#openrouter-settings",
+        messageRoot: "#or-msg", field: "#or-model" });
+      return;
+    }
+    b.disabled = true;
     try {
       await put("/api/admin/openrouter", {
-        usd_to_toman: Number($("#or-rate").value),
-        default_model: $("#or-model").value.trim(),
+        usd_to_toman: rate,
+        default_model: model,
       });
       toast(t("common.saved"), "ok"); adminOpenRouterPage();
-    } catch (e) { $("#or-msg").innerHTML = note("bad", esc(e.message)); b.disabled = false; }
+    } catch (e) {
+      formError(e.message, { form: "#openrouter-settings", messageRoot: "#or-msg" });
+      b.disabled = false;
+    }
   };
 }

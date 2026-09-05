@@ -121,11 +121,11 @@ function renderTerminal(head, d) {
 function renderSsh(head, d) {
   const rows = d.ssh.keys.map((k) => `
     <tr>
-      <td><div style="font-weight:600">${esc(k.comment || t("ssh.keys.unnamed"))}</div>
+      <td data-label="${t("ssh.keys.name")} / ${t("ssh.keys.fingerprint")}"><div style="font-weight:600">${esc(k.comment || t("ssh.keys.unnamed"))}</div>
           <div class="mono ltr tiny dim" dir="ltr">${esc(k.fingerprint)}</div></td>
-      <td class="mono ltr tiny dim" dir="ltr">${esc(k.type)}</td>
-      <td class="tiny dim nowrap">${stamp(k.created_at)}</td>
-      <td class="num"><button class="btn sm danger" data-remove="${k.id}">
+      <td data-label="${t("ssh.keys.type")}" class="mono ltr tiny dim" dir="ltr">${esc(k.type)}</td>
+      <td data-label="${t("ssh.keys.when")}" class="tiny dim nowrap">${stamp(k.created_at)}</td>
+      <td data-label="${t("common.actions")}" class="num"><button class="btn sm danger" data-remove="${k.id}">
         ${icon.trash}${t("ssh.keys.remove")}</button></td>
     </tr>`).join("");
 
@@ -163,7 +163,7 @@ function renderSsh(head, d) {
         </div>
         <div id="key-msg"></div>
       </div>
-      ${d.ssh.keys.length ? `<div class="table-wrap"><table>
+      ${d.ssh.keys.length ? `<div class="table-wrap"><table class="mobile-cards">
           <thead><tr><th>${t("ssh.keys.name")} / ${t("ssh.keys.fingerprint")}</th>
             <th>${t("ssh.keys.type")}</th><th>${t("ssh.keys.when")}</th><th></th></tr></thead>
           <tbody>${rows}</tbody></table></div>`

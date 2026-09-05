@@ -15,7 +15,8 @@
  * The warning about what a dump contains is not boilerplate. It is the one
  * fact that should decide whether this feature is switched on at all. */
 import { get, put, post } from "../api.js";
-import { $, esc, note, toast, fmtFa, fmtNum, stamp, icon, confirmDialog } from "../ui.js";
+import { $, esc, note, toast, fmtFa, fmtNum, stamp, icon, confirmDialog,
+         formError, clearFormErrors } from "../ui.js";
 import { t } from "../i18n.js";
 import { render } from "../main.js";
 import { adminHead } from "./adminnav.js";
@@ -72,7 +73,7 @@ export async function adminBackupPage() {
       <div id="bk-run"></div>
     </div>
 
-    <div class="card">
+    <div class="card" id="backup-settings">
       <h3>${t("adm.bk.settings")}</h3>
       ${note("warn", t("adm.bk.contains"))}
 
@@ -120,12 +121,29 @@ export async function adminBackupPage() {
 
   $("#bk-save").onclick = async () => {
     const b = $("#bk-save");
-    b.disabled = true;
+    clearFormErrors($("#backup-settings"));
     const token = $("#bk-token").value.trim();
+    const interval = Number($("#bk-int").value.trim());
+    if (!Number.isInteger(interval) || interval < d.min_interval || interval > d.max_interval) {
+      formError(t("adm.bk.interval.invalid", d.min_interval, d.max_interval), {
+        form: "#backup-settings", messageRoot: "#bk-msg", field: "#bk-int" });
+      return;
+    }
+    if ($("#bk-on").checked && !$("#bk-chat").value.trim()) {
+      formError(t("adm.bk.chat.required"), {
+        form: "#backup-settings", messageRoot: "#bk-msg", field: "#bk-chat" });
+      return;
+    }
+    if ($("#bk-on").checked && !d.bot_token_set && !token) {
+      formError(t("adm.bk.token.required"), {
+        form: "#backup-settings", messageRoot: "#bk-msg", field: "#bk-token" });
+      return;
+    }
+    b.disabled = true;
     try {
       await put("/api/admin/backup", {
         enabled: $("#bk-on").checked,
-        interval_minutes: Number($("#bk-int").value.trim()) || d.interval_minutes,
+        interval_minutes: interval,
         chat_id: $("#bk-chat").value.replace(/\s/g, ""),
         // Omitted, not empty: an empty string would erase the stored token.
         ...(token ? { bot_token: token } : {}),
@@ -133,7 +151,7 @@ export async function adminBackupPage() {
       toast(t("adm.saved"), "ok");
       adminBackupPage();
     } catch (err) {
-      $("#bk-msg").innerHTML = note("bad", esc(err.message));
+      formError(err.message, { form: "#backup-settings", messageRoot: "#bk-msg" });
       b.disabled = false;
     }
   };

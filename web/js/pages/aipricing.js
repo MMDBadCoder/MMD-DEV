@@ -6,7 +6,8 @@
  * to keep up - and because a customer asking "why does this cost that" deserves
  * an answer that can be pointed at. */
 import { get, post, put, del } from "../api.js";
-import { $, $$, icon, esc, fmtMoney, fmtFa, note, toast, confirmDialog } from "../ui.js";
+import { $, $$, icon, esc, fmtMoney, fmtFa, note, toast, confirmDialog,
+         formError, clearFormErrors } from "../ui.js";
 import { t, CURRENCY } from "../i18n.js";
 import { render } from "../main.js";
 import { adminHead } from "./adminnav.js";
@@ -43,7 +44,7 @@ export async function aiPricingPage(params) {
 
   render(`${adminHead(service, t(`adm.ai.title.${service}`), t(`adm.ai.sub.${service}`))}
 
-    <div class="card">
+    <div class="card" id="agent-model-settings">
       <h3>${t("adm.ai.model.title")}</h3>
       <p class="muted small" style="max-width:74ch;margin:2px 0 12px">${
         t("adm.ai.model.sub")}</p>
@@ -64,7 +65,7 @@ export async function aiPricingPage(params) {
             d.unpriced_models.map(esc).join(t("common.listSeparator"))}</div>`)
       : ""}
 
-    <div class="card">
+    <div class="card" id="discount-settings">
       <div class="row">
         <div style="flex:1 1 200px">
           <label for="discount">${t("adm.ai.discount")}</label>
@@ -80,7 +81,7 @@ export async function aiPricingPage(params) {
       <div id="ratemsg"></div>
     </div>
 
-    <div class="card">
+    <div class="card" id="pricing-settings">
       <p class="tiny dim" style="margin:0 0 10px">${t("adm.ai.sub")}</p>
       <div class="table-wrap"><table>
         <thead><tr><th>${t("adm.ai.model")}</th>
@@ -99,13 +100,15 @@ export async function aiPricingPage(params) {
 
   $("#agent-model-save").onclick = async () => {
     const b = $("#agent-model-save");
+    clearFormErrors($("#agent-model-settings"));
     b.disabled = true;
     try {
       await put(`/api/admin/agent-model/${service}`,
                 { default_model: $("#agent-model").value.trim() });
       toast(t("adm.saved"), "ok");
     } catch (err) {
-      $("#agent-model-msg").innerHTML = note("bad", esc(err.message));
+      formError(err.message, { form: "#agent-model-settings",
+        messageRoot: "#agent-model-msg", field: "#agent-model" });
     }
     b.disabled = false;
   };
@@ -115,12 +118,19 @@ export async function aiPricingPage(params) {
   };
 
   $("#saverates").onclick = async () => {
+    clearFormErrors($("#discount-settings"));
+    const discount = Number($("#discount").value);
+    if (!Number.isFinite(discount) || discount < 0 || discount > 100) {
+      formError(t("adm.ai.discount.invalid"), { form: "#discount-settings",
+        messageRoot: "#ratemsg", field: "#discount" });
+      return;
+    }
     try {
       await put("/api/admin/settings", {
-        claude_discount_percent: String(Number($("#discount").value)),
+        claude_discount_percent: String(discount),
       });
       toast(t("adm.ai.saved"), "ok");
-    } catch (e) { $("#ratemsg").innerHTML = note("bad", esc(e.message)); }
+    } catch (e) { formError(e.message, { form: "#discount-settings", messageRoot: "#ratemsg" }); }
   };
 
   const body = (id) => ({
@@ -128,13 +138,34 @@ export async function aiPricingPage(params) {
     ...Object.fromEntries(COLS.map(([f]) => [f, Number($(`#${f}-${id}`).value)])),
   });
 
+  const validatePrice = (id) => {
+    const model = $(`#m-${id}`);
+    if (!model.value.trim()) {
+      formError(t("adm.err.model"), { form: "#pricing-settings",
+        messageRoot: "#msg", field: `#m-${id}` });
+      return false;
+    }
+    const invalid = COLS.map(([f]) => $(`#${f}-${id}`)).find((input) => {
+      const value = Number(input.value);
+      return !Number.isFinite(value) || value < 0 || value > 10000;
+    });
+    if (invalid) {
+      formError(t("adm.ai.price.invalid"), { form: "#pricing-settings",
+        messageRoot: "#msg", field: `#${invalid.id}` });
+      return false;
+    }
+    return true;
+  };
+
   $$("[data-save]").forEach((b) => {
     b.onclick = async () => {
+      clearFormErrors($("#pricing-settings"));
+      if (!validatePrice(b.dataset.save)) return;
       b.disabled = true;
       try {
         await put(`/api/admin/ai-pricing/${b.dataset.save}`, body(b.dataset.save));
         toast(t("adm.ai.saved"), "ok");
-      } catch (e) { $("#msg").innerHTML = note("bad", esc(e.message)); }
+      } catch (e) { formError(e.message, { form: "#pricing-settings", messageRoot: "#msg" }); }
       b.disabled = false;
     };
   });
@@ -151,14 +182,28 @@ export async function aiPricingPage(params) {
   });
 
   $("#add").onclick = async () => {
+    clearFormErrors($("#pricing-settings"));
     const model = $("#new-model").value.trim();
-    if (!model) return;
+    if (!model) {
+      formError(t("adm.err.model"), { form: "#pricing-settings",
+        messageRoot: "#msg", field: "#new-model" });
+      return;
+    }
+    const invalid = COLS.map(([f]) => $(`#new-${f}`)).find((input) => {
+      const value = Number(input.value);
+      return !Number.isFinite(value) || value < 0 || value > 10000;
+    });
+    if (invalid) {
+      formError(t("adm.ai.price.invalid"), { form: "#pricing-settings",
+        messageRoot: "#msg", field: `#${invalid.id}` });
+      return;
+    }
     try {
       await post("/api/admin/ai-pricing", { service,
         model,
         ...Object.fromEntries(COLS.map(([f]) => [f, Number($(`#new-${f}`).value)])),
       });
       aiPricingPage();
-    } catch (e) { $("#msg").innerHTML = note("bad", esc(e.message)); }
+    } catch (e) { formError(e.message, { form: "#pricing-settings", messageRoot: "#msg" }); }
   };
 }
