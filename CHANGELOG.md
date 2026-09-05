@@ -4,6 +4,8 @@ Notable changes. Dates are the day the work landed on the production host.
 
 ## Unreleased
 
+## [1.8.0] — 2026-09-05
+
 - Support and admin-profile forms now focus and describe the exact invalid
   field. Recoverable SSH, RDP, and backup prerequisites remain actionable and
   lead to the missing key, power, memory, or Telegram setting.
