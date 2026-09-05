@@ -5,7 +5,8 @@
  * "where did my credit go" - with a shape rather than a number, so a steady
  * drain and a single large charge look different at a glance. */
 import { get, put } from "../api.js";
-import { $, $$, esc, fmtMoney, fmtNum, note, stamp, statePill, toast } from "../ui.js";
+import { $, $$, esc, fmtMoney, fmtNum, note, stamp, statePill, toast,
+         formError, clearFormErrors } from "../ui.js";
 import { t, CURRENCY } from "../i18n.js";
 import { render } from "../main.js";
 import { adminHead } from "./adminnav.js";
@@ -99,16 +100,24 @@ export async function adminUserPage(params) {
 
   $("#admin-profile").onsubmit = async (e) => {
     e.preventDefault();
+    clearFormErrors($("#admin-profile"));
     const body = { full_name: $("#admin-name").value.trim(),
       phone: $("#admin-phone").value.trim() };
     if (body.full_name.length < 2 || !/^09[0-9]{9}$/.test(body.phone)) {
-      $("#admin-profile-msg").innerHTML = note("bad", t(body.full_name.length < 2
-        ? "auth.err.fullname" : "auth.err.phone")); return;
+      const badName = body.full_name.length < 2;
+      formError(t(badName ? "auth.err.fullname" : "auth.err.phone"), {
+        form: "#admin-profile", messageRoot: "#admin-profile-msg",
+        field: badName ? "#admin-name" : "#admin-phone",
+      });
+      return;
     }
     try {
       await put(`/api/admin/users/${id}/profile`, body);
       toast(t("sec.profile.saved"), "ok"); adminUserPage(params);
-    } catch (err) { $("#admin-profile-msg").innerHTML = note("bad", esc(err.message)); }
+    } catch (err) {
+      formError(err.message, { form: "#admin-profile", messageRoot: "#admin-profile-msg",
+        field: err.code === "phone_taken" ? "#admin-phone" : null });
+    }
   };
 }
 

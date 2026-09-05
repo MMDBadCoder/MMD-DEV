@@ -2607,3 +2607,18 @@ movement. Editing `n` also recalculates the baseline in the settings transaction
 because a denominator change is not a credit change. The old direct grant and
 cumulative-spend messages are no longer produced; low-credit and key-blocked
 alerts remain separate because they communicate actionable service state.
+
+## 2026-09-05 — Global polling is self-scheduled and keeps last-good state
+
+The console used a fixed three-second interval for operations and notifications.
+On a slow request, another interval could begin before the first completed; in
+an idle or hidden console this also created load with no customer-visible value.
+A transient failure then replaced useful cached rows with an empty list, making
+notifications appear deleted until the next successful request.
+
+The shell now permits one refresh at a time. Active operations retain a
+three-second cadence, idle consoles use ten seconds, failures back off to one
+minute, and hidden tabs pause before refreshing immediately on return. Failed
+requests preserve the last successful state. This remains polling rather than
+introducing SSE/WebSockets because the current single-host scale does not
+justify another connection lifecycle or proxy boundary.

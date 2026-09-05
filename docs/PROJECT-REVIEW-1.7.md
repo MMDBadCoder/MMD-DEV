@@ -58,6 +58,12 @@ most of the low-risk accessibility/reliability findings have been implemented
 and deployed. The authoritative current status is the disposition near the end
 of this document; the original evidence remains intact for audit history.
 
+**Backlog progress:** 24 of the original 74 findings are implemented, three are
+closed by explicit owner decision, and 47 remain open or partially implemented.
+The active count must decrease whenever work lands; completed findings stay in
+the implementation table for traceability but no longer belong to the active
+backlog.
+
 ## Method and confidence
 
 The review covered the repository rather than a single feature. It read the
@@ -1062,16 +1068,17 @@ release.
 | F-29 | Mobile navigation keeps four primary destinations visible and moves secondary destinations into an accessible “more” sheet. |
 | F-31 through F-34 | Dialog focus/trapping, tab semantics, live async feedback, decorative SVG handling, and accessible control names are standardized. |
 | F-36 through F-38 | Connection failures remain visible, stale async routes cannot overwrite a newer route, and route failures render a shared retry/recovery state. |
+| F-39 | Global operation/notification polling is single-flight, preserves last-good state, runs at three seconds only during active work, slows to ten seconds while idle, backs failures off to one minute, and pauses in hidden tabs. Cross-tab coordination or SSE is deliberately excluded until measurements justify more architecture. |
 | F-41 through F-44 | Reduced motion, skip navigation, `aria-sort`, chart data tables, Persian browser titles, and catalogue ownership of customer text are enforced. |
+| F-47 | Recoverable machine, AI, SSH, RDP, and backup prerequisites remain actionable and lead directly to credit, power, resources, OpenRouter, key entry, or Telegram configuration. Only truly impossible/current-state actions remain disabled. |
 
 ### Partially implemented; bounded follow-up remains
 
 | Finding | Completed now | Remaining boundary |
 |---|---|---|
-| F-35 | Shared errors set `aria-invalid`/`aria-describedby`, retain values, and focus the invalid field on authentication and account-security journeys. | Migrate lower-risk admin and secondary forms incrementally. |
-| F-39 | Page and shell polling pauses in hidden tabs and avoids stale redraws. | Backoff, cross-tab deduplication, and SSE require measurement first. |
-| F-45 | `docs/DESIGN-SYSTEM.md` and shared dialog, note, secret, status, empty, recovery, and validation primitives define the contract. | Remove remaining page-local compositions when those pages are next changed. |
-| F-47 | Recoverable machine and AI prerequisites lead directly to credit, power, resources, or OpenRouter. | Audit remaining secondary/admin disabled states alongside F-35 migration. |
+| F-35 | Shared errors set `aria-invalid`/`aria-describedby`, retain values, and focus the invalid field on authentication, account security, support-ticket creation/reply, and admin profile editing. | Migrate configuration and lower-frequency admin forms when those pages are next changed. |
+| F-40 | Billing transactions, customer tickets, and the admin customer list become labelled row cards at phone widths while retaining desktop tables. | Convert lower-priority technical/admin tables only when real mobile use justifies each layout. |
+| F-45 | `docs/DESIGN-SYSTEM.md` and shared dialog, note, secret, status, empty, recovery, validation, and mobile-card table patterns define the contract. | Remove remaining page-local compositions when those pages are next changed. |
 | F-50 | Financial callers can now choose explicit transaction ownership, and usage metering uses it to commit charge plus checkpoint together. | Other helpers still mix commit-owning and caller-owned styles; complete this only during bounded module extraction. |
 | F-65 | Process uptime was already exported; worker snapshots are atomic and now expose age so stale counters differ from zero. | In-process API counters still reset by design; changing that needs an observability architecture decision. |
 | F-71 | Structural tests cover focus, names, tabs, charts, motion, mobile navigation, and recovery. | Real geometry/contrast needs a pinned browser/axe CI environment; no browser runtime is installed in the repository test environment. |
@@ -1086,6 +1093,21 @@ release.
 | F-20 | Keep credit/payment operator-mediated and manual; do not add a payment gateway. |
 | F-67 | Keep published application addresses HTTP-only; do not reintroduce an HTTPS promise the routing model cannot meet. |
 
+### Active review backlog — 47 findings
+
+This is the only list to use when selecting more work. The long finding text
+above is historical evidence; completed and owner-closed items are excluded
+from this shrinking backlog.
+
+| State | Findings |
+|---|---|
+| Partially implemented | F-35, F-40, F-45, F-50, F-65, F-71, F-73, F-74 |
+| Deferred: fundamental/high-risk | F-04, F-05, F-06, F-08, F-11 through F-14, F-18, F-22, F-46, F-48, F-49, F-51 through F-60, F-64, F-66, F-69, F-70, F-72 |
+| Awaiting product/operations decision | F-15, F-17, F-23, F-24, F-26, F-27, F-30, F-61 through F-63, F-68 |
+
+When one of these findings is completed, remove it from this table, increment
+the implemented count above, and add its result to the implementation table.
+
 ### Deferred: fundamental, high-cost, or high-regression work
 
 | Findings | Why deferred |
@@ -1095,7 +1117,7 @@ release.
 | F-08, F-12, F-13 | Abuse control, password recovery, and bootstrap changes can lock out real users/admins unless proxy trust, SMS budget, and recovery operations are designed together. |
 | F-14, F-18 | Reproducible supply-chain installation and wildcard certificate automation require staged infrastructure and rollback testing. |
 | F-22, F-46 | Key rotation and just-in-time secret reveal affect external clients and every managed consumer; a partial implementation would create false confidence. |
-| F-40, F-48 | Converting every table and adding geometric browser gates spans the UI and requires a pinned headless-browser baseline. Existing overflow containment remains. |
+| F-48 | Geometric browser gates require a pinned headless-browser baseline. Existing structural spacing tests remain. |
 | F-49, F-51 through F-60 | These are control-plane boundary, migration, state-machine, privilege, and threat-model redesigns—the category excluded from this low-risk programme. F-50 has a bounded partial improvement above. |
 | F-64, F-66 | Per-admin Grafana identity and a database capacity envelope require identity/infrastructure and measured-load work. |
 | F-69, F-70, F-72 | PostgreSQL/Incus crash laboratories and security/SBOM tooling require owned CI infrastructure and quarantined disposable workspaces. |
@@ -1130,6 +1152,9 @@ catalogue was frozen, so they do not receive retroactive finding numbers:
 |---|---|
 | SMS recipient coverage | Removed the temporary two-number delivery allowlist. Every valid Iranian mobile number can now receive queued messages; phone validation, per-message preferences, retries, and code abuse controls remain. Historical `skipped` trial rows are intentionally retained and are not replayed. |
 | Credit-change SMS | Replaced unconditional grant messages and the global cumulative-spend milestone with a per-customer step `n`, configured on Console → SMS. The worker sends one optional message with direction and new balance whenever `floor(balance / n)` changes. First deployment sight and step edits establish a silent baseline. The user-row lock, band update, and outbox insert prevent configuration races and duplicate delivery. |
+| Secondary recovery UX | Support and admin-profile validation identify and focus the exact field. SSH, RDP, and manual backup prerequisites remain keyboard-accessible and lead directly to the missing key, power, memory, or Telegram configuration instead of disappearing behind disabled buttons. |
+| Polling efficiency | The global operation/notification refresh is single-flight, preserves last-known-good state, slows down while idle, backs off transient failures, pauses in hidden tabs, and resumes immediately when visible. |
+| Priority mobile tables | Billing history, customer tickets, and the admin customer list render as labelled cards at phone widths without changing the desktop table or removing row actions. |
 | Verification | The current complete suite passes 622 backend tests plus every frontend and static check. Production deployment established baselines for all 20 approved accounts and queued zero false `credit_step` messages. |
 
 Every implemented batch passed `bash tests/run.sh` and was deployed API-first
@@ -1169,9 +1194,9 @@ service state machines (F-14, F-18, F-24, F-57). A launcher should not offer
 
 ### Phase 5 — customer journey and mobile UX
 
-Add safe key rotation, settle the default tier and AI information hierarchy,
-and make narrow-screen data tables first-class (F-22 through F-24, F-30,
-F-35, F-40, F-47).
+Add safe key rotation and settle the default tier and AI information hierarchy
+(F-22 through F-24 and F-30). Continue secondary-form and lower-priority mobile
+table work only alongside changes to those pages (F-35, F-40, F-47).
 
 ### Phase 6 — accessibility and design system
 

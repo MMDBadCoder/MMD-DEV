@@ -3,7 +3,8 @@
  * A list, and a conversation. The conversation is the point: a ticket that
  * answers in a single field and then closes is a form, not support. */
 import { get, post } from "../api.js";
-import { $, $$, icon, esc, note, toast, when, empty } from "../ui.js";
+import { $, $$, icon, esc, note, toast, when, empty, formError,
+         clearFormErrors } from "../ui.js";
 import { t } from "../i18n.js";
 import { render, refreshMe } from "../main.js";
 import { navigate } from "../router.js";
@@ -41,11 +42,11 @@ export async function supportPage(params) {
   }
 
   const rows = d.tickets.map((k) => `<tr data-open="${k.id}" class="clickable${k.unread ? " unread" : ""}">
-    <td><div style="font-weight:600">${esc(k.subject)}
+    <td data-label="${t("tk.subject")}"><div style="font-weight:600">${esc(k.subject)}
         ${k.unread ? `<span class="badge new">${t("tk.new")}</span>` : ""}</div>
       <div class="tiny dim">#${k.id} · ${t("tk.messages")}: ${k.message_count}</div></td>
-    <td>${statusPill(k.status)}</td>
-    <td class="small nowrap">${when(k.last_at || k.updated_at)}</td>
+    <td data-label="${t("tk.status")}">${statusPill(k.status)}</td>
+    <td data-label="${t("tk.updated")}" class="small nowrap">${when(k.last_at || k.updated_at)}</td>
   </tr>`).join("");
 
   render(`<div class="page-head between">
@@ -56,11 +57,11 @@ export async function supportPage(params) {
 
     <div class="card" id="tk-form" hidden>
       <h2>${t("tk.new.title")}</h2>
-      <label for="tk-subj">${t("tk.subject")} <span class="req">*</span></label>
-      <input id="tk-subj" maxlength="200" placeholder="${t("tk.subject.ph")}">
-      <label for="tk-body" style="margin-top:12px">${t("tk.message")} <span class="req">*</span></label>
-      <textarea id="tk-body" rows="5" maxlength="4000"
-        placeholder="${t("tk.message.ph")}"></textarea>
+      <div class="field"><label for="tk-subj">${t("tk.subject")} <span class="req">*</span></label>
+        <input id="tk-subj" maxlength="200" placeholder="${t("tk.subject.ph")}"></div>
+      <div class="field"><label for="tk-body">${t("tk.message")} <span class="req">*</span></label>
+        <textarea id="tk-body" rows="5" maxlength="4000"
+          placeholder="${t("tk.message.ph")}"></textarea></div>
       <div class="btn-row" style="margin-top:14px">
         <button class="btn primary" id="tk-send">${icon.arrow}${t("tk.send")}</button>
         <button class="btn ghost" id="tk-cancel">${t("common.cancel")}</button>
@@ -68,7 +69,7 @@ export async function supportPage(params) {
       <div id="tk-msg"></div>
     </div>
 
-    ${d.tickets.length ? `<div class="card"><div class="table-wrap"><table>
+    ${d.tickets.length ? `<div class="card"><div class="table-wrap"><table class="mobile-cards">
       <thead><tr><th>${t("tk.subject")}</th><th>${t("tk.status")}</th>
         <th>${t("tk.updated")}</th></tr></thead>
       <tbody>${rows}</tbody></table></div></div>`
@@ -80,9 +81,11 @@ export async function supportPage(params) {
   $("#tk-new").onclick = () => { form.hidden = !form.hidden; if (!form.hidden) $("#tk-subj").focus(); };
   $("#tk-cancel").onclick = () => { form.hidden = true; };
   $("#tk-send").onclick = async () => {
+    clearFormErrors(form);
     const subject = $("#tk-subj").value.trim(), body = $("#tk-body").value.trim();
     if (subject.length < 3 || !body) {
-      $("#tk-msg").innerHTML = note("bad", t("tk.incomplete"));
+      formError(t("tk.incomplete"), { form, messageRoot: "#tk-msg",
+        field: subject.length < 3 ? "#tk-subj" : "#tk-body" });
       return;
     }
     const b = $("#tk-send");
@@ -92,7 +95,7 @@ export async function supportPage(params) {
       toast(t("tk.created"), "ok");
       navigate(`/console/support/${r.ticket.id}`);
     } catch (e) {
-      $("#tk-msg").innerHTML = note("bad", esc(e.message));
+      formError(e.message, { form, messageRoot: "#tk-msg" });
       b.disabled = false; b.innerHTML = t("tk.send");
     }
   };
@@ -126,13 +129,13 @@ async function ticketView(id) {
     <div class="card">
       ${thread(d.messages, false)}
       ${d.status === "closed" ? note("info", t("tk.closed.note")) : ""}
-      <label for="tk-reply" style="margin-top:18px">${
+      <div class="field" style="margin-top:18px"><label for="tk-reply">${
         // "Your reply" only makes sense when there is something to reply TO.
         // When the customer's own message is the most recent one, the box is
         // for adding to what they already said.
         lastIsStaff ? t("tk.reply") : t("tk.followup")}</label>
       <textarea id="tk-reply" rows="4" maxlength="4000"
-        placeholder="${lastIsStaff ? t("tk.reply.ph") : t("tk.followup.ph")}"></textarea>
+        placeholder="${lastIsStaff ? t("tk.reply.ph") : t("tk.followup.ph")}"></textarea></div>
       <div class="btn-row" style="margin-top:12px">
         <button class="btn primary" id="tk-post">${icon.arrow}${t("tk.send")}</button>
       </div>
@@ -141,14 +144,18 @@ async function ticketView(id) {
 
   $("#tk-post").onclick = async () => {
     const body = $("#tk-reply").value.trim();
-    if (!body) return;
+    if (!body) {
+      formError(t("tk.reply.required"), { form: ".card", messageRoot: "#tk-msg",
+        field: "#tk-reply" });
+      return;
+    }
     const b = $("#tk-post");
     b.disabled = true; b.innerHTML = `<span class="spinner"></span>${t("tk.sending")}`;
     try {
       await post(`/api/tickets/${id}/messages`, { body });
       ticketView(id);
     } catch (e) {
-      $("#tk-msg").innerHTML = note("bad", esc(e.message));
+      formError(e.message, { form: ".card", messageRoot: "#tk-msg" });
       b.disabled = false; b.innerHTML = t("tk.send");
     }
   };

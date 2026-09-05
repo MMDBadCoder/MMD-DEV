@@ -65,7 +65,7 @@ export async function adminBackupPage() {
       </div>
 
       <div class="btn-row" style="margin-top:16px">
-        <button class="btn" id="bk-now" ${d.bot_token_set && d.chat_id ? "" : "disabled"}>${
+        <button class="btn" id="bk-now">${
           icon.telegram}${t("adm.bk.now")}</button>
       </div>
       <p class="tiny dim" style="margin:8px 0 0">${t("adm.bk.now.hint")}</p>
@@ -139,6 +139,11 @@ export async function adminBackupPage() {
   };
 
   $("#bk-now").onclick = async () => {
+    if (!d.bot_token_set || !d.chat_id) {
+      $("#bk-msg").innerHTML = note("warn", t("adm.bk.configure.first"));
+      $(d.chat_id ? "#bk-token" : "#bk-chat").focus();
+      return;
+    }
     if (!await confirmDialog(t("adm.bk.now"), t("adm.bk.now.confirm"), t("adm.bk.now")))
       return;
     const b = $("#bk-now");

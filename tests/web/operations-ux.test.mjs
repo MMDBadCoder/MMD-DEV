@@ -40,6 +40,6 @@ test("resize confirmation compares the old and new cost", () => {
 test("operation progress is global and refreshes without a page reload", () => {
   assert.match(main, /api\/operations/);
   assert.match(main, /operation-strip/);
-  assert.match(main, /setInterval\(async \(\) =>/);
-  assert.match(main, /}, 3000\)/);
+  assert.match(main, /async function refreshShell/);
+  assert.match(main, /active \? 3000 : 10000/);
 });

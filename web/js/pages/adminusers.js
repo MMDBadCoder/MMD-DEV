@@ -72,22 +72,22 @@ export async function adminUsersPage() {
     [s, s === "all" ? users.length : users.filter((u) => u.status === s).length]));
 
   const row = (u) => `<tr>
-    <td><a class="ltr mono" style="font-size:13px"
+    <td data-label="${t("adm.account")}"><a class="ltr mono" style="font-size:13px"
         href="/console/admin/users/${u.id}">${esc(u.username)}</a>
       <div class="tiny dim">${
         u.full_name ? esc(u.full_name) + " · " : ""}${u.phone ? `<span class="ltr">${esc(u.phone)}</span> · ` : ""}${
         u.is_admin ? t("sec.role.admin") + " · " : ""}${t("adm.joined")} ${stamp(u.created_at)}</div></td>
-    <td><span class="pill"><span class="dot ${u.status === "approved" ? "on"
+    <td data-label="${t("adm.status")}"><span class="pill"><span class="dot ${u.status === "approved" ? "on"
         : u.status === "pending" ? "busy" : "bad"}"></span>${
         statusLabel[u.status] || u.status}</span></td>
-    <td class="small nowrap">${u.workspace
+    <td data-label="${t("adm.machine")}" class="small nowrap">${u.workspace
       ? `${statePill(u.workspace.state)}
          <div class="tiny dim ltr" style="margin-top:3px">${
            fmtNum(u.workspace.cpu_cores, 1)} vCPU · ${
            fmtNum(u.workspace.memory_mb / 1024, 1)} GB</div>`
       : `<span class="dim">${t("adm.none")}</span>`}</td>
-    <td class="num">${fmtMoney(u.credits)}</td>
-    <td class="num nowrap">
+    <td data-label="${t("adm.credit")}" class="num">${fmtMoney(u.credits)}</td>
+    <td data-label="${t("adm.col.action")}" class="num nowrap">
       ${u.status === "pending"
         ? `<button class="btn sm primary" data-approve="${u.id}">${t("adm.approve")}</button>
            <button class="btn sm danger" data-reject="${u.id}">${t("adm.reject")}</button>` : ""}
@@ -126,7 +126,7 @@ export async function adminUsersPage() {
           placeholder="${t("adm.users.search")}" style="max-width:240px">
       </div>
 
-      <div id="user-rows">${shown.length ? `<div class="table-wrap"><table>
+      <div id="user-rows">${shown.length ? `<div class="table-wrap"><table class="mobile-cards">
         <thead><tr>${COLUMNS.map(th).join("")}<th></th></tr></thead>
         <tbody>${shown.map(row).join("")}</tbody></table></div>`
         : `<div style="padding:18px">${note("info", t("adm.users.nomatch"))}</div>`}</div>
@@ -149,7 +149,7 @@ export async function adminUsersPage() {
     f.q = q.value;
     const now = sorted(users.filter(matches));
     $("#user-rows").innerHTML = now.length
-      ? `<div class="table-wrap"><table>
+      ? `<div class="table-wrap"><table class="mobile-cards">
         <thead><tr>${COLUMNS.map(th).join("")}<th></th></tr></thead>
         <tbody>${now.map(row).join("")}</tbody></table></div>`
       : `<div style="padding:18px">${note("info", t("adm.users.nomatch"))}</div>`;
@@ -239,7 +239,7 @@ export async function adminUsersPage() {
         else { f.sort = key; f.dir = COLUMNS.find((c) => c.key === key)?.num ? "desc" : "asc"; }
         saveFilter(f);
         const now = sorted(users.filter(matches));
-        $("#user-rows").innerHTML = `<div class="table-wrap"><table>
+        $("#user-rows").innerHTML = `<div class="table-wrap"><table class="mobile-cards">
           <thead><tr>${COLUMNS.map(th).join("")}<th></th></tr></thead>
           <tbody>${now.map(row).join("")}</tbody></table></div>`;
         wireRowActions();

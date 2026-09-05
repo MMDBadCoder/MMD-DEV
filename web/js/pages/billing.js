@@ -26,10 +26,10 @@ export async function billingPage(_params, page = 0) {
     if (d.note) parts.push(esc(d.note));
     if (d.fraction && d.fraction < 0.999) parts.push(t("billing.d.minutes", Math.round(d.fraction * 60)));
     return `<tr>
-      <td class="nowrap">${stamp(tr.created_at)}</td>
-      <td>${t("billing.kind." + tr.kind) || esc(tr.kind)}</td>
-      <td class="muted small">${parts.join(" · ") || "—"}</td>
-      <td class="num" style="color:${tr.amount >= 0 ? "var(--ok)" : "var(--ink)"}">
+      <td data-label="${t("billing.tx.when")}" class="nowrap">${stamp(tr.created_at)}</td>
+      <td data-label="${t("billing.tx.type")}">${t("billing.kind." + tr.kind) || esc(tr.kind)}</td>
+      <td data-label="${t("billing.tx.detail")}" class="muted small">${parts.join(" · ") || "—"}</td>
+      <td data-label="${t("billing.tx.change")}" class="num" style="color:${tr.amount >= 0 ? "var(--ok)" : "var(--ink)"}">
         ${tr.amount >= 0 ? "+" : "−"}${fmtMoney(Math.abs(tr.amount))}</td>
     </tr>`;
   }).join("");
@@ -84,7 +84,7 @@ export async function billingPage(_params, page = 0) {
     <div class="card pad0">
       <div class="card-head"><h2>${t("billing.tx")}</h2>
         <span class="dim small">${t("billing.tx.total", fmtFa(tx.total))}</span></div>
-      ${tx.transactions.length ? `<div class="table-wrap"><table>
+      ${tx.transactions.length ? `<div class="table-wrap"><table class="mobile-cards">
         <thead><tr><th>${t("billing.tx.when")}</th><th>${t("billing.tx.type")}</th>
           <th>${t("billing.tx.detail")}</th><th class="num">${t("billing.tx.change")} <span class="dim">(${CURRENCY})</span></th></tr></thead>
         <tbody>${rows}</tbody></table></div>` : empty(t("billing.tx.empty"), icon.card)}

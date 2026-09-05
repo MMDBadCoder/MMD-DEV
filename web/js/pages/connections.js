@@ -141,7 +141,7 @@ function renderSsh(head, d) {
       <p class="tiny dim" style="margin:0 0 16px">${t("conn.reserved")}</p>
       <div class="btn-row">
         <button class="btn ${d.ssh.enabled ? "danger" : "primary"}" id="ssh-toggle"
-          ${d.machine_running && (d.ssh.enabled || d.ssh.key_count > 0) ? "" : "disabled"}>
+          >
           ${icon.bolt}${d.ssh.enabled ? t("conn.turnoff") : t("conn.turnon")}</button>
       </div>
       ${d.ssh.key_count === 0 ? note("warn", t("ssh.needkey"))
@@ -211,6 +211,12 @@ function renderSsh(head, d) {
 
   $("#ssh-toggle").onclick = async () => {
     const b = $("#ssh-toggle"), enabling = !d.ssh.enabled;
+    if (!d.machine_running) { location.href = "/console"; return; }
+    if (enabling && d.ssh.key_count === 0) {
+      $("#key-msg").innerHTML = note("warn", t("ssh.needkey"));
+      $("#newkey").focus();
+      return;
+    }
     b.disabled = true; b.innerHTML = `<span class="spinner"></span>${t("conn.working")}`;
     try { await post("/api/workspace/services/ssh", { enabled: enabling });
           toast(enabling ? t("ssh.enabled") : t("ssh.disabled"), "ok");
@@ -252,7 +258,7 @@ function renderRdp(head, d) {
 
       <div class="btn-row">
         <button class="btn ${d.rdp.enabled ? "danger" : "primary"}" id="rdp-toggle"
-          ${d.rdp.can_enable || d.rdp.enabled ? "" : "disabled"}>
+          >
           ${icon.monitor}${d.rdp.enabled ? t("conn.turnoff") : t("conn.turnon")}</button>
       </div>
 
@@ -264,6 +270,10 @@ function renderRdp(head, d) {
 
   $("#rdp-toggle").onclick = async () => {
     const b = $("#rdp-toggle"), enabling = !d.rdp.enabled;
+    if (enabling && !d.rdp.can_enable) {
+      location.href = d.rdp.memory_ok ? "/console" : "/console/resources";
+      return;
+    }
     const pw = $("#rdppw")?.value || "";
     if (enabling && pw.length < 8) {
       $("#rdp-msg").innerHTML = note("bad", t("rdp.password.short"));

@@ -38,6 +38,14 @@ test("background refreshes pause while the document is hidden", () => {
   assert.match(machine, /if \(document\.hidden\)/);
 });
 
+test("global polling is single-flight, retains good state, and backs off", () => {
+  assert.match(main, /shellRefreshRunning/);
+  assert.match(main, /Promise\.all\(\[refreshOperations\(\), refreshNotifications\(\)\]\)/);
+  assert.match(main, /Math\.min\(Math\.max\(shellRefreshDelay \* 2, 6000\), 60000\)/);
+  assert.doesNotMatch(main, /catch \{ state\.operations = \[\]; \}/);
+  assert.doesNotMatch(main, /setInterval\(async/);
+});
+
 test("notification links cannot leave the authenticated console", () => {
   assert.match(main, /startsWith\("\/console"\)/);
 });

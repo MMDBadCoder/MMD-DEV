@@ -29,6 +29,10 @@ consistency comes from shared primitives and behavioural tests.
 - Page tabs are labelled navigation with `aria-current=page`. True in-page
   tabs implement tablist, selected state, controlled panels and arrow keys.
 - The global operation strip exposes durable work in a polite live region.
+- Add `mobile-cards` and a localized `data-label` to each cell only for a table
+  whose phone journey benefits from labelled row cards. Desktop remains a real
+  table; do not mechanically convert dense technical tables without defining
+  their information priority.
 
 ## Navigation and forms
 
@@ -45,7 +49,8 @@ field.
 ## Motion and async work
 
 Reduced-motion preference collapses decorative motion. Pollers stop while the
-document is hidden. Route loaders use the generation boundary, and loading
+document is hidden. Global polling is single-flight, keeps last-good state and
+backs off failures. Route loaders use the generation boundary, and loading
 failures render the shared recovery surface rather than a blank page.
 
 ## Review checklist

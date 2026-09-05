@@ -44,18 +44,19 @@ export async function refreshMe() {
 }
 
 async function refreshOperations() {
-  if (!state.me) { state.operations = []; return; }
-  try { state.operations = (await get("/api/operations")).operations || []; }
-  catch { state.operations = []; }
+  if (!state.me) { state.operations = []; return true; }
+  try { state.operations = (await get("/api/operations")).operations || []; return true; }
+  catch { return false; }
 }
 
 async function refreshNotifications() {
-  if (!state.me) { state.notifications = []; state.notificationUnread = 0; return; }
+  if (!state.me) { state.notifications = []; state.notificationUnread = 0; return true; }
   try {
     const out = await get("/api/notifications");
     state.notifications = out.notifications || [];
     state.notificationUnread = out.unread || 0;
-  } catch { state.notifications = []; state.notificationUnread = 0; }
+    return true;
+  } catch { return false; }
 }
 
 function notificationCenter() {
@@ -309,14 +310,24 @@ setGuard(async (r) => {
 // and the guard above fetches before any view renders.
 startRouter();
 
-// Long operations outlive a page. Refresh only their compact global banner;
-// never redraw the active form or disturb its scroll position.
-setInterval(async () => {
-  if (document.hidden || !state.me || !currentPath().startsWith("/console")) return;
+// Long operations outlive a page. One self-scheduling pass prevents overlapping
+// requests on slow links, retains last-known-good state through a transient
+// failure, and backs off while idle or failing instead of polling every tab at
+// full speed forever.
+let shellRefreshTimer = null;
+let shellRefreshRunning = false;
+let shellRefreshDelay = 3000;
+async function refreshShell() {
+  clearTimeout(shellRefreshTimer);
+  if (shellRefreshRunning) return;
+  if (document.hidden || !state.me || !currentPath().startsWith("/console")) {
+    shellRefreshTimer = setTimeout(refreshShell, 15000);
+    return;
+  }
+  shellRefreshRunning = true;
   const before = JSON.stringify(state.operations);
   const notificationsBefore = JSON.stringify(state.notifications);
-  await refreshOperations();
-  await refreshNotifications();
+  const results = await Promise.all([refreshOperations(), refreshNotifications()]);
   if (before !== JSON.stringify(state.operations)) {
     const old = document.querySelector(".operation-strip");
     const holder = document.createElement("div");
@@ -327,4 +338,17 @@ setInterval(async () => {
   if (notificationsBefore !== JSON.stringify(state.notifications)) {
     redrawNotificationCenter();
   }
-}, 3000);
+  const active = state.operations.some((o) => ["queued", "running"].includes(o.status));
+  shellRefreshDelay = results.every(Boolean)
+    ? (active ? 3000 : 10000)
+    : Math.min(Math.max(shellRefreshDelay * 2, 6000), 60000);
+  shellRefreshRunning = false;
+  shellRefreshTimer = setTimeout(refreshShell, shellRefreshDelay);
+}
+shellRefreshTimer = setTimeout(refreshShell, shellRefreshDelay);
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) {
+    clearTimeout(shellRefreshTimer);
+    shellRefreshTimer = setTimeout(refreshShell, 0);
+  }
+});

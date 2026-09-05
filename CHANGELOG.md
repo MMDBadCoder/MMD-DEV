@@ -4,6 +4,13 @@ Notable changes. Dates are the day the work landed on the production host.
 
 ## Unreleased
 
+- Support and admin-profile forms now focus and describe the exact invalid
+  field. Recoverable SSH, RDP, and backup prerequisites remain actionable and
+  lead to the missing key, power, memory, or Telegram setting.
+- Global operation/notification polling is single-flight, pauses when hidden,
+  retains last-good state, slows while idle, and backs off transient failures.
+- Billing history, customer tickets, and the admin customer list render as
+  labelled row cards on phones while retaining desktop tables.
 - Replaced cumulative-spend and unconditional top-up SMS messages with a
   configurable balance step per customer. Crossing `floor(balance / step)` in
   either direction reports the new balance within one worker cycle; deployment
