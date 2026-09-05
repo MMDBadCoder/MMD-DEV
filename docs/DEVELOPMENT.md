@@ -183,6 +183,8 @@ created after a bug that a three-line test would have caught.
 2. Import and `route()` it in `main.js`; add a `NAV` entry if it needs one.
 3. Every string through `t()`.
 4. `bash tests/run.sh` — the catalogue test fails on any key you forgot.
+5. Follow [DESIGN-SYSTEM.md](DESIGN-SYSTEM.md) for feedback, dialog, chart,
+   keyboard, responsive and numeral contracts.
 
 ### A new provisioner verb
 
@@ -204,7 +206,10 @@ looking anywhere else.
 ```bash
 sudo rm -rf /opt/mmd/{control,workspace,host,web,image}
 sudo cp -r control workspace host web image /opt/mmd/
-sudo systemctl restart mmd-api mmd-worker mmd-provisioner
+sudo systemctl restart mmd-api
+curl --retry 8 --retry-delay 1 --retry-connrefused -fsS http://127.0.0.1:8000/api/health
+sudo systemctl restart mmd-worker mmd-provisioner
+sudo systemctl start mmd-vhosts.service
 ```
 
 Static assets are served at **`/static/js/…`**. A request to `/js/anything.js`

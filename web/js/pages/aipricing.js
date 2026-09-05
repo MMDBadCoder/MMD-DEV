@@ -61,7 +61,7 @@ export async function aiPricingPage(params) {
     ${d.unpriced_models.length
       ? note("warn", `${t("adm.ai.unpriced", d.unpriced_models.length)}
           <div class="ltr mono tiny" style="margin-top:6px">${
-            d.unpriced_models.map(esc).join("، ")}</div>`)
+            d.unpriced_models.map(esc).join(t("common.listSeparator"))}</div>`)
       : ""}
 
     <div class="card">

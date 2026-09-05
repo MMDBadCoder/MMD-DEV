@@ -17,8 +17,7 @@ import { render } from "../main.js";
 
 // The order the page shows them in; kinds absent here simply follow.
 const GROUPS = [
-  ["money", ["low_credit", "stopped_no_credit", "credit_added",
-             "spend_milestone", "key_blocked"]],
+  ["money", ["low_credit", "stopped_no_credit", "credit_step", "key_blocked"]],
   ["machine", ["auto_stopped", "pool_stopped", "disk_high",
                "workspace_ready", "operation_failed"]],
   ["support", ["ticket_replied", "ticket_closed"]],
@@ -43,6 +42,19 @@ export async function smsPrefsPage() {
   render(`<div class="page-head"><h1>${t("sms.title")}</h1>
       <p class="muted small" style="margin:0">${t("sms.sub")}</p></div>
 
+    <div class="card">
+      <h3>${t("sms.credit.step.title")}</h3>
+      <p class="muted small">${t("sms.credit.step.help")}</p>
+      <form id="credit-step-form" style="max-width:420px">
+        <label class="field" for="credit-step"><span>${t("sms.credit.step.label")}</span>
+          <input id="credit-step" class="field-input ltr" dir="ltr" type="number"
+            inputmode="numeric" required step="1000" min="${d.credit_step_min}"
+            max="${d.credit_step_max}" value="${d.credit_step_toman}"></label>
+        <button class="btn primary" type="submit">${t("common.save")}</button>
+      </form>
+      <div id="credit-step-msg"></div>
+    </div>
+
     ${groups.map(([cat, kinds]) => `<div class="card">
       <h3>${t("sms.cat." + cat)}</h3>
       ${kinds.map((k) => `<label class="ack" style="margin-top:10px">
@@ -54,6 +66,29 @@ export async function smsPrefsPage() {
       ${note("info", t("sms.locked"))}
       <div id="sms-msg"></div>
     </div>`);
+
+  $("#credit-step-form").onsubmit = async (event) => {
+    event.preventDefault();
+    const input = $("#credit-step");
+    const button = event.submitter;
+    const value = Number(input.value);
+    if (!Number.isInteger(value) || value < d.credit_step_min ||
+        value > d.credit_step_max || value % 1000 !== 0) {
+      $("#credit-step-msg").innerHTML = note("bad", t("sms.credit.step.invalid"));
+      input.focus();
+      return;
+    }
+    button.disabled = true;
+    try {
+      await put("/api/account/sms", { credit_step_toman: value });
+      toast(t("sms.credit.step.saved"), "ok");
+      $("#credit-step-msg").innerHTML = "";
+    } catch (err) {
+      $("#credit-step-msg").innerHTML = note("bad", esc(err.message));
+    } finally {
+      button.disabled = false;
+    }
+  };
 
   // Saved on change rather than behind a button: each switch is independent
   // and a save button invites leaving the page with the change unsaved.

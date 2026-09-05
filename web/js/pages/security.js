@@ -1,6 +1,6 @@
 /* Account: identity, reusable integrations and password in one place. */
 import { get, post, put } from "../api.js";
-import { $, icon, esc, note, toast, stamp } from "../ui.js";
+import { $, icon, esc, note, toast, stamp, formError, clearFormErrors } from "../ui.js";
 import { t } from "../i18n.js";
 import { render, state, refreshMe } from "../main.js";
 
@@ -21,6 +21,13 @@ export async function securityPage() {
         <div class="field"><label for="profile-phone">${t("auth.phone")}</label>
           <input id="profile-phone" class="ltr" dir="ltr" type="tel" inputmode="numeric"
                  maxlength="11" value="${esc(me.phone || "")}"></div>
+        <div id="phone-verification" hidden>
+          <p class="muted small">${t("sec.phone.changed")}</p>
+          <button class="btn" type="button" id="profile-code-send">${t("sec.phone.send")}</button>
+          <div class="field"><label for="profile-code">${t("sec.phone.code")}</label>
+            <input id="profile-code" class="ltr mono" dir="ltr" inputmode="numeric"
+                   autocomplete="one-time-code" maxlength="8"></div>
+        </div>
         <div class="field"><label for="profile-password">${t("sec.current.confirm")}</label>
           <input id="profile-password" type="password" autocomplete="current-password"></div>
         <button class="btn primary" type="submit">${t("sec.profile.save")}</button>
@@ -68,15 +75,41 @@ export async function securityPage() {
     e.preventDefault();
     const fullName = $("#profile-name").value.trim();
     const phone = $("#profile-phone").value.trim();
-    const fail = (m) => { $("#profilemsg").innerHTML = note("bad", esc(m)); };
-    if (fullName.length < 2) return fail(t("auth.err.fullname"));
-    if (!/^09[0-9]{9}$/.test(phone)) return fail(t("auth.err.phone"));
+    const fail = (m, field) => formError(m, { form: "#profileform", messageRoot: "#profilemsg", field });
+    clearFormErrors($("#profileform"));
+    if (fullName.length < 2) return fail(t("auth.err.fullname"), "#profile-name");
+    if (!/^09[0-9]{9}$/.test(phone)) return fail(t("auth.err.phone"), "#profile-phone");
     try {
       await put("/api/profile", { full_name: fullName, phone,
-        current_password: $("#profile-password").value });
+        current_password: $("#profile-password").value,
+        code: $("#profile-code").value.trim() || null });
       await refreshMe();
       toast(t("sec.profile.saved"), "ok"); securityPage();
-    } catch (err) { fail(err.message); }
+    } catch (err) {
+      const field = ["phone_taken", "invalid_phone", "code_invalid", "code_expired"].includes(err.code)
+        ? (err.code.startsWith("code_") ? "#profile-code" : "#profile-phone")
+        : "#profile-password";
+      fail(err.message, field);
+    }
+  };
+  const phoneInput = $("#profile-phone");
+  const verification = $("#phone-verification");
+  phoneInput.oninput = () => { verification.hidden = phoneInput.value.trim() === (me.phone || ""); };
+  $("#profile-code-send").onclick = async () => {
+    const phone = phoneInput.value.trim();
+    if (!/^09[0-9]{9}$/.test(phone)) {
+      formError(t("auth.err.phone"), { form: "#profileform", messageRoot: "#profilemsg",
+        field: "#profile-phone" }); return;
+    }
+    const button = $("#profile-code-send");
+    button.disabled = true;
+    try {
+      await post("/api/auth/request-code", { phone, purpose: "profile" });
+      $("#profilemsg").innerHTML = note("ok", t("auth.code.sent", phone));
+    } catch (err) {
+      $("#profilemsg").innerHTML = note("bad", esc(err.message));
+      button.disabled = false;
+    }
   };
 
   $("#telegramform").onsubmit = async (e) => {
@@ -99,10 +132,11 @@ export async function securityPage() {
   $("#pwform").onsubmit = async (e) => {
     e.preventDefault();
     const cur = $("#cur").value, nw = $("#nw").value, nw2 = $("#nw2").value;
-    const fail = (m) => { $("#pwmsg").innerHTML = note("bad", esc(m)); };
-    if (nw.length < MIN_PW) return fail(t("auth.err.short", nw.length));
-    if (nw !== nw2) return fail(t("auth.err.mismatch"));
-    if (nw === cur) return fail(t("sec.err.same"));
+    const fail = (m, field) => formError(m, { form: "#pwform", messageRoot: "#pwmsg", field });
+    clearFormErrors($("#pwform"));
+    if (nw.length < MIN_PW) return fail(t("auth.err.short", nw.length), "#nw");
+    if (nw !== nw2) return fail(t("auth.err.mismatch"), "#nw2");
+    if (nw === cur) return fail(t("sec.err.same"), "#nw");
 
     const btn = $("#pwform button");
     btn.disabled = true; btn.innerHTML = `<span class="spinner"></span>${t("sec.changing")}`;
@@ -111,7 +145,7 @@ export async function securityPage() {
       $("#pwmsg").innerHTML = note("ok", t("sec.changed"));
       $("#pwform").reset();
       toast(t("sec.changed"), "ok");
-    } catch (err) { fail(err.message); }
+    } catch (err) { fail(err.message, err.code === "wrong_password" ? "#cur" : "#nw"); }
     btn.disabled = false; btn.innerHTML = `${icon.lock}${t("sec.changepw")}`;
   };
 }

@@ -13,6 +13,7 @@ whole product runs on **one** host.
   <a href="docs/ARCHITECTURE.md">Architecture</a> ·
   <a href="docs/BILLING.md">Billing</a> ·
   <a href="docs/API.md">API</a> ·
+  <a href="docs/DESIGN-SYSTEM.md">Design system</a> ·
   <a href="docs/OPERATIONS.md">Operations</a> ·
   <a href="docs/METRICS.md">Metrics</a> ·
   <a href="docs/DECISIONS.md">Decisions</a> ·
@@ -29,12 +30,15 @@ whole product runs on **one** host.
   anything. It is
   a full Ubuntu 24.04 system, not a sandbox with holes cut in it.
 - **Power off to zero.** No CPU, no RAM, no charge for either — while every
-  file, package, config edit and Docker volume survives untouched.
+  file, package, config edit and Docker volume survives untouched on the host.
+  This persistence is not an off-host backup; customers should also keep source
+  in external version control.
 - **Ways in:** a browser terminal, SSH with managed public keys, a full XFCE
   desktop over RDP, and a rich file manager with editing, upload, download and
   recursive zip.
 - **Two permanent addresses.** SSH and RDP ports are reserved for the life of
-  the account and never change, so a saved config keeps working.
+  the workspace and survive factory reset, so a saved config keeps working.
+  Deleting and recreating the workspace may allocate new ports.
 - **AI tools, already signed in.** One click installs Claude Code and carries
   the platform's sign-in across, so the developer never logs in.
 - **Publish a port** so what they build stays reachable.
@@ -81,7 +85,7 @@ Browser ── nginx ──► mmd-api ──► restricted Incus cert ──►
                         │
                      PostgreSQL
    mmd-worker ── metering · hourly settlement · reconciliation
-   mmd-vhosts ── hermes.<username>.mmd-ai.ir vhosts · certificates
+   mmd-vhosts ── managed tools · published HTTP apps · certificates
 ```
 
 The internet-facing service holds a **restricted** Incus certificate. Incus
@@ -103,16 +107,13 @@ Full detail in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 | `workspace/` | `ws-create` / `ws-reset` / `ws-destroy` — the definition of a workspace |
 | `control/mmd/` | FastAPI control plane: Incus client, billing, admission, API |
 | `control/provisioner/` | The only root component with a socket; allowlisted verbs |
-| `host/mmd-vhosts.py` | Root reconciler: per-customer nginx vhosts and certificates |
+| `host/mmd-vhosts.py` | Root reconciler: managed-tool and published-app nginx vhosts and certificates |
 | `web/` | Persian RTL single-page app — no build step, no framework |
 | `tests/` | Unit tests: pytest for the backend, `node:test` for the interface |
 | `verify/` | Suites that check the **running host**, not the source |
 | `deploy/` | Hardened systemd units |
 | `docs/` | Architecture, billing, API, operations, metrics, and every decision made |
 | `observability/` | Prometheus and Grafana configuration; `build_dashboards.py` generates the dashboards |
-
-Roughly 13,000 lines, excluding vendored assets: ~7,400 Python, ~3,800
-JavaScript, ~2,100 shell.
 
 ---
 

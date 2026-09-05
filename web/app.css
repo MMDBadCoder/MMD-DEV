@@ -89,6 +89,10 @@ body{
 [dir="rtl"] .mono,[dir="rtl"] .ltr{unicode-bidi:isolate}
 a{color:var(--brand);text-decoration:none}
 a:hover{text-decoration:underline}
+.skip-link{position:fixed;z-index:500;inset-block-start:8px;inset-inline-start:8px;
+  padding:9px 14px;border-radius:8px;background:var(--ink);color:var(--surface);
+  transform:translateY(-150%);transition:transform .15s ease}
+.skip-link:focus{transform:translateY(0);outline:3px solid var(--brand);outline-offset:2px}
 h1{font-size:26px;line-height:1.5;margin:0 0 6px;font-weight:700;letter-spacing:0}
 h2{font-size:17px;line-height:1.6;margin:0 0 4px;font-weight:650}
 h3{font-size:15px;line-height:1.6;margin:0 0 10px;font-weight:650;color:var(--ink-2)}
@@ -125,6 +129,8 @@ p{margin:0 0 12px}
 }
 .nav a:hover{background:var(--surface-2);color:var(--ink);text-decoration:none}
 .nav a.active{background:var(--brand-soft);color:var(--brand)}
+.nav-more{display:none}
+.mobile-nav-sheet{display:none}
 .spacer{flex:1}
 .header-right{display:flex;align-items:center;gap:8px;flex:0 0 auto}
 .credit-chip{
@@ -205,6 +211,9 @@ button:focus-visible,a:focus-visible,[tabindex]:focus-visible{
 .note.warn{background:var(--warn-soft);border-color:var(--warn);color:var(--warn)}
 .note.bad{background:var(--bad-soft);border-color:var(--bad);color:var(--bad)}
 .note.info{background:var(--surface-2);border-color:var(--border);color:var(--ink-2)}
+.field-error{margin:6px 0 0}
+input[aria-invalid="true"],select[aria-invalid="true"],textarea[aria-invalid="true"]{
+  border-color:var(--bad);box-shadow:0 0 0 1px var(--bad)}
 .app-version{font-size:10px;font-weight:600;color:var(--ink-3);align-self:flex-end;
   margin-inline-start:-4px;margin-bottom:2px}
 
@@ -324,7 +333,7 @@ kbd{display:inline-block;padding:1px 7px;border:1px solid var(--border-strong);
   border-radius:3px 3px 0 0;min-height:2px;opacity:.85;transition:opacity .12s}
 .chart .col:hover{opacity:1}
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
-/* Eight nav items plus brand, balance and two buttons do not fit 1280px with
+/* The full navigation plus brand, balance and actions does not fit 1280px with
    full Persian labels - the last one clips to a meaningless stub. Drop to
    icons early rather than letting a label truncate. */
 @media (max-width:1180px){
@@ -383,13 +392,15 @@ kbd{display:inline-block;padding:1px 7px;border:1px solid var(--border-strong);
 
 /* ---- tabs ---- */
 .tabs2{display:flex;gap:4px;border-bottom:1px solid var(--border);margin-bottom:20px}
-.tabs2 a{
+.tabs2 a,.tabs2 button{
   display:flex;align-items:center;gap:8px;padding:11px 16px;
   color:var(--ink-2);font-weight:550;font-size:14.5px;
   border-bottom:2px solid transparent;margin-bottom:-1px;white-space:nowrap;
 }
-.tabs2 a:hover{color:var(--ink);text-decoration:none}
-.tabs2 a.active{color:var(--brand);border-bottom-color:var(--brand)}
+.tabs2 button{appearance:none;background:none;border-top:0;border-inline:0;
+  border-radius:0;font-family:inherit;cursor:pointer}
+.tabs2 a:hover,.tabs2 button:hover{color:var(--ink);text-decoration:none}
+.tabs2 a.active,.tabs2 button.active{color:var(--brand);border-bottom-color:var(--brand)}
 .tabs2 .badge{font-size:11px;padding:1px 7px;border-radius:999px;
   background:var(--surface-2);border:1px solid var(--border);font-weight:600}
 .tabs2 .badge.on{background:var(--ok-soft);border-color:var(--ok);color:var(--ok)}
@@ -497,6 +508,9 @@ tr.clickable:hover{background:var(--surface-2)}
   gap:10px;margin-top:6px;flex-wrap:wrap}
 .chart-legend b{font-size:15px;font-weight:700;color:var(--ink)}
 .chart-empty{padding:22px 0;text-align:center}
+.chart-data{margin-top:9px}.chart-data summary{width:max-content;max-width:100%;
+  cursor:pointer;color:var(--brand);min-height:32px;padding:5px 0}
+.chart-data .table-wrap{max-height:240px;margin-top:5px}
 
 /* Unread markers on the ticket lists.
    `.badge` previously had a rule ONLY inside .tabs2, so the "new" marker on the
@@ -519,8 +533,8 @@ tr.unread:hover td{background:var(--bad-soft);filter:brightness(.98)}
 
 /* ---- admin area ------------------------------------------------------- */
 
-/* The section nav reuses .tabs2 from Connections; this only adds the wrapping
-   behaviour it needs, since there are six sections rather than two or three. */
+/* The section nav reuses .tabs2 from Connections; administration has enough
+   destinations that wrapping is part of the component contract. */
 .admin-nav { flex-wrap: wrap; }
 
 /* A card that is also a link: the pending-approvals and waiting-tickets
@@ -610,10 +624,16 @@ a.card.attn:hover { border-color: var(--brand); }
   border:1px solid var(--border);border-radius:8px;background:var(--surface); }
 .cost-preview span { color:var(--muted);font-size:12px; }
 .cost-preview b { font-size:14px; }
+.journey-choice-grid { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px; }
+.journey-choice { display:flex;flex-direction:column;gap:12px;margin:0; }
+.journey-choice > svg { width:30px;height:30px;color:var(--brand); }
+.journey-choice h2,.journey-choice p { margin:0; }
+.journey-choice .btn-row { margin-top:auto; }
 @media (max-width:640px) {
   .machine-control { align-items:stretch;flex-direction:column; }
   .machine-power { width:100%; }
   .cost-preview { grid-template-columns:1fr; }
+  .journey-choice-grid { grid-template-columns:1fr; }
 }
 .operation-strip { display:flex;align-items:center;gap:10px;margin-bottom:14px;
   padding:11px 14px;border:1px solid var(--brand);border-radius:10px;
@@ -646,7 +666,21 @@ a.card.attn:hover { border-color: var(--brand); }
   .header .nav{position:fixed;z-index:90;inset-inline:0;bottom:0;height:66px;
     padding:7px 8px calc(7px + env(safe-area-inset-bottom));margin:0;
     background:var(--surface);border-top:1px solid var(--border);gap:3px}
-  .header .nav a{min-width:52px;min-height:48px;justify-content:center;padding:8px}
+  .header .nav a:not(.mobile-primary){display:none}
+  .header .nav a,.header .nav .nav-more{min-width:52px;min-height:48px;justify-content:center;
+    padding:5px 8px;flex:1;flex-direction:column;gap:2px;border:0;border-radius:8px;
+    background:none;color:var(--ink-2);font-family:inherit;font-size:10.5px;cursor:pointer}
+  .header .nav a span,.header .nav .nav-more span{display:block}
+  .header .nav a.active,.header .nav .nav-more[aria-expanded="true"]{background:var(--brand-soft);color:var(--brand)}
+  .header .nav .nav-more{display:flex}
+  .mobile-nav-sheet{display:block;position:fixed;z-index:89;inset-inline:10px;bottom:74px;
+    padding:10px;background:var(--surface);border:1px solid var(--border);border-radius:14px;
+    box-shadow:0 18px 50px rgba(0,0,0,.24)}
+  .mobile-nav-sheet[hidden]{display:none}
+  .mobile-nav-sheet nav{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px}
+  .mobile-nav-sheet a{display:flex;align-items:center;gap:9px;min-height:44px;padding:9px 11px;
+    border-radius:9px;color:var(--ink-2);font-size:13.5px;font-weight:550}
+  .mobile-nav-sheet a:hover,.mobile-nav-sheet a.active{background:var(--brand-soft);color:var(--brand);text-decoration:none}
   .header-right{gap:2px}.header-right .btn,.btn.icon{min-width:44px;min-height:44px}
   .btn:not(.sm){min-height:44px}.btn.sm{min-height:40px}
   .card{padding:16px;border-radius:12px}.card-head,.card-body{padding:14px}
@@ -658,7 +692,15 @@ a.card.attn:hover { border-color: var(--brand); }
     background:var(--surface);padding-top:10px}.dialog-actions .btn{flex:1}
   .onboarding li{align-items:flex-start;flex-wrap:wrap}.onboarding li .btn{width:100%;margin:4px 36px 0 0}
   .toast-wrap{inset-inline:10px;bottom:76px}.toast{max-width:none}
-  .tabs2{overflow-x:auto;scrollbar-width:none}.tabs2 a{min-height:44px}
+  .tabs2{overflow-x:auto;scrollbar-width:none}.tabs2 a,.tabs2 button{min-height:44px}
+}
+
+/* Motion is decorative throughout the console. Respecting the platform
+   preference also prevents the operation spinner from becoming a distraction. */
+@media(prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto}
+  *,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;
+    transition-duration:.01ms!important;scroll-behavior:auto!important}
 }
 
 /* --- disk usage chip (admin users list) --------------------------------

@@ -2539,3 +2539,71 @@ phone. Signup reports duplicate username and phone explicitly, and destructive
 confirmations use the public, stable username. ACME operator email and email
 fields inside third-party OAuth documents are infrastructure data, not customer
 identity, and are intentionally unaffected.
+
+## 2026-09-04 — Route readiness and credential changes are explicit state
+
+Finishing a managed-service install does not prove that its public hostname is
+usable. nginx reconciliation is a separate process and can lag or fail. Hermes
+already recorded that boundary; OpenCode and Open WebUI now do the same. Their
+launcher is ready only when intent, installation, credentials, and the exact
+generated vhost all agree. Disabling, reset, and failed recreation clear the
+route-ready bit immediately.
+
+Stateless signed cookies also need a revocation input. Each session now carries
+the account's `session_version`; password changes, phone changes, rejection,
+suspension, and deletion advance it. The browser performing a legitimate
+credential change receives a replacement cookie while older cookies stop at
+the next authenticated request. Pre-upgrade cookies are accepted only while the
+stored version remains zero, which avoids logging everyone out at deployment
+without leaving a permanent compatibility bypass.
+
+Schema patches run in API startup, so deployment order is part of correctness:
+restart the API, wait for its health response, and only then start code in the
+worker or one-shot vhost reconciler that may query new columns. Starting all
+three simultaneously reproduced an undefined-column failure even though every
+individual service was healthy after retry.
+
+## 2026-09-05 — Recorded credit and an applied supplier cap are different states
+
+A credit grant is committed locally before OpenRouter is called. That ordering
+is deliberate: supplier downtime must never lose a customer's manual payment.
+It also means that for a few seconds the ledger can show the new balance while
+the portable API key still has its previous upstream ceiling.
+
+The API process still does not hold the OpenRouter management credential. The
+worker records `limit_usd` and `limit_synced_at` only after a successful
+supplier read/update, while `limit_dirty` means the durable five-second retry is
+pending. The OpenRouter tab shows all three states and polls while dirty. Do not
+derive "effective now" from balance alone, and do not move the management key
+into the internet-facing API merely to make a grant synchronous.
+
+## 2026-09-05 — Compute-free accounts need a first-class first screen
+
+OpenRouter belongs to the customer account, not to its optional workspace. A
+single large “create workspace” empty state made that technical truth invisible
+and quietly pushed every approved customer into buying compute. The empty
+machine page therefore presents two equal cards: use the portable API key, or
+create Ubuntu compute. Deleting a workspace returns to this chooser without
+changing the account key.
+
+## 2026-09-05 — Credit SMS follows per-customer balance bands
+
+The old money notifications combined two unrelated rules: every manual grant
+sent a message, while spending was measured against a global cumulative-spend
+watermark. It could not describe refunds or other upward adjustments, and the
+same fixed threshold was unsuitable for customers with very different usage.
+
+Each user now owns a step `n` in integer Toman. The worker compares
+`floor(balance / n)` with the last observed band after every five-second cycle.
+Any change queues one optional `credit_step` message stating the new balance and
+whether it increased or decreased, even when one operation crosses several
+bands. The band update and outbox insert commit together, and the user row is
+locked during comparison, so worker retries or a concurrent settings edit do
+not duplicate or invent a notification.
+
+The stored band is nullable deliberately. First sight after deployment records
+the current band silently instead of messaging customers about historical
+movement. Editing `n` also recalculates the baseline in the settings transaction
+because a denominator change is not a credit change. The old direct grant and
+cumulative-spend messages are no longer produced; low-credit and key-blocked
+alerts remain separate because they communicate actionable service state.

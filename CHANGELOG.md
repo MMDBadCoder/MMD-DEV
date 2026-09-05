@@ -2,6 +2,54 @@
 
 Notable changes. Dates are the day the work landed on the production host.
 
+## Unreleased
+
+- Replaced cumulative-spend and unconditional top-up SMS messages with a
+  configurable balance step per customer. Crossing `floor(balance / step)` in
+  either direction reports the new balance within one worker cycle; deployment
+  and step edits establish a silent baseline to avoid false notifications.
+- Removed the temporary SMS recipient allowlist. Kavenegar delivery now accepts
+  every valid Iranian mobile number while preserving format checks, preferences,
+  retry limits, and existing anti-abuse controls.
+
+- Customers without a workspace now choose between two equal first-run paths:
+  using their independent OpenRouter API key or creating a development machine.
+- The OpenRouter tab now separates recorded credit from the supplier-confirmed
+  USD cap, shows the last successful synchronization, reports retries, and
+  refreshes pending cap changes on the worker's five-second reconciliation.
+- Recoverable AI prerequisites now lead directly to power, credit, resource,
+  or OpenRouter recovery instead of hiding those paths behind disabled buttons.
+- Shared field validation now connects errors with `aria-invalid` and
+  `aria-describedby`, retains the form values, and focuses the affected field.
+- Prometheus now exports worker-metrics snapshot age, so stale cross-process
+  counters cannot look like a healthy zero; the critical product invariants
+  also have an explicit test-to-promise map in `docs/TEST-INVARIANTS.md`.
+
+### Fixed
+
+- Managed OpenCode and Open WebUI launchers wait for their exact nginx vhost
+  before reporting ready, eliminating links that could land on the homepage.
+- Password and identity changes revoke older signed sessions; rejected,
+  suspended, and deleting accounts no longer receive a normal login session.
+- Changing the sole account phone now requires a one-time code sent to the new
+  number.
+- Route-load and connection failures remain visible with a specific retry or
+  recovery action, and stale asynchronous page loads cannot repaint a newer
+  route.
+- Customer copy, API examples, metric cadence, raw-sample retention, managed
+  vhost documentation, and Grafana reachability now match the running product.
+
+### Changed
+
+- Mobile navigation keeps four primary journeys visible and moves secondary
+  destinations into a labelled More sheet.
+- Dialogs, page tabs, transient feedback, sortable tables, and icon-only
+  controls now expose consistent keyboard and assistive-technology semantics.
+- Background polling pauses in hidden tabs and reduced-motion preferences are
+  respected.
+- FastAPI startup uses the supported lifespan interface, and the obsolete
+  email-validation dependency has been removed.
+
 ## [1.7.0] — 2026-09-04
 
 ### Added
@@ -39,9 +87,9 @@ Notable changes. Dates are the day the work landed on the production host.
   - The provider key is worker-only via `LoadCredential`, like the OpenRouter
     management key. The internet-facing API queues messages into an outbox and
     cannot send.
-  - A **temporary allowlist** gates real delivery while the feature is proven.
-    Suppressed messages are still recorded as `skipped`, so the trial shows
-    what would have been sent. Clear `MMD_SMS_ALLOWLIST` to remove it.
+  - Delivery is available to every valid Iranian mobile number; phone-format
+    validation, customer preferences, provider retries, and code rate limits
+    remain enforced.
 
 - **Phone verification at signup, and sign-in by SMS code.** Codes are hashed
   at rest, single-use, expiring, attempt-limited and rate-limited per phone,

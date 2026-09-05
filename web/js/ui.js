@@ -12,10 +12,10 @@ export { fmtMoney, fmtNum, fmtFa, money, moneyPerHour } from "./i18n.js";
 export function when(iso) {
   if (!iso) return "—";
   const d = new Date(iso), diff = (Date.now() - d) / 1000;
-  if (diff < 60) return "همین حالا";
-  if (diff < 3600) return `${Math.floor(diff / 60)} دقیقه پیش`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)} ساعت پیش`;
-  if (diff < 604800) return `${Math.floor(diff / 86400)} روز پیش`;
+  if (diff < 60) return t("time.now");
+  if (diff < 3600) return t("time.minutesAgo", Math.floor(diff / 60));
+  if (diff < 86400) return t("time.hoursAgo", Math.floor(diff / 3600));
+  if (diff < 604800) return t("time.daysAgo", Math.floor(diff / 86400));
   return d.toLocaleDateString("fa-IR");
 }
 
@@ -29,7 +29,8 @@ export const stamp = (iso) => (iso
 /* Inline SVG so the whole app stays self-contained - no icon font, no CDN. */
 const P = (d, extra = "") =>
   `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-    stroke-width="2" stroke-linecap="round" stroke-linejoin="round" ${extra}>${d}</svg>`;
+    stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+    aria-hidden="true" focusable="false" ${extra}>${d}</svg>`;
 
 export const icon = {
   machine: P('<rect x="2" y="4" width="20" height="13" rx="2"/><path d="M7 21h10M12 17v4"/>'),
@@ -93,6 +94,7 @@ export const icon = {
   // than as the one service the section is about.
   telegram: P('<path d="M22 2 15 22l-4-9-9-4z"/><path d="M22 2 11 13"/>'),
   bell: P('<path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21h4"/>'),
+  more: P('<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>'),
   link: P('<path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/>'),
 
   // Four nav marks that were standing in for concepts they do not mean.
@@ -139,6 +141,7 @@ export function statePill(state) {
 export function toast(message, kind = "") {
   const el = document.createElement("div");
   el.className = `toast ${kind}`;
+  el.setAttribute("role", kind === "bad" ? "alert" : "status");
   el.textContent = message;
   $("#toasts").append(el);
   setTimeout(() => {
@@ -148,9 +151,80 @@ export function toast(message, kind = "") {
   }, kind === "bad" ? 6000 : 3200);
 }
 
+/* One keyboard contract for every modal. `cleanup` restores focus to the
+   control that opened it, so closing a dialog never strands a keyboard user at
+   the top of the document. */
+export function activateDialog(wrap, initial, onCancel) {
+  const previous = document.activeElement;
+  const focusable = () => [...wrap.querySelectorAll(
+    'button:not([disabled]),input:not([disabled]),a[href],select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])')];
+  const keydown = (event) => {
+    if (event.key === "Escape") { event.preventDefault(); onCancel(); return; }
+    if (event.key !== "Tab") return;
+    const items = focusable();
+    if (!items.length) { event.preventDefault(); return; }
+    const first = items[0], last = items[items.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault(); last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault(); first.focus();
+    }
+  };
+  document.addEventListener("keydown", keydown);
+  (initial || focusable()[0])?.focus();
+  return () => {
+    document.removeEventListener("keydown", keydown);
+    if (previous?.isConnected) previous.focus();
+  };
+}
+
 export function note(kind, html) {
   const ic = { ok: icon.check, warn: icon.alert, bad: icon.alert, info: icon.info }[kind] || "";
-  return `<div class="note ${kind}">${ic}<div>${html}</div></div>`;
+  const live = kind === "bad" ? ' role="alert"' : kind === "ok" ? ' role="status"' : "";
+  return `<div class="note ${kind}"${live}>${ic}<div>${html}</div></div>`;
+}
+
+let formErrorSequence = 0;
+
+export function clearFormErrors(form = document) {
+  const root = typeof form === "string" ? $(form) : form;
+  if (!root) return;
+  $$('[aria-invalid="true"]', root).forEach((input) => {
+    input.removeAttribute("aria-invalid");
+    const errorId = input.dataset.formErrorId;
+    if (errorId) {
+      const ids = (input.getAttribute("aria-describedby") || "")
+        .split(/\s+/).filter((id) => id && id !== errorId);
+      if (ids.length) input.setAttribute("aria-describedby", ids.join(" "));
+      else input.removeAttribute("aria-describedby");
+      delete input.dataset.formErrorId;
+    }
+  });
+  $$("[data-form-error]", root).forEach((el) => el.remove());
+}
+
+/* Keep the summary for sighted recovery, and connect the same failure to the
+   exact field for assistive technology. The API code chooses the field; the
+   API's English detail is never rendered. */
+export function formError(message, { form = "form", messageRoot = "#msg", field = null } = {}) {
+  const formEl = typeof form === "string" ? $(form) : form;
+  clearFormErrors(formEl);
+  const messageEl = typeof messageRoot === "string" ? $(messageRoot) : messageRoot;
+  if (messageEl) messageEl.innerHTML = note("bad", esc(message));
+  const input = field ? $(field, formEl || document) : null;
+  if (!input) return;
+  const id = `form-error-${++formErrorSequence}`;
+  const error = document.createElement("p");
+  error.id = id;
+  error.className = "tiny bad-text field-error";
+  error.dataset.formError = "true";
+  error.textContent = message;
+  input.closest(".field")?.append(error);
+  input.setAttribute("aria-invalid", "true");
+  input.dataset.formErrorId = id;
+  input.setAttribute("aria-describedby", [input.getAttribute("aria-describedby"), id]
+    .filter(Boolean).join(" "));
+  input.focus();
 }
 
 const RECOVERY = {
@@ -193,38 +267,46 @@ export function empty(text, ico = icon.info, action = null) {
 
 /* ---- theme ---- */
 export function currentTheme() {
-  return localStorage.getItem("mmd-theme")
-      || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  try {
+    return localStorage.getItem("mmd-theme")
+        || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  } catch {
+    return matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  }
 }
 
 export function toggleTheme() {
   const next = currentTheme() === "dark" ? "light" : "dark";
-  localStorage.setItem("mmd-theme", next);
+  try { localStorage.setItem("mmd-theme", next); } catch { /* appearance still changes */ }
   document.documentElement.setAttribute("data-theme", next);
   window.dispatchEvent(new CustomEvent("mmd:theme", { detail: next }));
 }
 
 /* ---- confirmation ---- */
-/* opts.cancelLabel  - the second button's text. Defaults to "انصراف", which is
+/* opts.cancelLabel  - the second button's text. Defaults to the localized cancel label, which is
                        right for a destructive question and wrong for an
                        informational one where BOTH answers are a real choice.
    opts.tone          - "danger" (default) or "primary" for the confirm button. */
-export function confirmDialog(title, body, confirmLabel = "تأیید", opts = {}) {
+export function confirmDialog(title, body, confirmLabel = null, opts = {}) {
   return new Promise((resolve) => {
     const wrap = document.createElement("div");
-    wrap.style.cssText = "position:fixed;inset:0;z-index:150;display:grid;place-items:center;background:rgba(0,0,0,.45);padding:20px";
-    wrap.innerHTML = `<div class="card" style="max-width:420px;width:100%;margin:0">
-      <h2>${esc(title)}</h2><div class="muted small">${body}</div>
+    wrap.className = "danger-wrap";
+    const titleId = `dialog-title-${Math.random().toString(36).slice(2)}`;
+    wrap.innerHTML = `<div class="card" role="dialog" aria-modal="true"
+      aria-labelledby="${titleId}" style="max-width:420px;width:100%;margin:0">
+      <h2 id="${titleId}">${esc(title)}</h2><div class="muted small">${body}</div>
       <div class="btn-row" style="justify-content:flex-end;margin-top:16px">
-        <button class="btn ghost" data-no>${esc(opts.cancelLabel || "انصراف")}</button>
+        <button class="btn ghost" data-no>${esc(opts.cancelLabel || t("common.cancel"))}</button>
         <button class="btn ${opts.tone === "primary" ? "primary" : "danger"}"
-                data-yes>${esc(confirmLabel)}</button>
+                data-yes>${esc(confirmLabel || t("common.confirm"))}</button>
       </div></div>`;
-    const done = (v) => { wrap.remove(); resolve(v); };
+    let cleanup = () => {};
+    const done = (v) => { cleanup(); wrap.remove(); resolve(v); };
     wrap.querySelector("[data-no]").onclick = () => done(false);
     wrap.querySelector("[data-yes]").onclick = () => done(true);
     wrap.onclick = (e) => { if (e.target === wrap) done(false); };
     document.body.append(wrap);
+    cleanup = activateDialog(wrap, wrap.querySelector("[data-no]"), () => done(false));
   });
 }
 
@@ -235,8 +317,9 @@ export function destructiveDialog({ title, intro, destroys, keeps = [], expect, 
   return new Promise((resolve) => {
     const wrap = document.createElement("div");
     wrap.className = "danger-wrap";
-    wrap.innerHTML = `<div class="card danger-card" role="dialog" aria-modal="true">
-      <h2 class="danger-title">${esc(title)}</h2><p class="muted small">${esc(intro)}</p>
+    const titleId = `dialog-title-${Math.random().toString(36).slice(2)}`;
+    wrap.innerHTML = `<div class="card danger-card" role="dialog" aria-modal="true" aria-labelledby="${titleId}">
+      <h2 class="danger-title" id="${titleId}">${esc(title)}</h2><p class="muted small">${esc(intro)}</p>
       <div class="impact-grid">
         <div class="copybox bad"><div class="copybox-h">${t("danger.deleted")}</div>
           <ul>${destroys.map((x) => `<li>${esc(x)}</li>`).join("")}</ul></div>
@@ -254,13 +337,12 @@ export function destructiveDialog({ title, intro, destroys, keeps = [], expect, 
     const input = wrap.querySelector("#destructive-expect");
     const yes = wrap.querySelector("[data-yes]");
     input.oninput = () => { yes.disabled = input.value.trim().toLowerCase() !== expect.toLowerCase(); };
-    const done = (value) => { wrap.remove(); document.removeEventListener("keydown", escape); resolve(value); };
-    const escape = (e) => { if (e.key === "Escape") done(false); };
-    document.addEventListener("keydown", escape);
+    let cleanup = () => {};
+    const done = (value) => { cleanup(); wrap.remove(); resolve(value); };
     wrap.querySelector("[data-no]").onclick = () => done(false);
     yes.onclick = () => done(true);
     document.body.append(wrap);
-    input.focus();
+    cleanup = activateDialog(wrap, input, () => done(false));
   });
 }
 
@@ -287,15 +369,16 @@ export function secretRow({ label, value, hint = "", masked = true }) {
                border:1px solid var(--border)"
         >${masked ? "••••••••••••" : esc(value ?? "")}</code>
       ${masked ? `<button class="btn ghost small secret-eye" data-for="${id}"
-        title="${esc(label)}">${icon.eye || "👁"}</button>` : ""}
-      <button class="btn ghost small secret-copy" data-for="${id}">${icon.copy || "⧉"}</button>
+        title="${esc(label)}" aria-label="${t("common.reveal")} ${esc(label)}">${icon.eye || "👁"}</button>` : ""}
+      <button class="btn ghost small secret-copy" data-for="${id}"
+        aria-label="${t("common.copy")} ${esc(label)}">${icon.copy || "⧉"}</button>
     </div>
     ${hint ? `<p class="muted small" style="margin:6px 0 0">${esc(hint)}</p>` : ""}
   </div>`;
 }
 
 /* Wire every secretRow under `root`. Call after render. */
-export function wireSecrets(root = document, copiedLabel = "کپی شد") {
+export function wireSecrets(root = document, copiedLabel = t("common.copied")) {
   $$(".secret-eye", root).forEach((b) => {
     b.onclick = () => {
       const el = $("#" + b.dataset.for, root);

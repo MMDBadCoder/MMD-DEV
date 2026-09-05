@@ -32,14 +32,19 @@ and the auth endpoints. Accessing another account's resource returns **404**, no
 
 | Method | Path | Notes |
 |---|---|---|
-| `POST` | `/api/auth/register` | `{username, password, full_name, phone}`. Phone is a unique 11-digit Iranian mobile beginning `09`. The first account ever created becomes admin. Duplicate username or phone returns a field-specific conflict code |
+| `POST` | `/api/auth/register` | `{username, password, full_name, phone, code}`. Phone is a unique 11-digit Iranian mobile beginning `09` and `code` must verify it. The first account ever created becomes admin. Duplicate username or phone returns a field-specific conflict code |
 | `POST` | `/api/auth/login` | `{identifier, password}`. `identifier` is either username or phone. Sets the session cookie |
+| `POST` | `/api/auth/request-code` | `{phone, purpose}` where purpose is `signup`, `login`, or `profile`; responses avoid account enumeration |
+| `POST` | `/api/auth/login-sms` | `{phone, code}`. Sets the same versioned session cookie as password login |
+| `GET` | `/api/auth/username-available` | Checks public-hostname syntax, reserved names and uniqueness |
 | `GET` | `/api/auth/phone-available` | Checks phone syntax and uniqueness for signup |
 | `POST` | `/api/auth/logout` | |
 | `POST` | `/api/auth/password` | Requires the current password |
 | `GET` | `/api/me` | Identity, admin flag, balance, unread ticket counts, application version, Telegram configured flag and user ID; never the bot token |
-| `PUT` | `/api/profile` | `{full_name, phone, current_password}`. Changes customer identity after password confirmation |
+| `PUT` | `/api/profile` | `{full_name, phone, current_password, code?}`. A changed phone must first be verified with a `profile` code; changing the phone revokes older sessions |
 | `PUT` | `/api/profile/telegram` | `{bot_token?, user_id?, clear?}`. Stores or clears reusable account-level Telegram settings. A blank token preserves the existing one |
+| `GET` | `/api/account/sms` | Optional notification switches plus the customer's balance-step amount and accepted range |
+| `PUT` | `/api/account/sms` | `{prefs?: {kind: bool}, credit_step_toman?: int}`. The step must be a multiple of 1,000 between 1,000 and 1,000,000,000 Toman; changing it silently resets the current balance band |
 
 ## Public
 
@@ -56,6 +61,7 @@ and the auth endpoints. Accessing another account's resource returns **404**, no
 | `POST` | `/api/workspace` | Create the customer's optional workspace. `{cpu_milli, mem_mib}`; returns a durable operation |
 | `POST` | `/api/workspace/delete` | Permanently remove the workspace after username/password confirmation while preserving the account and OpenRouter key |
 | `POST` | `/api/workspace/power` | `{on: bool}`. Runs the affordability gate and the admission check |
+| `POST` | `/api/workspace/keep-running` | Extends or clears the automatic stop deadline for the current power-on cycle |
 | `POST` | `/api/workspace/tier` | `{cpu_milli, mem_mib}`. Live-applied when running; memory cannot shrink while on |
 | `POST` | `/api/workspace/reset` | **Factory reset.** `{confirm, password}` — validates immediately, then returns a durable `operation` |
 | `GET` | `/api/workspace/metrics` | `?minutes=` (default 5, one of 5/15/60/360/1440). CPU in **cores** and memory in **GB** — absolute, never percentages — plus the tier so a chart can show headroom, and `sample_seconds` so it can refresh in step |
@@ -75,7 +81,7 @@ and rebuilds it from the golden image. Both fields are required and both are
 checked server-side before anything is queued:
 
 ```json
-{ "confirm": "owner@example.com", "password": "…" }
+{ "confirm": "owner-username", "password": "…" }
 ```
 
 `confirm` must equal the account's own username (case and surrounding whitespace are
@@ -154,11 +160,15 @@ is denied the file API. Paths are validated server-side.
 
 | Method | Path | Notes |
 |---|---|---|
-| `GET` | `/api/workspace/ai` | Account-level OpenRouter state plus optional workspace service states. Works without a workspace |
+| `GET` | `/api/workspace/ai` | Account-level OpenRouter state plus optional workspace service states. Works without a workspace. OpenRouter includes `limit_sync_pending`, last supplier-confirmed `limit_usd`, and `limit_synced_at` |
 | `POST` | `/api/workspace/ai/codex` | `{action}` — `install` or `unlink`. Copies the host's allowlisted Codex grant into the workspace. `ai_host_unlinked` when the platform is not signed in |
+| `POST` | `/api/workspace/managed-ai/{service}` | `{action}` — `enable` or `disable`; `service` is `opencode` or `openwebui`. The worker installs and the state remains not-ready until nginx publishes the exact hostname |
 | `POST` | `/api/workspace/ai/openclaw` | `{action}` — `enable` or `disable`. Records intent; the worker installs. `needs_openrouter` until the managed key exists |
+| `POST` | `/api/workspace/ai/openclaw/telegram` | `{action}` — enable/disable Telegram using the account-level token and user ID |
+| `POST` | `/api/workspace/ai/openclaw/devices` | Approves devices waiting to pair with the customer's OpenClaw dashboard |
 | `POST` | `/api/workspace/ai/claude` | `{action: "install"｜"unlink"}`. Installs the CLI and carries the platform sign-in across |
-| `POST` | `/api/workspace/ai/hermes` | `{enabled, telegram_enabled?, telegram_token?, telegram_users?}`. Enables Hermes and optionally its Telegram gateway. A token and comma-separated numeric sender allowlist are required when first enabling Telegram; the token is never returned |
+| `POST` | `/api/workspace/ai/hermes` | `{action, telegram_enabled?, telegram_token?, telegram_users?}` where action is `enable` or `disable`. Hermes uses the account OpenRouter key and can optionally enable Telegram from account defaults or supplied values; the token is never returned |
+| `GET` | `/api/workspace/ai/usage?service=` | Per-model token counts and billed Toman for `claude` or `codex` |
 
 Administrator AI configuration is separated by responsibility:
 
@@ -202,12 +212,15 @@ removes the gateway service and Telegram credentials without disabling Hermes.
 | `POST` | `/api/admin/users/{id}/approve` | Activates the account and schedules its OpenRouter key. Does not create compute |
 | `POST` | `/api/admin/users/{id}/reject` | |
 | `POST` | `/api/admin/users/{id}/admin` | Promote or demote |
-| `POST` | `/api/admin/users/{id}/credit` | Grant credit. Marks an active Hermes key for supplier-cap refresh on the next worker pass |
+| `POST` | `/api/admin/users/{id}/credit` | Grant credit. Immediately attempts to refresh the account-level OpenRouter cap, while durable worker retry handles supplier failure; Hermes is only one possible consumer |
 | `DELETE` | `/api/admin/users/{id}` | |
 | `GET`/`PUT` | `/api/admin/settings` | Rate card, overcommit ratios, host reserve |
 | `GET` | `/api/admin/activity` | Global audit log |
 | `GET` | `/api/admin/operations` | In-flight and recent long operations |
 | `GET` | `/api/admin/storage` | Pool total/used/free, per-workspace usage, overcommit ratio |
+| `GET` | `/api/admin/users/{id}` | One customer's identity, balance, workspace and service detail |
+| `GET` | `/api/admin/grafana` | Authenticated Grafana base path, dashboard map and masked/admin credential metadata |
+| `GET`/`PUT` | `/api/admin/agent-model/{service}` | Install-time default model for `claude` or `codex`; never rewrites an existing customer choice |
 | `GET`/`PUT` | `/api/admin/openrouter` | Exchange rate; customer keys have credit-derived spend caps but unrestricted model choice |
 | `GET` | `/api/admin/hermes` | Adoption counts and the managed-key state |
 | `PUT` | `/api/admin/hermes` | Hermes' default model |

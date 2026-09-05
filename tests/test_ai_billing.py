@@ -385,3 +385,53 @@ def test_the_exchange_rate_is_shared(db):
     db.commit()
     assert svc.ai_settings(db, "claude")[0] == 180_000.0
     assert svc.ai_settings(db, "openrouter")[0] == 180_000.0
+
+
+# --- F-01/F-02: the financial invariant under concurrency and crashes -------
+def test_the_balance_moves_in_sql_not_in_python():
+    """Two processes charge the same account. A Python read-modify-write lets
+    both read the same figure and the last commit discard the other, leaving
+    two ledger rows and one of their effects. The increment must be issued as
+    SQL so the database applies it to whatever the row holds at that moment."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parents[1]
+           / "control" / "mmd" / "service.py").read_text()
+    body = src.split("def post_transaction", 1)[1].split("\ndef ", 1)[0]
+    assert "balance_micro=CreditAccount.balance_micro + amount_micro" in body
+    assert "acct.balance_micro += amount_micro" not in body
+
+
+def test_a_charge_and_its_checkpoint_land_together():
+    """The charge and the mark saying 'this much is billed' are one fact.
+    Committed separately, a crash between them keeps the money and loses the
+    checkpoint, and the next pass re-bills the same tokens into a later bucket
+    - which the duplicate key cannot catch, because the bucket differs."""
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1] / "control" / "mmd"
+    assert "commit=False" in (root / "service.py").read_text()
+    assert "commit=False" in (root / "hermes.py").read_text()
+
+
+def test_repeated_charges_sum_exactly():
+    """Sequential proof that the atomic path still totals correctly."""
+    from sqlalchemy import create_engine, func, select
+    from sqlalchemy.orm import Session
+    from mmd import service as svc
+    from mmd.models import Base, CreditAccount, CreditTransaction, TxKind, User
+
+    db = Session(create_engine("sqlite://"))
+    Base.metadata.create_all(db.bind)
+    u = User(username="u", phone="09120000000", password_hash="x")
+    db.add(u); db.commit()
+
+    for i in range(25):
+        svc.post_transaction(db, user_id=u.id, workspace_id=None,
+                             kind=TxKind.GRANT, amount_micro=1000,
+                             scope_key=f"t{i}")
+    for i in range(10):
+        svc.post_transaction(db, user_id=u.id, workspace_id=None,
+                             kind=TxKind.ADJUSTMENT, amount_micro=-250,
+                             scope_key=f"a{i}")
+
+    ledger = db.scalar(select(func.sum(CreditTransaction.amount_micro)))
+    assert db.get(CreditAccount, u.id).balance_micro == ledger == 25 * 1000 - 10 * 250

@@ -6,8 +6,7 @@
  *
  * The y-axis is the CAPACITY, not the tallest sample, so a quiet machine draws
  * a low line instead of a dramatic one. */
-import { fmtFa } from "./i18n.js";
-import { t } from "./i18n.js";
+import { CURRENCY, fmtFa, fmtMoney, t } from "./i18n.js";
 
 /** Windows offered by the picker, in minutes. Must match METRIC_WINDOWS in app.py. */
 export const WINDOWS = [5, 15, 60, 360, 1440];
@@ -37,7 +36,7 @@ export const savedWindow = () => {
 };
 export const saveWindow = (m) => localStorage.setItem(KEY, String(m));
 
-/* fmtFa defaults to zero decimals, which turned 0.31 cores into "۰" and made
+/* fmtFa defaults to zero decimals, which rendered 0.31 cores as zero and made
    every quiet machine read as idle. Pick the precision from the magnitude:
    fractions of a core and gigabytes need two places, hundreds need none. */
 const places = (v) => (v >= 100 ? 0 : v >= 10 ? 1 : 2);
@@ -77,6 +76,31 @@ export function usageChart(series, cap, colour, unit) {
         <span class="dim">${t("chart.of")} ${num(cap)}</span></span>
       <span class="dim">${t("billing.chart.peak")} ${num(peak)} ${unit}</span>
     </div>`;
+}
+
+/* The bar geometry is decorative. A native details/table pair makes every
+   point reachable by keyboard and screen reader without crowding the chart. */
+export function spendChart(series) {
+  if (!series?.length) {
+    return `<div class="chart-empty tiny dim">${t("billing.chart.empty")}</div>`;
+  }
+  const max = Math.max(...series.map((s) => s.spent), 0.0001);
+  const stamp = (iso) => new Date(iso).toLocaleString("fa-IR",
+    { dateStyle: "short", timeStyle: "short" });
+  return `<div class="chart" aria-hidden="true">${series.map((s) => `
+      <div class="col" style="height:${Math.max(2, (s.spent / max) * 100)}%"
+           title="${stamp(s.hour)} — ${fmtMoney(s.spent)} ${CURRENCY}"></div>`).join("")}
+    </div>
+    <div class="between tiny dim" style="margin-top:6px">
+      <span>${stamp(series[0].hour)}</span>
+      <span>${t("billing.chart.peak")} ${fmtMoney(max)} ${CURRENCY}</span>
+      <span>${t("billing.chart.now")}</span></div>
+    <details class="chart-data tiny"><summary>${t("chart.data")}</summary>
+      <div class="table-wrap"><table><thead><tr><th>${t("chart.data.time")}</th>
+        <th class="num">${t("chart.data.spend")} (${CURRENCY})</th></tr></thead>
+        <tbody>${series.map((s) => `<tr><td>${stamp(s.hour)}</td>
+          <td class="num">${fmtMoney(s.spent)}</td></tr>`).join("")}</tbody></table></div>
+    </details>`;
 }
 
 /* A palette that stays distinguishable at 1.6px on both themes. Ten entries

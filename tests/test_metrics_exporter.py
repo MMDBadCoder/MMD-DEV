@@ -6,6 +6,7 @@ because nothing ever called the endpoint: a NameError that made every scrape a
 every worker tick. Both are pinned below.
 """
 import os
+import time
 
 os.environ.setdefault("MMD_DATABASE_URL", "sqlite://")
 os.environ.setdefault("MMD_SECRET_KEY", "test-only")
@@ -77,6 +78,19 @@ def test_credit_block_state_and_lifecycle_state_are_exported(env):
     # Per username, not just the fleet aggregate: "three are in error" does not
     # tell you which customer to look at.
     assert 'mmd_workspace_state{username="ali",state="on"}' in body
+
+
+def test_worker_snapshot_age_distinguishes_zero_from_stale(env, monkeypatch):
+    client, _db = env
+    monkeypatch.setattr(m, "read_snapshot", lambda: {
+        "generated_at": time.time() - 10,
+        "counters": [], "gauges": [], "hist": [],
+    })
+
+    line = next(line for line in scrape(client).splitlines()
+                if line.startswith("mmd_worker_metrics_snapshot_age_seconds "))
+    age = float(line.split()[-1])
+    assert 9 <= age <= 12
 
 
 # --- cardinality ----------------------------------------------------------
@@ -164,6 +178,7 @@ def test_the_worker_snapshot_round_trips_through_a_file(tmp_path):
 
     m.reset()
     loaded = m.read_snapshot(path)
+    assert loaded["generated_at"] > 0
     out = "\n".join(m.render(loaded))
     assert 'mmd_test_total{verb="provision"} 3' in out
     assert 'mmd_test_seconds_count{verb="provision"} 1' in out

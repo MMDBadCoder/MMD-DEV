@@ -187,6 +187,39 @@ def test_a_wrong_code_does_not_sign_anyone_in():
         appmod.login_sms(appmod.SmsLogin(phone=PHONE, code="00000"), Resp(), db)
 
 
+@pytest.mark.parametrize("status", [UserStatus.REJECTED, UserStatus.SUSPENDED,
+                                    UserStatus.DELETING])
+def test_a_blocked_account_never_receives_a_success_session(status):
+    db = database()
+    db.add(User(username="u", phone=PHONE, password_hash=hash_password("x"),
+                status=status))
+    db.commit()
+    code = issued(db)
+
+    class Resp:
+        def set_cookie(self, *_a, **_kw):
+            raise AssertionError("blocked account was signed in")
+
+    with pytest.raises(HTTPException):
+        appmod.login_sms(appmod.SmsLogin(phone=PHONE, code=code), Resp(), db)
+
+
+def test_session_cookie_carries_the_revocation_version():
+    db = database()
+    user = User(username="u", phone=PHONE, password_hash=hash_password("x"),
+                status=UserStatus.APPROVED, session_version=7)
+    db.add(user); db.commit()
+
+    class Resp:
+        value = None
+        def set_cookie(self, _name, value, **_kw): self.value = value
+
+    response = Resp()
+    appmod._issue_session(response, user)
+    payload = appmod._serializer.loads(response.value)
+    assert payload == {"user_id": user.id, "version": 7}
+
+
 # --- preferences ----------------------------------------------------------
 def test_everything_is_on_by_default():
     user = User(username="u", phone=PHONE, password_hash="x")
@@ -206,6 +239,30 @@ def test_a_customer_can_silence_an_optional_message():
     assert smslib.wants(user, "ticket_replied") is True
     assert smslib.queue(db, user_id=user.id, phone=PHONE,
                         kind="ticket_closed", user=user) is None
+
+
+def test_changing_the_credit_step_resets_its_band_without_sending_a_message(monkeypatch):
+    from mmd.billing.pricing import MICRO
+
+    db = database()
+    user = User(username="u", phone=PHONE, password_hash="x",
+                status=UserStatus.APPROVED, sms_credit_band=9)
+    db.add(user); db.commit()
+    db.add(CreditAccount(user_id=user.id, balance_micro=275_000 * MICRO))
+    db.commit()
+
+    response = appmod.sms_preferences_put(
+        appmod.SmsPreferences(credit_step_toman=100_000), user, db)
+
+    assert response["credit_step_toman"] == 100_000
+    assert user.sms_credit_band == 2
+    assert db.scalar(select(SmsMessage)) is None
+
+
+@pytest.mark.parametrize("step", [999, 1_001, 1_000_000_001])
+def test_credit_step_rejects_unsafe_values(step):
+    with pytest.raises(ValueError):
+        appmod.SmsPreferences(credit_step_toman=step)
 
 
 def test_security_and_code_messages_cannot_be_switched_off():

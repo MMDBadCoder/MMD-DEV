@@ -1,7 +1,7 @@
 /* Sign in and sign up - separate pages, separate URLs. Sign-up confirms the
  * password; signing in does not. */
 import { get, post } from "../api.js";
-import { $, icon, esc, note } from "../ui.js";
+import { $, icon, esc, note, formError, clearFormErrors } from "../ui.js";
 import { t } from "../i18n.js";
 import { navigate } from "../router.js";
 import { renderBare, refreshMe } from "../main.js";
@@ -37,7 +37,7 @@ function wireCodeRequest({ button, phoneOf, purpose, onSent }) {
   b.onclick = async () => {
     const phone = phoneOf();
     if (!/^09[0-9]{9}$/.test(phone)) {
-      $("#msg").innerHTML = note("bad", t("auth.err.phone"));
+      formError(t("auth.err.phone"), { field: purpose === "signup" ? "#phone" : "#sms-phone" });
       return;
     }
     b.disabled = true;
@@ -73,17 +73,19 @@ export function signInPage(_p, msg) {
     altText: t("auth.noaccount"), altHref: "/signup", altLabel: t("auth.createone"),
     msg,
     fields: `
-      <div class="tabs2 auth-tabs" style="margin-bottom:14px">
-        <a href="#" id="tab-pw" class="active">${t("auth.tab.password")}</a>
-        <a href="#" id="tab-sms">${t("auth.tab.sms")}</a>
+      <div class="tabs2 auth-tabs" role="tablist" aria-label="${t("auth.signin.methods")}" style="margin-bottom:14px">
+        <button type="button" role="tab" id="tab-pw" class="active" aria-selected="true"
+                aria-controls="pane-pw">${t("auth.tab.password")}</button>
+        <button type="button" role="tab" id="tab-sms" aria-selected="false" tabindex="-1"
+                aria-controls="pane-sms">${t("auth.tab.sms")}</button>
       </div>
-      <div id="pane-pw">
+      <div id="pane-pw" role="tabpanel" aria-labelledby="tab-pw">
         <div class="field"><label for="identifier">${t("auth.identifier")}</label>
           <input id="identifier" class="ltr" dir="ltr" autocomplete="username" autofocus></div>
         <div class="field"><label for="pw">${t("auth.password")}</label>
           <input id="pw" type="password" autocomplete="current-password"></div>
       </div>
-      <div id="pane-sms" hidden>
+      <div id="pane-sms" role="tabpanel" aria-labelledby="tab-sms" hidden>
         <div class="field"><label for="sms-phone">${t("auth.phone.label")}</label>
           <input id="sms-phone" class="ltr" dir="ltr" type="tel" inputmode="numeric"
                  autocomplete="tel" maxlength="11" placeholder="09123456789"></div>
@@ -104,10 +106,21 @@ export function signInPage(_p, msg) {
     $("#pane-sms").hidden = which !== "sms";
     $("#tab-pw").className = which === "password" ? "active" : "";
     $("#tab-sms").className = which === "sms" ? "active" : "";
+    $("#tab-pw").setAttribute("aria-selected", String(which === "password"));
+    $("#tab-sms").setAttribute("aria-selected", String(which === "sms"));
+    $("#tab-pw").tabIndex = which === "password" ? 0 : -1;
+    $("#tab-sms").tabIndex = which === "sms" ? 0 : -1;
     $("#msg").innerHTML = "";
   };
-  $("#tab-pw").onclick = (e) => { e.preventDefault(); show("password"); };
-  $("#tab-sms").onclick = (e) => { e.preventDefault(); show("sms"); };
+  $("#tab-pw").onclick = () => show("password");
+  $("#tab-sms").onclick = () => show("sms");
+  $(".auth-tabs").onkeydown = (event) => {
+    if (!["ArrowLeft", "ArrowRight"].includes(event.key)) return;
+    event.preventDefault();
+    const next = mode === "password" ? "sms" : "password";
+    show(next);
+    $(next === "password" ? "#tab-pw" : "#tab-sms").focus();
+  };
 
   wireCodeRequest({
     button: "#sms-send", purpose: "login",
@@ -116,6 +129,7 @@ export function signInPage(_p, msg) {
 
   $("#form").onsubmit = async (e) => {
     e.preventDefault();
+    clearFormErrors($("#form"));
     const btn = $("#form button[type=submit]");
     btn.disabled = true; btn.textContent = t("auth.signin.busy");
     try {
@@ -131,7 +145,8 @@ export function signInPage(_p, msg) {
       await refreshMe();
       navigate("/console");
     } catch (err) {
-      $("#msg").innerHTML = note("bad", esc(err.message));
+      const field = mode === "sms" ? "#sms-code" : "#identifier";
+      formError(err.message, { field });
       btn.disabled = false; btn.textContent = t("auth.signin.cta");
     }
   };
@@ -213,19 +228,20 @@ export function signUpPage() {
     const code = $("#code").value.trim();
     const username = $("#uname").value.trim().toLowerCase();
     const fullName = $("#fullname").value.trim(), phone = $("#phone").value.trim();
-    const fail = (m) => { $("#msg").innerHTML = note("bad", esc(m)); };
+    const fail = (m, field) => formError(m, { field });
+    clearFormErrors($("#form"));
 
     // Checked here so the answer is instant and specific, rather than a server
     // round trip returning a validation blob.
-    if (fullName.length < 2) return fail(t("auth.err.fullname"));
-    if (!/^09[0-9]{9}$/.test(phone)) return fail(t("auth.err.phone"));
-    if (!code) return fail(t("auth.code.needed"));
+    if (fullName.length < 2) return fail(t("auth.err.fullname"), "#fullname");
+    if (!/^09[0-9]{9}$/.test(phone)) return fail(t("auth.err.phone"), "#phone");
+    if (!code) return fail(t("auth.code.needed"), "#code");
     // Mirrors mmd/usernames.py. The server checks again - this is only so the
     // answer is instant.
     if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(username) || username.length < 3)
-      return fail(t("auth.err.username"));
-    if (pw.length < MIN_PW) return fail(t("auth.err.short", pw.length));
-    if (pw !== pw2) return fail(t("auth.err.mismatch"));
+      return fail(t("auth.err.username"), "#uname");
+    if (pw.length < MIN_PW) return fail(t("auth.err.short", pw.length), "#pw");
+    if (pw !== pw2) return fail(t("auth.err.mismatch"), "#pw2");
 
     const btn = $("#form button");
     btn.disabled = true; btn.textContent = t("auth.signup.busy");
@@ -239,7 +255,10 @@ export function signUpPage() {
         `${t(r.code === "admin_created" ? "auth.made.admin" : "auth.made.pending")}
          <br><a href="/signin">${t("auth.gosignin")}</a>`);
     } catch (err) {
-      fail(err.message);
+      const field = ["username_taken", "invalid_username", "reserved_username"].includes(err.code)
+        ? "#uname" : ["phone_taken", "invalid_phone"].includes(err.code)
+          ? "#phone" : (err.code || "").includes("code") ? "#code" : null;
+      fail(err.message, field);
       btn.disabled = false; btn.textContent = t("auth.signup.cta");
     }
   };

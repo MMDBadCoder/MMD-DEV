@@ -134,7 +134,8 @@ seconds** by the worker using a dedicated **metrics-type certificate**, which is
 read-only and distinct from the client certificate. Settlement still runs every
 5 minutes and reconciliation every 15; the sampling interval was shortened so a
 five-minute chart has enough points to read, not to change billing cadence.
-Samples are pruned after 7 days.
+Samples are pruned after 2 days. They support short operational charts; settled
+ledger transactions, rather than raw samples, are the financial record.
 
 **A factory reset settles first.** If the machine is running when a reset is
 requested, the elapsed period is settled before anything is destroyed —

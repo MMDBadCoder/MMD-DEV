@@ -53,6 +53,10 @@ MULTIPART_CHARS = 67
 MAX_ATTEMPTS = 5
 BACKOFF = (60, 300, 900, 1800)
 
+DEFAULT_CREDIT_STEP_TOMAN = 50_000
+MIN_CREDIT_STEP_TOMAN = 1_000
+MAX_CREDIT_STEP_TOMAN = 1_000_000_000
+
 PHONE_RE = re.compile(r"^09[0-9]{9}$")
 
 URL = "mmd-ai.ir"
@@ -110,11 +114,10 @@ CATALOGUE: dict[str, Template] = {t.kind: t for t in [
        lambda d: f"⚠️ اعتبار شما رو به پایان است\nلطفاً شارژ کنید\n{URL}"),
     _t("stopped_no_credit", "money", "customer", True,
        lambda d: f"🔴 ماشین شما به دلیل پایان اعتبار خاموش شد\n{URL}"),
-    _t("credit_added", "money", "customer", True,
-       lambda d: f"💳 اعتبار شما افزایش یافت\nموجودی: {d.get('balance', '')} تومان"),
-    _t("spend_milestone", "money", "customer", True,
-       lambda d: f"📉 مصرف شما از {d.get('step', '')} تومان گذشت\n"
-                 f"موجودی: {d.get('balance', '')} تومان"),
+    _t("credit_step", "money", "customer", True,
+       lambda d: ("📈 اعتبار شما افزایش یافت\n" if d.get("increased") else
+                  "📉 اعتبار شما کاهش یافت\n")
+                 + f"موجودی جدید: {d.get('balance', '')} تومان"),
     _t("key_blocked", "money", "customer", True,
        lambda d: "🔑 کلید هوش مصنوعی شما غیرفعال شد\nبه دلیل پایان اعتبار"),
 
@@ -144,6 +147,8 @@ CATALOGUE: dict[str, Template] = {t.kind: t for t in [
 
     # --- auth codes: the mechanism itself ---
     _t("signup_code", "auth", "customer", False,
+       lambda d: f"کد تأیید شما\n{d.get('code', '')}"),
+    _t("verification_code", "auth", "customer", False,
        lambda d: f"کد تأیید شما\n{d.get('code', '')}"),
     _t("login_code", "auth", "customer", False,
        lambda d: f"کد ورود شما\n{d.get('code', '')}"),
@@ -219,29 +224,9 @@ def queue(db, *, user_id: int | None, phone: str, kind: str,
     return row
 
 
-# --- the temporary trial gate ---------------------------------------------
-# TEMPORARY. While the feature is being proven, only listed numbers actually
-# receive anything. Enforced at the point of SENDING rather than at queueing,
-# on purpose: every message is still recorded, so the outbox shows exactly what
-# the system would have sent to whom, which is the thing worth watching during
-# a trial. Suppressed rows are marked `skipped` - a terminal state, not a
-# failure, so they do not consume retries.
-#
-# To remove the feature entirely: set MMD_SMS_ALLOWLIST to an empty string.
-# `allowed()` then returns True for everyone and nothing else has to change.
-def allowed(phone: str) -> bool:
-    if not CONFIG.sms_allowlist:
-        return True
-    return (phone or "").strip() in CONFIG.sms_allowlist
-
-
 # --- sending --------------------------------------------------------------
 def send(phone: str, body: str, *, key: str = "", sender: str = "") -> str:
     """Hand one message to Kavenegar. Returns the provider's message id."""
-    # Belt and braces. `deliver` checks first so the row can be marked cleanly;
-    # this one is here so no future caller can reach the provider around it.
-    if not allowed(phone):
-        raise SmsError(f"{phone} is not in the temporary sms allowlist")
     key = key or CONFIG.kavenegar_key
     if not key:
         raise SmsError("no kavenegar key configured")
@@ -281,16 +266,6 @@ def due(db, now: datetime | None = None, limit: int = 20) -> list[SmsMessage]:
 def deliver(db, row: SmsMessage, now: datetime | None = None) -> bool:
     """Send one queued row and record what happened. Never raises."""
     now = now or datetime.now(UTC)
-    if not allowed(row.phone):
-        # Terminal, and not an error: nothing is wrong, the trial simply does
-        # not cover this number. `failed` would imply five wasted attempts and
-        # would read as a provider problem in the outbox.
-        row.status = "skipped"
-        row.error = "outside the temporary sms allowlist"
-        db.commit()
-        log.info("sms %s to %s skipped: not in the trial allowlist",
-                 row.id, row.phone)
-        return False
     row.attempts += 1
     try:
         row.provider_message_id = send(row.phone, row.body)

@@ -93,15 +93,23 @@ class User(Base):
     # New signups cannot omit either value.
     full_name: Mapped[str | None] = mapped_column(String(120))
     phone: Mapped[str | None] = mapped_column(String(11), unique=True, index=True)
-    # Reusable account-level Telegram settings. The token is never serialized
-    # by an API response; only the presence flag and numeric user ID are shown.
     # Which optional SMS this customer wants. Absent means everything, so a
     # new template reaches existing customers without a backfill and "all on"
     # needs no row written at signup.
     sms_prefs: Mapped[dict] = mapped_column(JSON, default=dict)
+    # Balance notifications are based on integer bands. The saved band is
+    # nullable so deploying the feature establishes a baseline silently rather
+    # than texting every existing customer about historical balance movement.
+    sms_credit_step_toman: Mapped[int] = mapped_column(Integer, default=50_000)
+    sms_credit_band: Mapped[int | None] = mapped_column(BigInteger)
+    # Reusable account-level Telegram settings. The token is never serialized
+    # by an API response; only the presence flag and numeric user ID are shown.
     telegram_bot_token: Mapped[str | None] = mapped_column(String(256))
     telegram_user_id: Mapped[str | None] = mapped_column(String(15))
     password_hash: Mapped[str] = mapped_column(String(255))
+    # Embedded in every signed cookie. Security-sensitive account changes bump
+    # it, invalidating every older cookie without a server-side session table.
+    session_version: Mapped[int] = mapped_column(Integer, default=0)
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
     status: Mapped[UserStatus] = mapped_column(
         Enum(UserStatus, native_enum=False), default=UserStatus.PENDING, index=True)
@@ -131,6 +139,12 @@ class OpenRouterAccount(Base):
     usage_usd: Mapped[float] = mapped_column(Float, default=0.0)
     credit_blocked: Mapped[bool] = mapped_column(Boolean, default=True)
     limit_dirty: Mapped[bool] = mapped_column(Boolean, default=True)
+    # The supplier cap is customer-visible state. Keeping the last confirmed
+    # value here lets the dashboard distinguish "credit was added" from
+    # "OpenRouter has applied the new ceiling" without giving mmd-api the
+    # management credential that belongs only to the worker.
+    limit_usd: Mapped[float | None] = mapped_column(Float)
+    limit_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     error: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now())
@@ -145,7 +159,7 @@ class Workspace(Base):
     user_id: Mapped[int] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), unique=True, index=True)
     # Slot number: determines the Incus project name and the workspace's static
-    # IP, so both stay stable for the life of the account.
+    # IP, so both stay stable for the life of this workspace.
     idx: Mapped[int] = mapped_column(Integer, unique=True)
     incus_project: Mapped[str] = mapped_column(String(64), unique=True)
     instance: Mapped[str] = mapped_column(String(64), default="ws")
@@ -271,10 +285,15 @@ class Workspace(Base):
     opencode_installed: Mapped[bool] = mapped_column(Boolean, default=False)
     opencode_password: Mapped[str | None] = mapped_column(String(64))
     opencode_error: Mapped[str | None] = mapped_column(Text)
+    # Installation and publication are separate asynchronous operations. The
+    # launcher must not call the service ready until nginx has accepted the
+    # exact hostname it is about to open.
+    opencode_vhost_ready: Mapped[bool] = mapped_column(Boolean, default=False)
     openwebui_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     openwebui_installed: Mapped[bool] = mapped_column(Boolean, default=False)
     openwebui_password: Mapped[str | None] = mapped_column(String(64))
     openwebui_error: Mapped[str | None] = mapped_column(Text)
+    openwebui_vhost_ready: Mapped[bool] = mapped_column(Boolean, default=False)
 
     hermes_telegram_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     hermes_telegram_installed: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -349,7 +368,7 @@ class CreditTransaction(Base):
 
 
 class UsageSample(Base):
-    """Raw scrape of Incus /1.0/metrics. Retained ~7 days; the authoritative
+    """Raw scrape of Incus /1.0/metrics. Retained ~2 days; the authoritative
     record is the settled transaction, not these."""
     __tablename__ = "usage_samples"
     id: Mapped[int] = mapped_column(primary_key=True)

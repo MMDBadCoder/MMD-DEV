@@ -9,7 +9,7 @@ import { $, icon, esc, fmtMoney, fmtNum, fmtFa, note, toast, stamp,
 import { t, CURRENCY } from "../i18n.js";
 import { render, state } from "../main.js";
 import { usageChart, windowPicker, wireWindowPicker,
-         savedWindow, saveWindow } from "../usagechart.js";
+         savedWindow, saveWindow, spendChart } from "../usagechart.js";
 
 let poll = null;
 let chartTimer = null;
@@ -59,6 +59,10 @@ async function refreshCharts() {
   clearTimeout(chartTimer);
   const box = $("#charts");
   if (!box) return;                       // navigated away
+  if (document.hidden) {
+    chartTimer = setTimeout(refreshCharts, 30000);
+    return;
+  }
   let m;
   try { m = await get(`/api/workspace/metrics?minutes=${savedWindow()}`); }
   catch { chartTimer = setTimeout(refreshCharts, 30000); return; }
@@ -71,19 +75,6 @@ async function refreshCharts() {
 }
 
 
-
-function bars(series) {
-  if (!series.length) return `<div class="empty">${t("billing.chart.empty")}</div>`;
-  const max = Math.max(...series.map((s) => s.spent), 0.0001);
-  return `<div class="chart">${series.map((s) => `
-      <div class="col" style="height:${Math.max(2, (s.spent / max) * 100)}%"
-           title="${esc(stamp(s.hour))} — ${fmtMoney(s.spent)} ${CURRENCY}"></div>`).join("")}
-    </div>
-    <div class="between tiny dim" style="margin-top:6px">
-      <span>${esc(stamp(series[0].hour))}</span>
-      <span>${t("billing.chart.peak")} ${fmtMoney(max)} ${CURRENCY}</span>
-      <span>${t("billing.chart.now")}</span></div>`;
-}
 
 export async function machinePage() {
   clearTimeout(poll);
@@ -101,20 +92,27 @@ export async function machinePage() {
     const tiers = await get("/api/tiers");
     const defaults = tiers.options.find((o) => o.cpu_milli === 1000 && o.mem_mib === 1024)
       || tiers.options[0];
-    render(`<div class="page-head"><h1>${t("ov.title")}</h1></div>
-      <div class="card machine-empty">
-        <div>${icon.machine}<h2>${t("workspace.empty.title")}</h2>
-          <p class="muted">${t("workspace.empty.body")}</p></div>
-        <div class="cost-preview">
-          <div><span>${t("workspace.empty.size")}</span><b class="ltr">1 vCPU · 1 GB</b></div>
-          <div><span>${t("workspace.empty.maximum")}</span><b>${fmtMoney(defaults.max_per_hour)} ${CURRENCY}</b></div>
-          <div><span>${t("workspace.empty.off")}</span><b>${fmtMoney(defaults.off_per_hour)} ${CURRENCY}</b></div>
-        </div>
-        ${note("info", t("workspace.empty.openrouter"))}
-        <div class="btn-row"><button class="btn primary" id="create-workspace">${
-          icon.plus}${t("workspace.create")}</button>
-          <a class="btn ghost" href="/console/ai/openrouter">${icon.openrouter}${t("workspace.openrouter")}</a></div>
-        <div id="workspace-create-msg"></div>
+    render(`<div class="page-head"><h1>${t("workspace.choice.title")}</h1>
+        <p class="muted small" style="margin:0">${t("workspace.choice.body")}</p></div>
+      <div class="journey-choice-grid">
+        <section class="card journey-choice">${icon.openrouter}
+          <h2>${t("workspace.choice.api.title")}</h2>
+          <p class="muted small">${t("workspace.choice.api.body")}</p>
+          <div class="btn-row"><a class="btn primary" href="/console/ai/openrouter">${
+            icon.openrouter}${t("workspace.openrouter")}</a></div>
+        </section>
+        <section class="card journey-choice">${icon.machine}
+          <h2>${t("workspace.choice.machine.title")}</h2>
+          <p class="muted small">${t("workspace.choice.machine.body")}</p>
+          <div class="cost-preview">
+            <div><span>${t("workspace.empty.size")}</span><b class="ltr">1 vCPU · 1 GB</b></div>
+            <div><span>${t("workspace.empty.maximum")}</span><b>${fmtMoney(defaults.max_per_hour)} ${CURRENCY}</b></div>
+            <div><span>${t("workspace.empty.off")}</span><b>${fmtMoney(defaults.off_per_hour)} ${CURRENCY}</b></div>
+          </div>
+          <div class="btn-row"><button class="btn primary" id="create-workspace">${
+            icon.plus}${t("workspace.create")}</button></div>
+          <div id="workspace-create-msg"></div>
+        </section>
       </div>`);
     $("#create-workspace").onclick = async () => {
       const b = $("#create-workspace");
@@ -237,7 +235,7 @@ export async function machinePage() {
         t("ov.usage.refresh", metrics.sample_seconds || 20)}</p>
     </div>
 
-    <div class="card"><h3>${t("ov.spend")}</h3>${bars(usage.series || [])}</div>
+    <div class="card"><h3>${t("ov.spend")}</h3>${spendChart(usage.series || [])}</div>
 
     <div class="row">
       <div class="card" style="margin:0">

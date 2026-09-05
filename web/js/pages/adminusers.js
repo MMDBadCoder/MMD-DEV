@@ -18,7 +18,7 @@ import { grafanaConfig, dashboardCard, mountDashboard } from "../grafana.js";
 const KEY = "mmd.admin.userfilter";
 
 /* Sortable columns, each with the value it sorts ON rather than the markup it
- * renders. Sorting the displayed string would order "۱۲" before "۹" and put a
+ * renders. Sorting Persian-digit strings would put twelve before nine and put a
  * machine with no disk reading between two real ones. */
 const COLUMNS = [
   { key: "account", label: "adm.account",
@@ -55,9 +55,9 @@ export async function adminUsersPage() {
     });
   };
 
-  const statusLabel = { approved: "تأیید شده", pending: "در انتظار تأیید",
-                        rejected: "رد شده", suspended: "معلق",
-                        deleting: t("adm.st.deleting") };
+  const statusLabel = Object.fromEntries(
+    ["approved", "pending", "rejected", "suspended", "deleting"]
+      .map((status) => [status, t("adm.st." + status)]));
 
   const matches = (u) => {
     if (f.status !== "all" && u.status !== f.status) return false;
@@ -106,10 +106,11 @@ export async function adminUsersPage() {
   // The header cell for one column: its label, the arrow when it is the
   // active sort, and the click target that toggles direction.
   const th = (c) => `<th class="${c.num ? "num " : ""}sortable${
-    f.sort === c.key ? " sorted" : ""}" data-sort="${c.key}">
+    f.sort === c.key ? " sorted" : ""}" data-sort="${c.key}"${
+      f.sort === c.key ? ` aria-sort="${f.dir === "asc" ? "ascending" : "descending"}"` : ""}>
     <button type="button">${t(c.label)}${
       c.key === "credit" ? ` <span class="dim">(${CURRENCY})</span>` : ""}
-      <span class="arrow">${f.sort === c.key ? (f.dir === "asc" ? "▲" : "▼") : "↕"}</span>
+      <span class="arrow" aria-hidden="true">${f.sort === c.key ? (f.dir === "asc" ? "▲" : "▼") : "↕"}</span>
     </button></th>`;
 
   render(`

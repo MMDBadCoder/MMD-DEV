@@ -40,7 +40,8 @@ def database():
 
 
 # --- cost -----------------------------------------------------------------
-SAMPLE = {"code": "12345", "balance": "250,000", "step": "50,000", "free": "6.2"}
+SAMPLE = {"code": "12345", "balance": "250,000", "increased": True,
+          "free": "6.2"}
 
 
 def test_every_template_bills_as_one_segment():
@@ -261,88 +262,69 @@ class _NoClose:
     def __exit__(self, *_exc): return False
 
 
-def test_spend_milestones_do_not_fire_on_first_sight(monkeypatch):
-    """Shipping the feature must not text every customer who has ever spent.
-
-    Measured the hard way: the first deploy treated an absent watermark as
-    zero and immediately texted four customers who had done nothing that day.
-    """
+def test_credit_step_baselines_silently_then_reports_both_directions(monkeypatch):
+    """Deployment history is silent; later band crossings state the direction."""
     from mmd import worker
-    from mmd.billing.pricing import MICRO
-    from mmd.models import CreditTransaction, TxKind
 
     db, _admin, user = database()
     user.status = UserStatus.APPROVED
-    db.commit()
-    db.add(CreditTransaction(user_id=user.id, kind=TxKind.CHARGE_HOUR,
-                             amount_micro=-500_000 * MICRO,
-                             period_start=datetime.now(UTC)))
+    user.sms_credit_step_toman = 50_000
     db.commit()
     monkeypatch.setattr(worker, "SessionLocal", lambda: _NoClose(db))
 
-    worker.spend_milestone_once()
+    _balance(monkeypatch, worker, 126_000)
+    worker.credit_step_once()
     assert [r for r in db.scalars(select(SmsMessage))
-            if r.kind == "spend_milestone"] == []
+            if r.kind == "credit_step"] == []
+    assert user.sms_credit_band == 2
 
-    # The baseline is recorded, so the NEXT step across does text them.
-    db.add(CreditTransaction(user_id=user.id, kind=TxKind.CHARGE_HOUR,
-                             amount_micro=-60_000 * MICRO,
-                             period_start=datetime.now(UTC)))
-    db.commit()
-    worker.spend_milestone_once()
-    assert len([r for r in db.scalars(select(SmsMessage))
-                if r.kind == "spend_milestone" and r.user_id == user.id]) == 1
+    _balance(monkeypatch, worker, 124_000)  # same band: no message
+    worker.credit_step_once()
+    _balance(monkeypatch, worker, 99_000)   # band 2 -> 1
+    worker.credit_step_once()
+    _balance(monkeypatch, worker, 151_000)  # band 1 -> 3
+    worker.credit_step_once()
+
+    rows = [r for r in db.scalars(select(SmsMessage))
+            if r.kind == "credit_step" and r.user_id == user.id]
+    assert len(rows) == 2
+    assert "کاهش" in rows[0].body and "99,000" in rows[0].body
+    assert "افزایش" in rows[1].body and "151,000" in rows[1].body
 
 
-# --- the temporary trial allowlist ----------------------------------------
-def _allowlist(monkeypatch, *numbers):
-    """CONFIG is a frozen dataclass, so it is replaced rather than mutated."""
-    import dataclasses
-    monkeypatch.setattr(smslib, "CONFIG",
-                        dataclasses.replace(smslib.CONFIG,
-                                            sms_allowlist=tuple(numbers)))
-def test_only_allowlisted_numbers_are_actually_sent_to(monkeypatch):
-    """TEMPORARY, while the feature is proven. The check is at the point of
-    sending, so the outbox still records everything that WOULD have gone."""
+def test_credit_step_is_configured_independently_per_customer(monkeypatch):
+    from mmd import worker
+
+    db, _admin, first = database()
+    first.status = UserStatus.APPROVED
+    first.sms_credit_step_toman = 50_000
+    first.sms_credit_band = 1
+    second = User(username="second", phone="09121112222",
+                  password_hash=hash_password("x"), status=UserStatus.APPROVED,
+                  sms_credit_step_toman=100_000, sms_credit_band=0)
+    db.add(second); db.commit()
+    db.add(CreditAccount(user_id=second.id)); db.commit()
+    monkeypatch.setattr(worker, "SessionLocal", lambda: _NoClose(db))
+    monkeypatch.setattr(worker.svc, "balance_micro",
+                        lambda _db, uid: (110_000 if uid == first.id else 60_000)
+                        * 1_000_000)
+
+    worker.credit_step_once()
+    rows = [r for r in db.scalars(select(SmsMessage)) if r.kind == "credit_step"]
+    assert [r.user_id for r in rows] == [first.id]
+
+
+# --- unrestricted delivery ------------------------------------------------
+def test_any_valid_customer_number_is_sent(monkeypatch):
     db, admin, user = database()
-    _allowlist(monkeypatch, "09395382065", "09004443232")
     sent = []
     monkeypatch.setattr(smslib, "send",
                         lambda phone, *_a, **_k: sent.append(phone) or "1")
 
-    user.phone = "09121112222"          # not on the list
+    user.phone = "09121112222"
     db.commit()
     appmod.admin_approve(user.id, admin, db)
     row = smslib.due(db)[0]
-    assert smslib.deliver(db, row) is False
-    assert sent == []
-    # Recorded, not lost: the trial can see what it suppressed.
-    assert row.status == "skipped" and "allowlist" in row.error
-    # Terminal - it must not sit in the queue burning retries.
-    assert row.attempts == 0 and smslib.due(db) == []
-
-
-def test_an_allowlisted_number_still_goes_out(monkeypatch):
-    db, admin, user = database()
-    _allowlist(monkeypatch, "09395382065")
-    sent = []
-    monkeypatch.setattr(smslib, "send",
-                        lambda phone, *_a, **_k: sent.append(phone) or "1")
-    appmod.admin_approve(user.id, admin, db)      # fixture phone is 09395382065
     assert smslib.deliver(db, smslib.due(db)[0]) is True
-    assert sent == ["09395382065"]
-
-
-def test_an_empty_allowlist_removes_the_restriction(monkeypatch):
-    """How the feature is switched off: one env var, nothing else changes."""
-    _allowlist(monkeypatch)
-    assert smslib.allowed("09121112222") is True
-
-
-def test_the_provider_call_itself_refuses_a_number_off_the_list(monkeypatch):
-    """A backstop, so no future caller can reach Kavenegar around `deliver`."""
-    _allowlist(monkeypatch, "09395382065")
-    monkeypatch.setattr(smslib.httpx, "post",
-                        lambda *_a, **_k: pytest.fail("reached the provider"))
-    with pytest.raises(smslib.SmsError, match="allowlist"):
-        smslib.send("09121112222", "x", key="k")
+    assert sent == ["09121112222"]
+    assert row.status == "sent" and row.attempts == 1

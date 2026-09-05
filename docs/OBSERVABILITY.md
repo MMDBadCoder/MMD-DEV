@@ -1,10 +1,12 @@
 # Observability
 
-Prometheus listens on loopback port 9091, scrapes the control plane every five minutes, and Grafana reads only
-Prometheus. The exporter requires `Authorization: Bearer $MMD_PROMETHEUS_TOKEN`;
-the token file used by Prometheus must contain the same value. Never make
-Prometheus, Grafana, or the exporter public. The admin embed must be protected
-by the dashboard's existing administrator session at the reverse proxy.
+Prometheus listens on loopback port 9091 and scrapes the control plane
+every 60 seconds; Grafana reads only Prometheus. This scrape interval is separate
+from the five-minute business-metering/settlement cadence. The exporter
+requires `Authorization: Bearer $MMD_PROMETHEUS_TOKEN`; the token file used by
+Prometheus must contain the same value. Prometheus and the raw exporter stay
+private. nginx exposes only `/grafana/`, protected first by the MMD
+administrator session through `auth_request` and then by Grafana's own login.
 Grafana listens on loopback port 3002 because an older Docker monitoring stack
 already owns the host's port 3000.
 Install `observability/prometheus.default` as `/etc/default/prometheus`; port
@@ -15,8 +17,8 @@ Prometheus on 9090.
 
 **Status.** The bold core below shipped first; the *Product operations*
 section and the per-customer credit-block and lifecycle-state series have since
-been added, bringing the exporter to 51 metric families. The complete
-list of what is actually emitted — with types, labels and meanings — is
+been added. The complete list of what is actually emitted — with types, labels
+and meanings — is
 [METRICS.md](METRICS.md), generated from a live scrape rather than written by
 hand. The plain entries that remain here are still the ordered backlog. Labels must remain bounded: `username`, state,
 service, operation kind, ledger kind, model family, HTTP route template and

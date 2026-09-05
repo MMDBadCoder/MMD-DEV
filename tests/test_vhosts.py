@@ -159,6 +159,22 @@ def test_dashboard_readiness_tracks_the_exact_published_hostname(vh, db):
     assert ws.hermes_vhost_ready is True
 
 
+def test_each_managed_web_launcher_waits_for_its_exact_hostname(vh, db):
+    from mmd import usernames
+    s, ws, _ = db
+    ws.opencode_vhost_ready = True
+    ws.openwebui_vhost_ready = True
+    s.commit()
+
+    vh.mark_readiness(s, {"opencode.ali.mmd-ai.ir"}, _cfg().domain, usernames)
+    assert ws.opencode_vhost_ready is True
+    assert ws.openwebui_vhost_ready is False
+
+    vh.mark_readiness(s, {"openweb.ali.mmd-ai.ir"}, _cfg().domain, usernames)
+    assert ws.opencode_vhost_ready is False
+    assert ws.openwebui_vhost_ready is True
+
+
 def test_the_server_block_proxies_to_the_workspace_and_redirects_plain_http(vh):
     block = vh.server_block("hermes.ali.mmd-ai.ir", "wildcard-ali", "10.42.0.13", 9119)
     assert "server_name hermes.ali.mmd-ai.ir;" in block

@@ -1,5 +1,6 @@
 """The supplier key follows credit in both directions."""
 import os
+from datetime import datetime
 
 os.environ.setdefault("MMD_DATABASE_URL", "sqlite://")
 os.environ.setdefault("MMD_SECRET_KEY", "test-only")
@@ -66,6 +67,8 @@ def test_adding_credit_reenables_the_same_key_with_new_headroom(monkeypatch):
 
     assert supplier.updates[-1] == {"limit_usd": 3.0, "disabled": False}
     assert account.credit_blocked is False
+    assert account.limit_usd == 3.0
+    assert account.limit_synced_at is not None
 
 
 def test_a_positive_balance_top_up_refreshes_the_cap_on_the_fast_pass(monkeypatch):
@@ -80,6 +83,8 @@ def test_a_positive_balance_top_up_refreshes_the_cap_on_the_fast_pass(monkeypatc
 
     assert supplier.updates[-1] == {"limit_usd": 4.0, "disabled": False}
     assert account.limit_dirty is False
+    assert account.limit_usd == 4.0
+    assert isinstance(account.limit_synced_at, datetime)
 
 
 def test_zero_credit_mints_a_stable_but_disabled_key(monkeypatch):

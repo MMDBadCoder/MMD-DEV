@@ -13,15 +13,16 @@
  *
  * The button stays disabled until all three are satisfied, and the server
  * checks 2 and 3 again regardless of what the page allowed. */
-import { esc } from "./ui.js";
+import { activateDialog, esc } from "./ui.js";
 import { t } from "./i18n.js";
 
 export function dangerDialog({ title, intro, destroys, keeps, expect, label }) {
   return new Promise((resolve) => {
     const wrap = document.createElement("div");
     wrap.className = "danger-wrap";
-    wrap.innerHTML = `<div class="card danger-card">
-      <h2 class="danger-title">${esc(title)}</h2>
+    const titleId = `dialog-title-${Math.random().toString(36).slice(2)}`;
+    wrap.innerHTML = `<div class="card danger-card" role="dialog" aria-modal="true" aria-labelledby="${titleId}">
+      <h2 class="danger-title" id="${titleId}">${esc(title)}</h2>
       <p class="muted small">${esc(intro)}</p>
 
       <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(230px,1fr));margin:14px 0">
@@ -68,17 +69,14 @@ export function dangerDialog({ title, intro, destroys, keeps, expect, label }) {
     typed.oninput = check;
     pw.oninput = check;
 
-    const done = (v) => { wrap.remove(); document.removeEventListener("keydown", esckey); resolve(v); };
-    // Escape cancels; nothing confirms on Enter. A destructive action should
-    // never be reachable from a keystroke someone was already making.
-    const esckey = (e) => { if (e.key === "Escape") done(null); };
-    document.addEventListener("keydown", esckey);
+    let cleanup = () => {};
+    const done = (v) => { cleanup(); wrap.remove(); resolve(v); };
 
     q("[data-no]").onclick = () => done(null);
     yes.onclick = () => done({ confirm: typed.value.trim(), password: pw.value });
     // Deliberately NOT closing on backdrop click - a misplaced click should not
     // dismiss a dialog someone is halfway through filling in.
     document.body.append(wrap);
-    typed.focus();
+    cleanup = activateDialog(wrap, typed, () => done(null));
   });
 }

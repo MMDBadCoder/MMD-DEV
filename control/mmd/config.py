@@ -108,19 +108,8 @@ class Config:
     # disables the warning entirely.
     sms_low_credit_toman: int = field(default_factory=lambda: int(
         _env("MMD_SMS_LOW_CREDIT_TOMAN", "50000")))
-    # TEMPORARY, while the SMS feature is proven in production: only these
-    # numbers actually receive anything. Everything else is still queued and
-    # visible in the outbox, marked `skipped`, so the trial shows exactly what
-    # would have been sent. Set MMD_SMS_ALLOWLIST to an empty string to lift
-    # the restriction - that single change removes the whole feature.
-    sms_allowlist: tuple[str, ...] = field(default_factory=lambda: tuple(
-        n for n in (_env("MMD_SMS_ALLOWLIST",
-                         "09395382065,09004443232").replace(" ", "").split(","))
-        if n))
     # Text a customer each time their cumulative spend passes another whole
     # step of this many Toman. Zero disables it.
-    sms_spend_step_toman: int = field(default_factory=lambda: int(
-        _env("MMD_SMS_SPEND_STEP_TOMAN", "50000")))
     # How long the worker may go without a heartbeat before the watchdog texts
     # every administrator.
     worker_stall_minutes: int = field(default_factory=lambda: int(

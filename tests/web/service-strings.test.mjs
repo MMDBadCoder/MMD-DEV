@@ -24,7 +24,7 @@ const { t, hasKey } = await import(path.join(ROOT, "web/js/i18n.js"));
 
 const AI = read("web/js/pages/ai.js");
 // The Hermes half of the page: from its click handler to the end of the block.
-const HERMES = AI.slice(AI.indexOf('$("#hermes-go").onclick'),
+const HERMES = AI.slice(AI.indexOf('const hermesGo = $("#hermes-go")'),
                         AI.indexOf("/* What the tokens have actually cost."));
 
 test("the Hermes handler exists and posts the enable/disable verbs", () => {
@@ -141,7 +141,7 @@ test("a tab waiting on the worker does not drag the customer back to it", () => 
 });
 
 
-/* ---- one order for all five tabs ----------------------------------------
+/* ---- one order for every service detail ---------------------------------
  *
  * Reported as: the explainer is second on Claude Code and last elsewhere, the
  * usage table swaps places with it between two tabs, and the dashboard address

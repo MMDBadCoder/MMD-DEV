@@ -9,7 +9,6 @@ uvicorn[standard]~=0.52
 sqlalchemy~=2.0
 psycopg2-binary~=2.9        # PostgreSQL in production; the tests use SQLite
 pydantic~=2.13
-email-validator~=2.3        # pydantic EmailStr
 itsdangerous~=2.2           # signed session cookies
 passlib~=1.7                # password hashing
 bcrypt~=5.0

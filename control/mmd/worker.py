@@ -435,6 +435,9 @@ def _openrouter_account(db, account: OpenRouterAccount, client: OpenRouter,
             client.update_key(account.key_hash, limit_usd=cap, disabled=True)
         account.credit_blocked = credit_blocked
         account.limit_dirty = False
+        account.limit_usd = cap
+        account.limit_synced_at = svc.now()
+        account.error = None
         db.commit()
         return
     if (not meter_usage and not account.limit_dirty
@@ -469,6 +472,8 @@ def _openrouter_account(db, account: OpenRouterAccount, client: OpenRouter,
               dedupe_key=f"keyblocked:{account.user_id}:{svc.now():%Y%m%d%H}")
     account.credit_blocked = credit_blocked
     account.limit_dirty = False
+    account.limit_usd = cap
+    account.limit_synced_at = svc.now()
     account.error = None
     db.commit()
 
@@ -799,6 +804,7 @@ def managed_web_once() -> None:
                 if not enabled and not installed:
                     continue
                 if not enabled:
+                    setattr(ws, f"{name}_vhost_ready", False)
                     resp = svc.call_provisioner({"verb": "ai_managed_web", "idx": ws.idx,
                                                  "service": name, "action": "disable"}, timeout=300)
                     if resp.get("ok"):
@@ -812,6 +818,7 @@ def managed_web_once() -> None:
                 # restarting container as ready or let it consume the machine.
                 # Intent stays enabled, so a memory resize heals it automatically.
                 if name == "openwebui" and ws.mem_mib < 2048:
+                    setattr(ws, f"{name}_vhost_ready", False)
                     if installed:
                         svc.call_provisioner({"verb": "ai_managed_web", "idx": ws.idx,
                                               "service": name, "action": "disable"},
@@ -989,6 +996,7 @@ async def _factory_reset(db, op: Operation, ws: Workspace) -> None:
     for name in ("opencode", "openwebui"):
         setattr(ws, f"{name}_enabled", False)
         setattr(ws, f"{name}_installed", False)
+        setattr(ws, f"{name}_vhost_ready", False)
         setattr(ws, f"{name}_password", None)
         setattr(ws, f"{name}_error", None)
     db.commit()
@@ -1322,44 +1330,38 @@ def text_admins(db, kind: str, detail: dict | None = None,
     db.commit()
 
 
-def spend_milestone_once() -> None:
-    """Text a customer each time their spend passes another whole step.
+def credit_step_once() -> None:
+    """Text once when a customer's configured integer balance band changes.
 
-    The watermark is stored per customer rather than derived, because "spent
-    another 50,000" is only meaningful against the point they were last told -
-    a running total against a moving balance would fire again on every top-up.
+    The watermark moves in the same transaction as the outbox insert. A crash
+    therefore leaves either both changes or neither, so retry cannot duplicate
+    a message. First sight and step edits establish a silent baseline.
     """
-    step = CONFIG.sms_spend_step_toman * MICRO
-    if step <= 0:
-        return
     with SessionLocal() as db:
-        for user in db.scalars(select(User).where(
-                User.status == UserStatus.APPROVED)):
-            spent = -(db.scalar(
-                select(func.coalesce(func.sum(CreditTransaction.amount_micro), 0))
-                .where(CreditTransaction.user_id == user.id,
-                       CreditTransaction.amount_micro < 0)) or 0)
-            key = f"spend:{user.id}"
-            raw = _setting(db, key, "")
-            crossed = (spent // step) * step
-            if raw == "":
-                # First sight of this customer: record where they already are
-                # and say nothing. Treating an absent watermark as zero texts
-                # everyone with historical spend the moment the feature ships -
-                # which is exactly what happened on the first deploy, to four
-                # customers who had done nothing that day.
-                _set_setting(db, key, str(crossed))
+        user_ids = db.scalars(select(User.id).where(
+            User.status == UserStatus.APPROVED)).all()
+        for user_id in user_ids:
+            user = db.scalar(select(User).where(
+                User.id == user_id).with_for_update())
+            if user is None or user.status != UserStatus.APPROVED:
+                db.rollback()
+                continue
+            step_toman = (user.sms_credit_step_toman
+                          or smslib.DEFAULT_CREDIT_STEP_TOMAN)
+            step_micro = step_toman * MICRO
+            balance = svc.balance_micro(db, user.id)
+            band = balance // step_micro
+            previous = user.sms_credit_band
+            if previous is None:
+                user.sms_credit_band = band
                 db.commit()
                 continue
-            marked = int(raw or 0)
-            if spent < marked + step:
+            if band == previous:
                 continue
-            _set_setting(db, key, str(crossed))
-            balance = svc.balance_micro(db, user.id)
-            _text(db, user, "spend_milestone",
-                  detail={"step": f"{round(step / MICRO):,}",
-                          "balance": f"{round(balance / MICRO):,}"},
-                  dedupe_key=f"{key}:{crossed}")
+            user.sms_credit_band = band
+            _text(db, user, "credit_step",
+                  detail={"increased": band > previous,
+                          "balance": f"{round(balance / MICRO):,}"})
             db.commit()
 
 
@@ -1491,10 +1493,8 @@ async def main() -> None:
             # every customer to find nothing changed.
             if tick % SETTLE_EVERY == 0:
                 await asyncio.to_thread(low_credit_once)
-                await asyncio.to_thread(spend_milestone_once)
             await asyncio.to_thread(
                 heartbeat_once, time.monotonic() - tick_started, tick_failed)
-            await asyncio.to_thread(sms_once)
             # Every settlement, not every tick: a ZFS pass over the pool is
             # cheap but not free, and disk fills over minutes, not seconds.
             if tick % SETTLE_EVERY == 0:
@@ -1503,6 +1503,14 @@ async def main() -> None:
                 await settle_once()
                 await lifecycle_once()
                 prune_samples_once()
+            # Credit can change through an admin grant, AI metering, or machine
+            # settlement. Checking after every money-producing pass gives an
+            # external OpenRouter user a notification within one worker tick.
+            await asyncio.to_thread(credit_step_once)
+            # Drain after every producer above, especially the credit-band
+            # comparison, so a detected crossing reaches Kavenegar in this
+            # tick rather than waiting for the next one.
+            await asyncio.to_thread(sms_once)
             if tick % RECONCILE_EVERY == 0:
                 await reconcile_once()
                 reserve_service_ports_once()

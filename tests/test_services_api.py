@@ -67,6 +67,20 @@ def test_credit_grant_marks_the_account_openrouter_cap_for_immediate_refresh(env
     assert account.limit_dirty is True
 
 
+def test_openrouter_state_distinguishes_ledger_credit_from_supplier_sync(env):
+    client, db, ws, _ = env
+    account = db.get(OpenRouterAccount, ws.user_id)
+    account.limit_dirty = True
+    account.limit_usd = 7.5
+    db.commit()
+
+    state = client.get("/api/workspace/ai").json()["openrouter"]
+
+    assert state["limit_sync_pending"] is True
+    assert state["limit_usd"] == 7.5
+    assert state["limit_synced_at"] is None
+
+
 def test_admin_can_power_off_a_customer_workspace(env, monkeypatch):
     client, db, ws, _ = env
 

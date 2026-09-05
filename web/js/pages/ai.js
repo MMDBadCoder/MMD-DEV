@@ -9,7 +9,8 @@
  * a file out of our machine into yours" deserves to be legible. */
 import { get, post } from "../api.js";
 import { $, $$, icon, esc, note, toast, stamp, confirmDialog,
-         fmtMoney, fmtFa, secretRow, wireSecrets } from "../ui.js";
+         fmtMoney, fmtFa, secretRow, wireSecrets, recoveryNote,
+         wireRecovery } from "../ui.js";
 import { t, CURRENCY } from "../i18n.js";
 import { render } from "../main.js";
 import { currentPath } from "../router.js";
@@ -33,24 +34,24 @@ const READY = {
 };
 
 function tabBar(active, d) {
-  return `<div class="tabs2 ai-tabs">${TABS.map((tb) => {
+  return `<nav class="tabs2 ai-tabs" aria-label="${t("nav.ai.sections")}">${TABS.map((tb) => {
     const on = READY[tb.key](d);
     return `<a href="/console/ai/${tb.key}"
-      class="${tb.key === active ? "active" : ""}">${icon[tb.ic]}
+      class="${tb.key === active ? "active" : ""}" ${tb.key === active ? 'aria-current="page"' : ""}>${icon[tb.ic]}
       ${t("ai.tab." + tb.key)}
       <span class="badge ${on ? "on" : ""}">${on ? t("ai.ready") : t("ai.notready")}</span></a>`;
-  }).join("")}</div>`;
+  }).join("")}</nav>`;
 }
 
 /* THE ORDER OF AN AI TAB, defined once.
  *
- * Five tabs had five different orders: the explainer was second on Claude Code
+ * The original service tabs had different orders: the explainer was second on Claude Code
  * and last on three others, the usage table came before it on one tab and after
  * it on another, and the dashboard address was the first thing on OpenClaw and
  * buried mid-card on Hermes. Each was reasonable alone and the set was not - a
  * customer who learns one tab should be able to predict the next.
  *
- * So the sequence lives here rather than in five templates, and a tab supplies
+ * So the sequence lives here rather than in each template, and a tab supplies
  * only the parts it has:
  *
  *   1 status   what state is it in, and the button that changes that
@@ -72,7 +73,7 @@ function sections(parts) {
 }
 
 // What the thing IS, in plain language. Every tab has one, in the same place -
-// a page of five unexplained brand names is worse than one.
+// a page of unexplained brand names is worse than one.
 function aboutCard(key) {
   return `<div class="card">
     <h2>${t(`ai.about.${key}.title`)}</h2>
@@ -138,6 +139,7 @@ function telegramSection(o) {
 // back to the OpenClaw tab".
 function repoll(tab, ms) {
   setTimeout(() => {
+    if (document.hidden) return repoll(tab, ms);
     if (currentPath() === `/console/ai/${tab}`) aiPage({ tab });
   }, ms);
 }
@@ -154,7 +156,9 @@ export async function aiPage(params) {
     ]);
   }
   catch (e) {
-    render(`<div class="page-head"><h1>${t("ai.title")}</h1></div>${note("bad", esc(e.message))}`);
+    render(`<div class="page-head"><h1>${t("ai.title")}</h1></div>
+      <div id="ai-load-error">${recoveryNote(e, { retry: true })}</div>`);
+    wireRecovery(() => aiPage(params), $("#ai-load-error"));
     return;
   }
 
@@ -180,6 +184,16 @@ export async function aiPage(params) {
 
 function renderManagedWeb(head, name, service) {
   const waiting = service.enabled && !service.ready;
+  const recovery = !service.machine_running
+    ? ["/console", "ai.recovery.power", icon.power]
+    : service.needs_openrouter
+      ? ["/console/ai/openrouter", "ai.recovery.openrouter", icon.openrouter]
+      : (!service.enabled && service.needs_memory)
+        ? ["/console/resources", "ai.managed.memory.action", icon.sliders] : null;
+  const toggle = recovery
+    ? `<a class="btn primary" href="${recovery[0]}">${recovery[2]}${t(recovery[1])}</a>`
+    : `<button class="btn ${service.enabled ? "danger ghost" : "primary"}" id="managed-toggle">${
+        service.enabled ? t("ai.managed.disable") : t("ai.managed.enable")}</button>`;
   render(`${head}${sections({
     status: `<div class="card"><div class="between"><div><h2>${t(`ai.${name}.title`)}</h2>
       <p class="muted small">${t(`ai.${name}.desc`)}</p></div>
@@ -189,9 +203,7 @@ function renderManagedWeb(head, name, service) {
       ${service.needs_memory ? note("warn", `${t("ai.managed.memory", { m: fmtFa(service.minimum_memory_mib) })}
         <a href="/console/resources">${t("ai.managed.memory.action")}</a>`) : ""}
       ${service.needs_openrouter ? note("warn", t("ai.openclaw.needskey")) : ""}
-      <button class="btn ${service.enabled ? "danger ghost" : "primary"}" id="managed-toggle"
-        ${!service.machine_running || service.needs_openrouter || (!service.enabled && service.needs_memory) ? "disabled" : ""}>${
-        service.enabled ? t("ai.managed.disable") : t("ai.managed.enable")}</button>
+      ${toggle}
       <div id="managed-msg"></div></div>`,
     details: service.ready ? `<div class="card"><h2>${t("conn.launcher")}</h2>
       <a class="btn primary" href="https://${esc(service.host)}" target="_blank" rel="noopener">${icon.link}${t("conn.open")}</a>
@@ -201,7 +213,8 @@ function renderManagedWeb(head, name, service) {
     billing: `<div class="card"><h2>${t("ai.billing.title")}</h2><p class="muted small">${t("ai.managed.billing")}</p></div>`,
     about: aboutCard(name),
   })}`);
-  $("#managed-toggle").onclick = async () => {
+  const managedToggle = $("#managed-toggle");
+  if (managedToggle) managedToggle.onclick = async () => {
     try {
       await post(`/api/workspace/managed-ai/${name}`, { action: service.enabled ? "disable" : "enable" });
       toast(t("ai.managed.saved"), "ok"); aiPage({ tab: name });
@@ -292,6 +305,16 @@ function renderCodex(head, c, usage) {
    into the machine, with a dashboard of its own on a name we publish. */
 function renderOpenClaw(head, o) {
   const waiting = o.enabled && !o.ready;
+  const openClawRecovery = !o.machine_running
+    ? ["/console", "ai.recovery.power", icon.power]
+    : o.needs_openrouter && !o.enabled
+      ? ["/console/ai/openrouter", "ai.recovery.openrouter", icon.openrouter] : null;
+  const openClawAction = openClawRecovery
+    ? `<a class="btn primary" href="${openClawRecovery[0]}">${openClawRecovery[2]}${
+        t(openClawRecovery[1])}</a>`
+    : `<button class="btn ${o.enabled ? "danger ghost" : "primary"}" id="openclaw-go">
+        ${o.enabled ? icon.trash : icon.openclaw}${
+        o.enabled ? t("ai.openclaw.disable") : t("ai.openclaw.enable")}</button>`;
 
   render(`${head}${sections({
     status: `<div class="card">
@@ -309,10 +332,7 @@ function renderOpenClaw(head, o) {
       ${o.machine_running ? "" : note("warn", t("ai.openclaw.machineoff"))}
 
       <div class="btn-row" style="margin-top:16px">
-        <button class="btn ${o.enabled ? "danger ghost" : "primary"}" id="openclaw-go"
-          ${o.needs_openrouter && !o.enabled ? "disabled" : ""}>
-          ${o.enabled ? icon.trash : icon.openclaw}
-          ${o.enabled ? t("ai.openclaw.disable") : t("ai.openclaw.enable")}</button>
+        ${openClawAction}
         ${o.ready ? `<button class="btn ghost" id="openclaw-devices">${
           icon.check}${t("ai.openclaw.approve")}</button>` : ""}
       </div>
@@ -387,7 +407,8 @@ function renderOpenClaw(head, o) {
     };
   }
 
-  $("#openclaw-go").onclick = async () => {
+  const openClawGo = $("#openclaw-go");
+  if (openClawGo) openClawGo.onclick = async () => {
     const on = o.enabled;
     if (on && !await confirmDialog(t("ai.openclaw.disable"),
                                    t("ai.openclaw.disable.confirm"),
@@ -416,6 +437,8 @@ function renderOpenRouter(head, h) {
         <span class="pill"><span class="dot ${h.ready ? "on" : ""}"></span>${
           h.ready ? t("ai.ready") : t("ai.notready")}</span></div>
       ${h.credit_blocked ? note("warn", t("ai.hermes.creditblocked")) : ""}
+      ${h.error ? note("bad", t("ai.openrouter.limit.failed")) : ""}
+      ${h.limit_sync_pending && !h.error ? note("info", t("ai.openrouter.limit.pending")) : ""}
       ${h.ready ? "" : note("info", t("ai.openrouter.preparing"))}
     </div>`,
 
@@ -424,6 +447,13 @@ function renderOpenRouter(head, h) {
       <div class="grid" style="grid-template-columns:1fr;gap:10px">
         ${secretRow({ label: t("ai.openrouter.key"), value: h.key,
                       hint: t("ai.openrouter.key.hint") })}
+      </div>
+      <h3>${t("ai.openrouter.limit.title")}</h3>
+      <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px">
+        <div class="stat"><div class="k">${t("ai.openrouter.limit.value")}</div>
+          <div class="v ltr mono">${h.limit_usd == null ? "—" : `$${Number(h.limit_usd).toFixed(2)}`}</div></div>
+        <div class="stat"><div class="k">${t("ai.openrouter.limit.updated")}</div>
+          <div class="v" style="font-size:15px">${stamp(h.limit_synced_at)}</div></div>
       </div>
     </div>` : "",
 
@@ -454,6 +484,7 @@ function renderOpenRouter(head, h) {
     about: aboutCard("openrouter"),
   })}`);
   wireSecrets(document, t("conn.copied"));
+  if (h.limit_sync_pending && !h.error) repoll("openrouter", 5000);
 }
 
 /* Hermes.
@@ -469,6 +500,16 @@ function renderOpenRouter(head, h) {
 function renderHermes(head, h) {
   const waiting = h.enabled && !h.ready && !h.credit_blocked;
   const telegramWaiting = h.telegram_enabled && !h.telegram_ready;
+  const hermesRecovery = !h.machine_running
+    ? ["/console", "ai.recovery.power", icon.power]
+    : h.credit_blocked && !h.enabled
+      ? ["/console/billing", "ai.recovery.credit", icon.card] : null;
+  const hermesAction = hermesRecovery
+    ? `<a class="btn primary" href="${hermesRecovery[0]}">${hermesRecovery[2]}${
+        t(hermesRecovery[1])}</a>`
+    : `<button class="btn ${h.enabled ? "danger ghost" : "primary"}" id="hermes-go">
+        ${h.enabled ? icon.trash : icon.shield}${
+        h.enabled ? t("ai.hermes.disable") : t("ai.hermes.enable")}</button>`;
   const telegramFields = (hidden = false) => `<div class="telegram-fields" ${hidden ? "hidden" : ""}>
     ${h.telegram_profile_configured ? note("ok", `${t("ai.hermes.telegram.saved", h.telegram_profile_user_id)}
       <a href="/console/account">${t("ai.hermes.telegram.edit")}</a>`) : `
@@ -515,9 +556,7 @@ function renderHermes(head, h) {
       })}
 
       <div class="btn-row" style="margin-top:16px">
-        <button class="btn ${h.enabled ? "danger ghost" : "primary"}" id="hermes-go">
-          ${h.enabled ? icon.trash : icon.shield}
-          ${h.enabled ? t("ai.hermes.disable") : t("ai.hermes.enable")}</button>
+        ${hermesAction}
       </div>
       <div id="hermes-msg"></div>
     </div>`,
@@ -596,7 +635,8 @@ function renderHermes(head, h) {
     configureTelegram(!on);
   });
 
-  $("#hermes-go").onclick = async () => {
+  const hermesGo = $("#hermes-go");
+  if (hermesGo) hermesGo.onclick = async () => {
     const on = h.enabled;
     if (on && !await confirmDialog(t("ai.hermes.disable"),
                                    t("ai.hermes.disable.confirm"),

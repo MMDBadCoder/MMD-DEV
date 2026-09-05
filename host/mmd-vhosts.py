@@ -435,6 +435,11 @@ def mark_readiness(db, published_hosts: set[str], domain: str, usernames) -> Non
         host = (usernames.hermes_host(user.username, domain)
                 if user and user.username else "")
         ws.hermes_vhost_ready = host in published_hosts
+        for name, host_fn in (("opencode", usernames.opencode_host),
+                              ("openwebui", usernames.openwebui_host)):
+            managed_host = (host_fn(user.username, domain)
+                            if user and user.username else "")
+            setattr(ws, f"{name}_vhost_ready", managed_host in published_hosts)
         if not user or not user.username:
             continue
         for port in db.execute(select(ExposedPort).where(

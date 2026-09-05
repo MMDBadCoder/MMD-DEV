@@ -28,9 +28,10 @@ export const SECTIONS = [
 /* `active` is the section key, not a path, so a detail route like
    /console/admin/users/12 can still light up its parent tab. */
 export function adminNav(active = "") {
-  return `<div class="tabs2 admin-nav">${SECTIONS.map((s) => `
-    <a href="${s.path}" class="${s.key === active ? "active" : ""}">
-      ${icon[s.ic] || ""}${t("adm.nav." + (s.key || "overview"))}</a>`).join("")}</div>`;
+  return `<nav class="tabs2 admin-nav" aria-label="${t("nav.admin.sections")}">${SECTIONS.map((s) => `
+    <a href="${s.path}" class="${s.key === active ? "active" : ""}"
+      ${s.key === active ? 'aria-current="page"' : ""}>
+      ${icon[s.ic] || ""}${t("adm.nav." + (s.key || "overview"))}</a>`).join("")}</nav>`;
 }
 
 export function adminHead(active, title, sub) {

@@ -147,6 +147,18 @@ test("customer-facing labels are in Persian", () => {
   assert.deepEqual(offenders, []);
 });
 
+test("customer-facing Persian text is owned by the catalogue", () => {
+  const offenders = [];
+  for (const f of jsFiles(WEB)) {
+    if (f.endsWith("i18n.js") || f.includes(`${path.sep}vendor${path.sep}`)) continue;
+    const src = fs.readFileSync(f, "utf8");
+    if (/[؀-ۿ]/.test(src)) offenders.push(path.relative(ROOT, f));
+  }
+  const shell = fs.readFileSync(path.join(ROOT, "web/index.html"), "utf8");
+  if (/[؀-ۿ]/.test(shell)) offenders.push("web/index.html");
+  assert.deepEqual(offenders, [], "Persian literals outside web/js/i18n.js");
+});
+
 test("currency is Toman", () => {
   assert.equal(CURRENCY, "تومان");
 });

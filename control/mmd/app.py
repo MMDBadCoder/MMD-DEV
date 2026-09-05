@@ -16,6 +16,7 @@ import secrets
 import shutil
 import subprocess
 import time
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -65,7 +66,18 @@ log = logging.getLogger("mmd.api")
 # Must match worker.TICK_SECONDS. Sent to the interface so the charts refresh in
 # step with the data rather than guessing.
 SAMPLE_SECONDS = 20
-app = FastAPI(title="MMD-DEV", docs_url=None, redoc_url=None)
+
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    logging.basicConfig(level=logging.INFO)
+    init_db()
+    _backfill_usernames()
+    yield
+
+
+app = FastAPI(title="MMD-DEV", docs_url=None, redoc_url=None,
+              lifespan=_lifespan)
 
 _serializer = URLSafeTimedSerializer(CONFIG.secret_key or "dev-only-insecure-key",
                                      salt="mmd-session")
@@ -153,17 +165,28 @@ def current_user(request: Request, db: Session = Depends(get_session)) -> User:
     if not raw:
         fail(401, "not_signed_in", "Not signed in")
     try:
-        uid, signed_at = _serializer.loads(
+        payload, signed_at = _serializer.loads(
             raw, max_age=CONFIG.session_hours * 3600, return_timestamp=True)
+        # Cookies issued before session revocation existed contain only the
+        # user id. They remain valid for version-zero accounts and naturally
+        # stop working after the first security-sensitive change.
+        if isinstance(payload, dict):
+            uid = int(payload["user_id"])
+            cookie_version = int(payload.get("version", 0))
+        else:
+            uid = int(payload)
+            cookie_version = 0
         request.state.session_expires_at = signed_at + timedelta(
             hours=CONFIG.session_hours)
-    except BadSignature:
+    except (BadSignature, KeyError, TypeError, ValueError):
         fail(401, "session_expired", "Your session has expired.")
-    user = db.get(User, int(uid))
+    user = db.get(User, uid)
     if user is None or user.status in (UserStatus.REJECTED, UserStatus.DELETING):
         fail(401, "not_signed_in", "Not signed in")
     if user.status == UserStatus.SUSPENDED:
         fail(403, "suspended", "Your account is suspended.")
+    if cookie_version != user.session_version:
+        fail(401, "session_expired", "Your session has expired.")
     return user
 
 
@@ -199,7 +222,7 @@ class SignUp(BaseModel):
 
 class CodeRequest(BaseModel):
     phone: str = Field(pattern=r"^09[0-9]{9}$")
-    purpose: str = Field(pattern=r"^(signup|login)$")
+    purpose: str = Field(pattern=r"^(signup|login|profile)$")
 
 
 class SmsLogin(BaseModel):
@@ -208,7 +231,10 @@ class SmsLogin(BaseModel):
 
 
 class SmsPreferences(BaseModel):
-    prefs: dict[str, bool]
+    prefs: dict[str, bool] = Field(default_factory=dict)
+    credit_step_toman: int | None = Field(
+        default=None, ge=smslib.MIN_CREDIT_STEP_TOMAN,
+        le=smslib.MAX_CREDIT_STEP_TOMAN, multiple_of=1_000)
 
 
 class LoginBody(BaseModel):
@@ -225,6 +251,7 @@ class ProfileUpdate(BaseModel):
     full_name: str = Field(min_length=2, max_length=120)
     phone: str = Field(pattern=r"^09[0-9]{9}$")
     current_password: str = Field(min_length=1, max_length=256)
+    code: str | None = Field(default=None, min_length=4, max_length=8)
 
 
 class TelegramProfileUpdate(BaseModel):
@@ -344,13 +371,6 @@ class CreditGrant(BaseModel):
     note: str = ""
 
 
-@app.on_event("startup")
-def _startup() -> None:
-    logging.basicConfig(level=logging.INFO)
-    init_db()
-    _backfill_usernames()
-
-
 def _backfill_usernames() -> None:
     """Give every pre-existing account a username.
 
@@ -376,7 +396,7 @@ def _metric_label(value: object) -> str:
 
 @app.get("/internal/metrics", response_class=PlainTextResponse)
 def prometheus_metrics(request: Request, db: Session = Depends(get_session)) -> str:
-    """Low-cardinality platform snapshot, scraped locally every five minutes."""
+    """Low-cardinality platform snapshot, scraped locally every 60 seconds."""
     expected = CONFIG.prometheus_token
     supplied = request.headers.get("authorization", "").removeprefix("Bearer ")
     if not expected or not secrets.compare_digest(supplied, expected):
@@ -420,8 +440,15 @@ def prometheus_metrics(request: Request, db: Session = Depends(get_session)) -> 
     lines.extend(_usage_metrics(db))
     lines.extend(_operations_metrics(db))
     lines.extend(_process_metrics())
-    # The worker's own counters, folded in from the snapshot it persists.
-    lines.extend(m.render(m.read_snapshot()))
+    # The worker's own counters, folded in from the snapshot it persists. Age
+    # is exported beside them so a dead/corrupt writer cannot masquerade as a
+    # healthy worker that simply recorded zero events.
+    worker_snapshot = m.read_snapshot()
+    generated_at = worker_snapshot.get("generated_at")
+    snapshot_age = (max(0.0, time.time() - float(generated_at))
+                    if generated_at is not None else -1)
+    lines.append(f"mmd_worker_metrics_snapshot_age_seconds {snapshot_age:g}")
+    lines.extend(m.render(worker_snapshot))
     lines.append("# EOF")
     return "\n".join(lines) + "\n"
 
@@ -731,9 +758,18 @@ def _notify_admins(db: Session, kind: str, detail: dict | None = None,
 def _issue_session(response: Response, user: User) -> None:
     """One definition, because password and SMS sign-in must produce exactly
     the same session - a second copy is how the two drift in cookie flags."""
-    response.set_cookie(COOKIE, _serializer.dumps(str(user.id)), httponly=True,
+    payload = {"user_id": user.id, "version": user.session_version}
+    response.set_cookie(COOKIE, _serializer.dumps(payload), httponly=True,
                         samesite="lax", secure=True,
                         max_age=CONFIG.session_hours * 3600)
+
+
+def _ensure_login_allowed(user: User) -> None:
+    """Refuse blocked accounts before a success cookie or login SMS exists."""
+    if user.status in (UserStatus.REJECTED, UserStatus.DELETING):
+        fail(401, "bad_credentials", "Incorrect username or password")
+    if user.status == UserStatus.SUSPENDED:
+        fail(403, "suspended", "Your account is suspended.")
 
 
 def _notify_new_login(db: Session, user: User) -> None:
@@ -806,7 +842,7 @@ def request_code(body: CodeRequest, db: Session = Depends(get_session)) -> dict:
     """
     phone = body.phone
     exists = db.scalar(select(User).where(User.phone == phone)) is not None
-    if body.purpose == "signup" and exists:
+    if body.purpose in ("signup", "profile") and exists:
         # Not an enumeration leak: the signup form already reports a taken
         # number through phone-available, and sending a signup code to an
         # existing account would be a way to spam a customer.
@@ -821,7 +857,8 @@ def request_code(body: CodeRequest, db: Session = Depends(get_session)) -> dict:
         db.commit()
         return {"ok": True}
     smslib.queue(db, user_id=None, phone=phone,
-                 kind="signup_code" if body.purpose == "signup" else "login_code",
+                 kind=("login_code" if body.purpose == "login"
+                       else "verification_code"),
                  detail={"code": code})
     db.commit()
     return {"ok": True}
@@ -843,6 +880,7 @@ def login_sms(body: SmsLogin, response: Response,
     user = db.scalar(select(User).where(User.phone == body.phone))
     if user is None:
         fail(401, "bad_credentials", "Incorrect phone or code")
+    _ensure_login_allowed(user)
     _issue_session(response, user)
     svc.audit(db, user.id, "sign_in_sms", user.username)
     _notify_new_login(db, user)
@@ -888,6 +926,7 @@ def login(body: LoginBody, response: Response,
               {"method": "password",
                "reason": "no_such_user" if user is None else "bad_password"})
         fail(401, "bad_credentials", "Incorrect username or password")
+    _ensure_login_allowed(user)
     _issue_session(response, user)
     svc.audit(db, user.id, "sign_in", user.username)
     _notify_new_login(db, user)
@@ -898,7 +937,11 @@ def login(body: LoginBody, response: Response,
 def sms_preferences_get(user: User = Depends(current_user)) -> dict:
     """Which optional messages this customer receives, all on by default."""
     return {"prefs": smslib.preferences(user),
-            "kinds": smslib.OPTIONAL_KINDS}
+            "kinds": smslib.OPTIONAL_KINDS,
+            "credit_step_toman": (user.sms_credit_step_toman
+                                  or smslib.DEFAULT_CREDIT_STEP_TOMAN),
+            "credit_step_min": smslib.MIN_CREDIT_STEP_TOMAN,
+            "credit_step_max": smslib.MAX_CREDIT_STEP_TOMAN}
 
 
 @app.put("/api/account/sms")
@@ -910,17 +953,28 @@ def sms_preferences_put(body: SmsPreferences, user: User = Depends(current_user)
     rejected rather than silently ignored, because an interface that appears
     to switch off a takeover warning is worse than one that has no switch.
     """
+    # Serialize this with the worker's band comparison. Otherwise a balance
+    # crossing concurrent with a step edit can be classified against the old
+    # denominator and text a change caused only by configuration.
+    user = db.scalar(select(User).where(User.id == user.id).with_for_update())
     prefs = dict(user.sms_prefs or {})
     for kind, wanted in body.prefs.items():
         if kind not in smslib.OPTIONAL_KINDS:
             fail(400, "sms_kind_locked", "That message cannot be switched off.")
         prefs[kind] = bool(wanted)
     user.sms_prefs = prefs
+    if body.credit_step_toman is not None:
+        user.sms_credit_step_toman = body.credit_step_toman
+        # Changing n changes floor(balance/n) without changing the balance.
+        # Establish the new baseline in the same transaction so a settings
+        # edit can never be announced as money entering or leaving the account.
+        balance = svc.balance_micro(db, user.id)
+        user.sms_credit_band = balance // (body.credit_step_toman * MICRO)
     # The column is JSON; SQLAlchemy needs the reassignment above to see the
     # change, which is why this is not an in-place mutation.
     db.commit()
     svc.audit(db, user.id, "sms_preferences", user.username)
-    return {"prefs": smslib.preferences(user), "kinds": smslib.OPTIONAL_KINDS}
+    return sms_preferences_get(user)
 
 
 @app.post("/api/auth/logout")
@@ -930,17 +984,20 @@ def logout(response: Response) -> dict:
 
 
 @app.post("/api/auth/password")
-def change_password(body: PasswordChange, user: User = Depends(current_user),
+def change_password(body: PasswordChange, response: Response,
+                    user: User = Depends(current_user),
                     db: Session = Depends(get_session)) -> dict:
     if not verify_password(body.current_password, user.password_hash):
         fail(401, "wrong_password", "Your current password is not correct")
     user.password_hash = hash_password(body.new_password)
+    user.session_version += 1
     try:
         smslib.queue(db, user_id=user.id, phone=user.phone,
                      kind="password_changed")
     except smslib.SmsError:
         pass
     db.commit()
+    _issue_session(response, user)
     svc.audit(db, user.id, "password_change", user.username)
     # No message: the page says so in Persian. Nothing consumed this, and a
     # sentence sitting in a response is a sentence waiting to be displayed.
@@ -984,13 +1041,27 @@ def _apply_identity(user: User, full_name: str, phone: str) -> None:
 
 
 @app.put("/api/profile")
-def update_profile(body: ProfileUpdate, user: User = Depends(current_user),
+def update_profile(body: ProfileUpdate, response: Response,
+                   user: User = Depends(current_user),
                    db: Session = Depends(get_session)) -> dict:
     if not verify_password(body.current_password, user.password_hash):
         fail(401, "wrong_password", "Your current password is not correct")
     _validate_identity(db, user, body.phone)
+    phone_changed = body.phone != user.phone
+    if phone_changed:
+        if not body.code:
+            fail(400, "phone_verification_required",
+                 "Verify the new phone number first.")
+        try:
+            smscode.verify(db, body.phone, "profile", body.code)
+        except smscode.CodeError as e:
+            fail(400, e.code, str(e))
     _apply_identity(user, body.full_name, body.phone)
+    if phone_changed:
+        user.session_version += 1
     db.commit()
+    if phone_changed:
+        _issue_session(response, user)
     svc.audit(db, user.id, "profile_change", user.username)
     return {"ok": True}
 
@@ -1822,6 +1893,10 @@ def _ai_state(ws: Workspace) -> dict:
 def _openrouter_state(user: User, account: OpenRouterAccount | None) -> dict:
     return {"ready": bool(account and account.key_hash),
             "credit_blocked": bool(account.credit_blocked) if account else True,
+            "limit_sync_pending": bool(account.limit_dirty) if account else True,
+            "limit_usd": account.limit_usd if account else None,
+            "limit_synced_at": (account.limit_synced_at.isoformat()
+                                if account and account.limit_synced_at else None),
             "key": account.key if account else None,
             "error": bool(account and account.error)}
 
@@ -1930,10 +2005,14 @@ def _openclaw_state(ws: Workspace, account: OpenRouterAccount | None = None) -> 
 def _managed_web_state(ws: Workspace, account: OpenRouterAccount | None,
                        name: str) -> dict:
     installed = bool(getattr(ws, f"{name}_installed"))
+    vhost_ready = bool(getattr(ws, f"{name}_vhost_ready"))
     host_fn = unames.opencode_host if name == "opencode" else unames.openwebui_host
     minimum_memory_mib = 2048 if name == "openwebui" else 0
-    return {"enabled": bool(getattr(ws, f"{name}_enabled")),
-            "installed": installed, "ready": installed,
+    enabled = bool(getattr(ws, f"{name}_enabled"))
+    has_error = bool(getattr(ws, f"{name}_error"))
+    return {"enabled": enabled,
+            "installed": installed, "vhost_ready": vhost_ready,
+            "ready": bool(enabled and installed and vhost_ready and not has_error),
             "machine_running": ws.state == WorkspaceState.ON,
             "minimum_memory_mib": minimum_memory_mib,
             "needs_memory": bool(minimum_memory_mib and ws.mem_mib < minimum_memory_mib),
@@ -1942,7 +2021,7 @@ def _managed_web_state(ws: Workspace, account: OpenRouterAccount | None,
             "username": ("opencode" if name == "opencode" else
                          f"{ws.user.username}@mmd.local"),
             "password": getattr(ws, f"{name}_password"),
-            "error": bool(getattr(ws, f"{name}_error"))}
+            "error": has_error}
 
 
 @app.get("/api/workspace/ai")
@@ -1982,6 +2061,7 @@ def ai_managed_web(service: str, body: HermesAction,
     setattr(ws, f"{service}_enabled", body.action == "enable")
     setattr(ws, f"{service}_error", None)
     if body.action == "disable":
+        setattr(ws, f"{service}_vhost_ready", False)
         setattr(ws, f"{service}_password", None)
     db.commit()
     svc.audit(db, user.id, f"ai_{service}_{body.action}", ws.incus_project)
@@ -2684,11 +2764,18 @@ async def terminal(sock: WebSocket) -> None:
         if not raw:
             await sock.close(code=4401); return
         try:
-            uid = int(_serializer.loads(raw, max_age=CONFIG.session_hours * 3600))
-        except BadSignature:
+            payload = _serializer.loads(raw, max_age=CONFIG.session_hours * 3600)
+            if isinstance(payload, dict):
+                uid = int(payload["user_id"])
+                cookie_version = int(payload.get("version", 0))
+            else:
+                uid = int(payload)
+                cookie_version = 0
+        except (BadSignature, KeyError, TypeError, ValueError):
             await sock.close(code=4401); return
         user = db.get(User, uid)
-        if user is None or user.status != UserStatus.APPROVED:
+        if (user is None or user.status != UserStatus.APPROVED
+                or user.session_version != cookie_version):
             await sock.close(code=4403); return
         ws = db.scalar(select(Workspace).where(Workspace.user_id == user.id))
         if ws is None:
@@ -2990,7 +3077,10 @@ def admin_update_profile(user_id: int, body: AdminProfileUpdate,
     if user is None:
         fail(404, "no_such_user", "No such user")
     _validate_identity(db, user, body.phone)
+    phone_changed = body.phone != user.phone
     _apply_identity(user, body.full_name, body.phone)
+    if phone_changed:
+        user.session_version += 1
     db.commit()
     svc.audit(db, admin.id, "admin_profile_change", user.username, user_id=user.id)
     return {"ok": True}
@@ -3039,6 +3129,7 @@ def admin_reject(user_id: int, admin: User = Depends(require_admin),
     if user is None:
         fail(404, "no_such_user", "No such user")
     user.status = UserStatus.REJECTED
+    user.session_version += 1
     try:
         smslib.queue(db, user_id=user.id, phone=user.phone, kind="rejected",
                      dedupe_key=f"rejected:{user.id}")
@@ -3091,6 +3182,7 @@ def admin_delete_user(user_id: int, admin: User = Depends(require_admin),
                 "operation": oplib.view(op) if op else None}
     ws = db.scalar(select(Workspace).where(Workspace.user_id == user_id))
     user.status = UserStatus.DELETING
+    user.session_version += 1
     if ws is not None:
         ws.desired_on = False
     db.commit()
@@ -3206,12 +3298,6 @@ def admin_credit(user_id: int, body: CreditGrant,
         account.limit_dirty = True
         db.commit()
     balance = svc.balance_micro(db, user.id)
-    try:
-        smslib.queue(db, user_id=user.id, phone=user.phone, kind="credit_added",
-                     detail={"balance": f"{round(balance / MICRO):,}"}, user=user)
-        db.commit()
-    except smslib.SmsError:
-        pass
     svc.audit(db, admin.id, "grant_credit", user.username, credits=body.credits)
     return {"ok": True, "balance": balance / MICRO}
 

@@ -53,9 +53,36 @@ def test_customer_can_change_identity_only_with_the_current_password(env):
     assert client.put("/api/profile", json=body).status_code == 401
 
     body["current_password"] = "old-password"
+    # The replacement number is itself a login identity, so possession must be
+    # proved before the old identity is discarded.
+    from mmd import smscode
+    code = smscode.issue(db, body["phone"], "profile")
+    db.commit()
+    body["code"] = code
     assert client.put("/api/profile", json=body).status_code == 200
     db.refresh(customer)
     assert (customer.full_name, customer.phone) == ("New Name", "09333333333")
+    assert customer.session_version == 1
+
+
+def test_a_new_phone_is_not_accepted_without_proving_it(env):
+    client, _, customer, _, _ = env
+    response = client.put("/api/profile", json={
+        "full_name": "Customer One", "phone": "09333333333",
+        "current_password": "old-password"})
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "phone_verification_required"
+    assert customer.phone == "09222222222"
+
+
+def test_editing_only_the_name_does_not_require_a_phone_code(env):
+    client, _, customer, _, _ = env
+    response = client.put("/api/profile", json={
+        "full_name": "A Better Name", "phone": customer.phone,
+        "current_password": "old-password"})
+    assert response.status_code == 200
+    assert customer.full_name == "A Better Name"
+    assert customer.session_version == 0
 
 
 def test_phone_is_exactly_an_eleven_digit_iranian_mobile(env):
@@ -114,6 +141,7 @@ def test_admin_can_change_customer_identity_without_learning_the_password(env):
     assert response.status_code == 200
     db.refresh(customer)
     assert customer.full_name == "Edited Customer"
+    assert customer.session_version == 1
 
 
 def test_telegram_token_is_write_only_and_reusable_by_hermes(env):

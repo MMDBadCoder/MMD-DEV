@@ -26,20 +26,21 @@ function copyRow(label, value) {
     <div class="row" style="gap:8px;align-items:center;flex-wrap:nowrap">
       <input class="mono ltr" dir="ltr" readonly value="${esc(value)}" style="flex:1 1 auto">
       <button class="btn icon ghost" data-copy="${esc(value)}"
+        aria-label="${t("common.copy")} ${esc(label)}"
         style="flex:0 0 auto">${icon.copy}</button>
     </div></div>`;
 }
 
 function tabBar(active, d) {
-  return `<div class="tabs2">${TABS.map((tb) => {
+  return `<nav class="tabs2" aria-label="${t("nav.connection.sections")}">${TABS.map((tb) => {
     const on = tb.key === "ssh" ? d.ssh.enabled
              : tb.key === "rdp" ? d.rdp.enabled : null;
     const badge = on === null ? ""
       : `<span class="badge ${on ? "on" : ""}">${on ? t("conn.on") : t("conn.off")}</span>`;
     return `<a href="/console/connections/${tb.key}"
-      class="${tb.key === active ? "active" : ""}">${icon[tb.ic]}
+      class="${tb.key === active ? "active" : ""}" ${tb.key === active ? 'aria-current="page"' : ""}>${icon[tb.ic]}
       ${t("conn.tab." + tb.key)}${badge}</a>`;
-  }).join("")}</div>`;
+  }).join("")}</nav>`;
 }
 
 function launcher(d) {
@@ -212,10 +213,12 @@ function renderSsh(head, d) {
     const b = $("#ssh-toggle"), enabling = !d.ssh.enabled;
     b.disabled = true; b.innerHTML = `<span class="spinner"></span>${t("conn.working")}`;
     try { await post("/api/workspace/services/ssh", { enabled: enabling });
-          toast(enabling ? t("ssh.enabled") : t("ssh.disabled"), "ok"); }
+          toast(enabling ? t("ssh.enabled") : t("ssh.disabled"), "ok");
+          connectionsPage({ tab: "ssh" }); }
     catch (err) { $("#ssh-msg").innerHTML = recoveryNote(err, { retry: true });
-                  wireRecovery(() => $("#ssh-toggle").click(), $("#ssh-msg")); }
-    connectionsPage({ tab: "ssh" });
+                  wireRecovery(() => $("#ssh-toggle").click(), $("#ssh-msg"));
+                  b.disabled = false;
+                  b.innerHTML = `${icon.bolt}${enabling ? t("conn.turnon") : t("conn.turnoff")}`; }
   };
   $$("[data-copy]").forEach(wireCopy);
 }
@@ -274,9 +277,11 @@ function renderRdp(head, d) {
       await post("/api/workspace/services/rdp",
                  enabling ? { enabled: true, password: pw } : { enabled: false });
       toast(enabling ? t("rdp.enabled") : t("rdp.disabled"), "ok");
+      connectionsPage({ tab: "rdp" });
     } catch (err) { $("#rdp-msg").innerHTML = recoveryNote(err, { retry: true });
-                    wireRecovery(() => $("#rdp-toggle").click(), $("#rdp-msg")); }
-    connectionsPage({ tab: "rdp" });
+                    wireRecovery(() => $("#rdp-toggle").click(), $("#rdp-msg"));
+                    b.disabled = false;
+                    b.innerHTML = `${icon.monitor}${enabling ? t("conn.turnon") : t("conn.turnoff")}`; }
   };
   $$("[data-copy]").forEach(wireCopy);
 }

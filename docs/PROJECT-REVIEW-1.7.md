@@ -2,6 +2,7 @@
 
 **Review date:** 2026-09-04
 **Reviewed revision:** `80806dc` (`v1.7.0`, `main`)
+**Implementation status updated:** 2026-09-05
 **Scope:** product, customer journeys, Persian copy, UI/UX, accessibility,
 architecture, security, billing, lifecycle, operations, observability, testing,
 performance, and maintainability.
@@ -22,32 +23,40 @@ its OpenRouter key can exist without a workspace.
 The largest remaining risks are not visual polish. They are correctness at
 concurrent transaction boundaries and disaster recovery:
 
-1. Ledger insertion and balance mutation are not concurrency-safe. Two writers
-   can overwrite one another's balance update.
-2. AI/OpenRouter charges and their usage checkpoints are committed separately.
-   A crash between the commits can charge the same usage again.
-3. Capacity admission, workspace creation, and operation creation use
+1. Capacity admission, workspace creation, and operation creation use
    check-then-write sequences without serialization.
-4. PostgreSQL backups contain plaintext customer/API credentials and are sent
+2. SMS-code consumption and issuance still need PostgreSQL-safe concurrency;
+   authentication also lacks layered abuse controls and password recovery.
+3. PostgreSQL backups contain plaintext customer/API credentials and are sent
    to Telegram without application-level encryption; workspace data has no
-   off-host backup at all.
-5. OpenCode and OpenWebUI can be shown as ready before nginx has actually made
-   their hostname routable.
-6. Password authentication has no visible rate limiter, phone-code limiting is
-   only per phone, phone changes do not verify the new number, and changing a
-   password does not invalidate existing sessions.
+   off-host backup at all. The owner has accepted Telegram transport for now,
+   but the workspace recovery gap remains.
+4. Dependency and managed-tool installation are not fully reproducible, while
+   certificate fallback capacity may not match continued hostname growth.
+5. Account erasure, SMS retention, audit history, logs, metrics, and backups do
+   not yet share an approved retention/anonymisation contract.
+6. Large control-plane modules, the sequential worker, duplicated service state
+   machines, and stringly typed settings remain long-term change risks.
 
-The product is usable, but the first-run journey still presents “a cloud
-machine” as the centre of gravity even though OpenRouter-only is now a supported
-product. Navigation and the seven-item AI surface are overcrowded on small
-screens. The app also has significant accessibility debt: dialogs lack complete
-focus management, tabs do not expose tab semantics, async outcomes are not
-announced, and icon-only controls are inconsistently labelled.
+The first-run journey now treats OpenRouter-only use and creating a machine as
+equal choices. Mobile navigation, dialogs, tabs, asynchronous feedback, control
+labels, chart alternatives, reduced motion, and keyboard access have also been
+improved. Remaining UI work is narrower: the seven-item AI information
+architecture, mobile data tables, secondary-form validation, just-in-time secret
+reveal, and rendered browser geometry/contrast gates.
 
-The recommended order is: protect money and destructive concurrency; encrypt
-and test backups; close authentication/session gaps; make service readiness
-truthful; then improve journeys, accessibility, navigation, and internal
-modularity.
+The recommended next order is: serialize capacity and destructive operations;
+make SMS-code concurrency safe; decide retention and recovery policies; harden
+authentication and installer reproducibility; then address the remaining mobile,
+AI-navigation, and modularity work.
+
+**Current-state note (2026-09-05):** the review findings above describe the
+1.7.0 baseline. Since then, atomic balance movement (F-01), atomic AI charge
+checkpoints (F-02), managed-route readiness (F-07), verified phone changes and
+session revocation (F-09/F-10/F-16), the two-path first-run journey (F-19), and
+most of the low-risk accessibility/reliability findings have been implemented
+and deployed. The authoritative current status is the disposition near the end
+of this document; the original evidence remains intact for audit history.
 
 ## Method and confidence
 
@@ -1025,43 +1034,150 @@ note or a new decision where needed so the history remains useful.
   ceilings, and file-manager privilege routing are exactly the kind of hard-won
   invariants that a refactor must retain.
 
-## Recommended implementation programme
+## Implementation disposition — 2026-09-05
+
+This is the authoritative status ledger for this review. The findings above
+preserve evidence as it existed at review time; “Confirmed” there does not mean
+the finding remains unfixed after this implementation programme.
+
+The owner explicitly chose three current constraints: payments remain manual,
+database backups may continue through Telegram without added encryption, and
+published customer applications remain HTTP-only. Fundamental/high-regression
+changes and findings needing an owner, legal, retention, SLO, or pricing
+decision are kept for a later programme rather than mixed into this low-risk
+release.
+
+### Implemented in the current working release
+
+| Findings | Result |
+|---|---|
+| F-01 | Ledger rows and balance changes now share one transaction, and the balance moves through an atomic SQL increment instead of a process-local read/modify/write. Duplicate charge rejection happens before the balance changes. |
+| F-02 | Claude, Codex, and account-level OpenRouter charges use `commit=False` so each charge and the usage checkpoint proving what was billed commit as one fact. Crash-window regression tests protect the boundary. |
+| F-07 | OpenCode and Open WebUI now include explicit vhost-ready state; installation alone cannot make their launcher ready. |
+| F-09, F-10, F-16 | Replacement phones are SMS-verified; credential/status changes advance a session version; rejected/suspended accounts cannot obtain a working login cookie. |
+| F-19 | Accounts without compute see two equal first-run paths: portable OpenRouter API or an optional development machine. |
+| F-21 | The OpenRouter tab separates local credit from the last supplier-confirmed cap, shows synchronization time/failure, and polls the durable five-second retry. The management key intentionally remains worker-only instead of adding a supplier call to the public API. |
+| F-25 | Reset, workspace deletion, and account deletion use impact-specific confirmations separating preserved data from permanent loss. |
+| F-28 | Public durability wording states the real single-host and backup boundaries instead of making an absolute promise. |
+| F-29 | Mobile navigation keeps four primary destinations visible and moves secondary destinations into an accessible “more” sheet. |
+| F-31 through F-34 | Dialog focus/trapping, tab semantics, live async feedback, decorative SVG handling, and accessible control names are standardized. |
+| F-36 through F-38 | Connection failures remain visible, stale async routes cannot overwrite a newer route, and route failures render a shared retry/recovery state. |
+| F-41 through F-44 | Reduced motion, skip navigation, `aria-sort`, chart data tables, Persian browser titles, and catalogue ownership of customer text are enforced. |
+
+### Partially implemented; bounded follow-up remains
+
+| Finding | Completed now | Remaining boundary |
+|---|---|---|
+| F-35 | Shared errors set `aria-invalid`/`aria-describedby`, retain values, and focus the invalid field on authentication and account-security journeys. | Migrate lower-risk admin and secondary forms incrementally. |
+| F-39 | Page and shell polling pauses in hidden tabs and avoids stale redraws. | Backoff, cross-tab deduplication, and SSE require measurement first. |
+| F-45 | `docs/DESIGN-SYSTEM.md` and shared dialog, note, secret, status, empty, recovery, and validation primitives define the contract. | Remove remaining page-local compositions when those pages are next changed. |
+| F-47 | Recoverable machine and AI prerequisites lead directly to credit, power, resources, or OpenRouter. | Audit remaining secondary/admin disabled states alongside F-35 migration. |
+| F-50 | Financial callers can now choose explicit transaction ownership, and usage metering uses it to commit charge plus checkpoint together. | Other helpers still mix commit-owning and caller-owned styles; complete this only during bounded module extraction. |
+| F-65 | Process uptime was already exported; worker snapshots are atomic and now expose age so stale counters differ from zero. | In-process API counters still reset by design; changing that needs an observability architecture decision. |
+| F-71 | Structural tests cover focus, names, tabs, charts, motion, mobile navigation, and recovery. | Real geometry/contrast needs a pinned browser/axe CI environment; no browser runtime is installed in the repository test environment. |
+| F-73 | `docs/TEST-INVARIANTS.md` maps critical promises to their primary tests. | Add branch coverage after choosing a CI coverage budget. |
+| F-74 | Stable translations and representative recovery actions are enforced for high-risk journeys. | Exhaustive endpoint-to-action coverage should grow with F-35, not through a generic support assertion. |
+
+### Deliberately retained by owner decision
+
+| Finding | Current decision |
+|---|---|
+| F-03 | Keep the existing unencrypted Telegram database-backup transport; its disclosed risk is accepted for now. |
+| F-20 | Keep credit/payment operator-mediated and manual; do not add a payment gateway. |
+| F-67 | Keep published application addresses HTTP-only; do not reintroduce an HTTPS promise the routing model cannot meet. |
+
+### Deferred: fundamental, high-cost, or high-regression work
+
+| Findings | Why deferred |
+|---|---|
+| F-05, F-06, F-11 | Correct fixes change admission/allocation locking, active-operation uniqueness, or SMS-code consumption semantics and need an isolated PostgreSQL integration environment. |
+| F-04 | Off-host workspace recovery changes storage, transfer, retention, restore, and cost architecture. |
+| F-08, F-12, F-13 | Abuse control, password recovery, and bootstrap changes can lock out real users/admins unless proxy trust, SMS budget, and recovery operations are designed together. |
+| F-14, F-18 | Reproducible supply-chain installation and wildcard certificate automation require staged infrastructure and rollback testing. |
+| F-22, F-46 | Key rotation and just-in-time secret reveal affect external clients and every managed consumer; a partial implementation would create false confidence. |
+| F-40, F-48 | Converting every table and adding geometric browser gates spans the UI and requires a pinned headless-browser baseline. Existing overflow containment remains. |
+| F-49, F-51 through F-60 | These are control-plane boundary, migration, state-machine, privilege, and threat-model redesigns—the category excluded from this low-risk programme. F-50 has a bounded partial improvement above. |
+| F-64, F-66 | Per-admin Grafana identity and a database capacity envelope require identity/infrastructure and measured-load work. |
+| F-69, F-70, F-72 | PostgreSQL/Incus crash laboratories and security/SBOM tooling require owned CI infrastructure and quarantined disposable workspaces. |
+
+### Deferred pending a concrete product or operating decision
+
+| Findings | Decision required before implementation |
+|---|---|
+| F-15, F-68 | Legal retention/anonymisation periods for ledger, audit, SMS, support, journals, metrics, and backups. |
+| F-17 | Whether signup feedback or resistance to customer-membership enumeration has priority, plus the abuse budget. |
+| F-23 | Whether the promoted default should cost more at 2 GiB, and which AI capabilities each sellable tier promises. |
+| F-24, F-30 | Per-workload model policy and the next AI information hierarchy as the catalogue grows. |
+| F-26, F-61 | Incident communication, SLOs, alert recipients/owners, escalation, inhibition, and runbook policy. |
+| F-27 | Terms, privacy, acceptable-use, refund, shared-kernel, and shared-subscription language needs product/legal approval. |
+| F-62 | Prometheus retention duration, TSDB disk budget, and whether monitoring history is backed up off-host. |
+| F-63 | Measure scrape cost and query plans first; snapshot/caching work is unjustified until the operating envelope is known. |
+
+### Documentation drift disposition
+
+| Items | Status |
+|---|---|
+| D-01 through D-14 | Implemented: retention/scrape wording, brittle counts, architecture/address lifecycle, phone-only examples, OpenRouter terminology, disk totals, removed dependency, API coverage, and Grafana exposure were corrected. |
+| D-15 | Deferred with F-15 until the owner approves one retention matrix; contradictory absolute-erasure wording was removed where behavior is unambiguous. |
+| D-16 | Partially implemented: FastAPI startup uses lifespan. One upstream TestClient/httpx warning remains for controlled dependency-upgrade work in F-14/F-72. |
+
+### Additional improvements discovered after the review
+
+These changes arose from production-journey review after the original finding
+catalogue was frozen, so they do not receive retroactive finding numbers:
+
+| Area | Result |
+|---|---|
+| SMS recipient coverage | Removed the temporary two-number delivery allowlist. Every valid Iranian mobile number can now receive queued messages; phone validation, per-message preferences, retries, and code abuse controls remain. Historical `skipped` trial rows are intentionally retained and are not replayed. |
+| Credit-change SMS | Replaced unconditional grant messages and the global cumulative-spend milestone with a per-customer step `n`, configured on Console → SMS. The worker sends one optional message with direction and new balance whenever `floor(balance / n)` changes. First deployment sight and step edits establish a silent baseline. The user-row lock, band update, and outbox insert prevent configuration races and duplicate delivery. |
+| Verification | The current complete suite passes 622 backend tests plus every frontend and static check. Production deployment established baselines for all 20 approved accounts and queued zero false `credit_step` messages. |
+
+Every implemented batch passed `bash tests/run.sh` and was deployed API-first
+with a health barrier before restarting the worker, provisioner, and vhost
+timer. No customer workspace was used for verification.
+
+## Deferred implementation programme
+
+This sequence now covers only unresolved work from the disposition above. It
+does not reopen the owner's decisions on manual payment, Telegram backup
+transport, or HTTP-only application publication.
 
 ### Phase 1 — financial and destructive safety
 
-Implement F-01, F-02, F-05, F-06, F-11, and F-50 together. Introduce
-PostgreSQL concurrency/crash tests before changing UI. Then define the lifecycle
-retention matrix (F-15/F-25) so future deletion work has a stable contract.
+Implement F-05, F-06, and F-11 with PostgreSQL concurrency tests, and finish
+the remaining transaction-ownership cleanup in F-50 only where those changes
+require it. Keep F-01/F-02 invariants covered while doing so. Then define the
+lifecycle retention matrix (F-15) so future deletion work has a stable contract.
 
 ### Phase 2 — recovery and secrets
 
-Encrypt backups and prove restore (F-03), begin off-host workspace backup
-(F-04), centralize secret/redaction policy (F-68), add OpenRouter rotation
-(F-22), and replace shared Grafana administration (F-64).
+Prove database restore through the owner-approved Telegram path, evaluate
+off-host workspace backup (F-04), centralize secret/redaction policy (F-68), add
+OpenRouter rotation (F-22), and replace shared Grafana administration (F-64).
 
 ### Phase 3 — authentication hardening
 
-Implement abuse limiting, verified phone change, session revocation, forgotten
-password, safe admin bootstrap, and phone-enumeration changes (F-08 through
-F-13, F-17). Add the legal/product contract in F-27 alongside retention work.
+Implement abuse limiting, forgotten password, safe admin bootstrap, SMS-code
+concurrency, and phone-enumeration changes (F-08, F-11 through F-13, F-17). Add
+the legal/product contract in F-27 alongside retention work.
 
 ### Phase 4 — truthful managed services
 
-Unify route/process readiness, pin installers, expose versions, and scale
-certificate operations (F-07, F-14, F-18, F-24, F-57). A launcher should not
-offer “open” until a synthetic request reaches the intended service.
+Pin installers, expose versions, scale certificate operations, and consolidate
+service state machines (F-14, F-18, F-24, F-57). A launcher should not offer
+“open” until a synthetic request reaches the intended service.
 
 ### Phase 5 — customer journey and mobile UX
 
-Build the two-path onboarding, improve credit/key recovery, reorganize
-navigation and AI, and make narrow-screen admin flows first-class (F-19 through
-F-23, F-29, F-30, F-36 through F-40, F-47).
+Add safe key rotation, settle the default tier and AI information hierarchy,
+and make narrow-screen data tables first-class (F-22 through F-24, F-30,
+F-35, F-40, F-47).
 
 ### Phase 6 — accessibility and design system
 
-Consolidate dialogs, tabs, forms, live feedback, icons, charts, keyboard
-navigation, spacing, and copy ownership (F-31 through F-35, F-41 through F-48).
-Validate with keyboard, screen reader, and rendered geometry—not snapshots only.
+Finish secondary-form migration and just-in-time secret reveal (F-35, F-45,
+F-46), then validate with keyboard, screen reader, and rendered geometry
+(F-48, F-71)—not structural tests only.
 
 ### Phase 7 — modularity and operations maturity
 
@@ -1083,7 +1199,7 @@ For changes in the affected domains, require:
    including supplier keys, ports, DNS, certificates, SMS, audit, and backups.
 4. Every managed launcher is reachable through its displayed address before it
    says “ready.”
-5. A full encrypted backup can be restored in isolation and its age is alerted.
+5. A full database backup can be restored in isolation and its age is alerted.
 6. Signup, approval, OpenRouter-only use, workspace creation, power, all
    connection methods, managed-service install, low-credit recovery, reset,
    workspace deletion, and account deletion pass as browser journeys at desktop
@@ -1091,8 +1207,8 @@ For changes in the affected domains, require:
 7. Keyboard-only navigation completes every destructive dialog and primary
    journey; automated accessibility checks have no serious/critical findings.
 8. No customer-facing English prose or uncatalogued Persian literal is added.
-9. No secret appears in logs, errors, metrics, HTML before reveal, or an
-   unencrypted backup artifact.
+9. No secret appears in logs, errors, metrics, HTML before reveal, or outside
+   the owner-approved Telegram backup channel.
 10. Documentation and the deployed `/opt/mmd` revision identify the same
     release, schema version, configuration catalogue, and operational behaviour.
 
@@ -1103,15 +1219,13 @@ code cannot resolve them correctly by inference:
 
 - Required RPO/RTO and whether MMD or the customer owns workspace backup.
 - Legal retention for ledger, audit, SMS delivery, support, metrics, logs, and
-  encrypted backups after account deletion.
+  Telegram backups after account deletion.
 - Whether pending users may enter a limited console and use any account-level
   feature before approval.
-- Whether plain HTTP published apps are sufficient for the intended market.
 - Whether shared Claude/Codex credentials comply with supplier terms and the
   acceptable-use model.
 - Whether 1 GiB remains the default or 2 GiB becomes the recommended first
   machine.
-- Whether payment is self-service in the next product stage.
 - Which services are first-class products versus optional integrations, which
   determines navigation hierarchy and support expectations.
 

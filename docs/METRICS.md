@@ -4,8 +4,9 @@ Every series `/internal/metrics` exposes: **67 metric families**.
 Generated from a live scrape, so this is what the endpoint actually
 emits rather than what it was meant to.
 
-Scraped by Prometheus on loopback `:9091` every 5 minutes and read by
-Grafana on loopback `:3002`. The endpoint requires
+Scraped by Prometheus on loopback `:9091` every 60 seconds and read by Grafana
+on loopback `:3002`. This is independent of five-minute business settlement.
+The endpoint requires
 `Authorization: Bearer $MMD_PROMETHEUS_TOKEN`. See
 [OBSERVABILITY.md](OBSERVABILITY.md) for the stack and its guardrails.
 
@@ -106,6 +107,7 @@ operation IDs.
 | `mmd_worker_last_tick_seconds` | gauge | — | Duration of the most recent iteration. |
 | `mmd_worker_heartbeat_age_seconds` | gauge | — | Seconds since the worker last ticked. `-1` means never. |
 | `mmd_worker_last_success_age_seconds` | gauge | — | Seconds since the last iteration that completed without raising. |
+| `mmd_worker_metrics_snapshot_age_seconds` | gauge | — | Age of the worker counter snapshot folded into this scrape. `-1` means missing or unreadable. |
 
 ## Support and notifications
 
@@ -121,7 +123,7 @@ operation IDs.
 
 | Metric | Type | Labels | Meaning |
 |---|---|---|---|
-| `mmd_sms_messages` | gauge | `kind`, `status` | SMS outbox by kind and status. `skipped` is the temporary trial allowlist, not a failure. |
+| `mmd_sms_messages` | gauge | `kind`, `status` | SMS outbox by kind and status. Historical `skipped` rows came from the retired trial allowlist. |
 | `mmd_backup_enabled` | gauge | — | 1 when the backup schedule is armed. |
 | `mmd_backup_age_seconds` | gauge | — | Seconds since the last successful backup. The number that matters; `enabled` keeps reading 1 long after delivery stops. |
 | `mmd_backup_last_size_bytes` | gauge | — | Size of the last delivered dump. |

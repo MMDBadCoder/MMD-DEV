@@ -235,10 +235,14 @@ def meter(db, account: OpenRouterAccount, info, usd_to_toman: float,
         # a unit, instead of being rounded away every five minutes forever.
         return 0
 
+    # commit=False: this charge and `account.usage_usd` - the checkpoint that
+    # says how much supplier spend has been billed - are one fact. Split
+    # across two commits, a crash between them re-bills the same dollars in
+    # the next bucket.
     tx = svc.post_transaction(
         db, user_id=account.user_id, workspace_id=None,
         kind=TxKind.CHARGE_HERMES, amount_micro=-micro,
-        period_start=svc._ai_period(datetime.now(UTC)),
+        period_start=svc._ai_period(datetime.now(UTC)), commit=False,
         scope_key=f"openrouter:{account.user_id}",
         detail={"service": SERVICE,
                 "usd": round(delta, 6),

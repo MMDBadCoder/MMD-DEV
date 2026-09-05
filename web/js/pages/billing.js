@@ -3,6 +3,7 @@ import { get } from "../api.js";
 import { $, icon, esc, fmtMoney, fmtNum, fmtFa, money, empty, stamp } from "../ui.js";
 import { t, CURRENCY } from "../i18n.js";
 import { render } from "../main.js";
+import { spendChart } from "../usagechart.js";
 
 export async function billingPage(_params, page = 0) {
   const per = 50;
@@ -13,17 +14,7 @@ export async function billingPage(_params, page = 0) {
   ]);
 
   const q = sum.quote;
-  const maxSpend = Math.max(...usage.series.map((s) => s.spent), 0.0001);
-  const bars = usage.series.length
-    ? `<div class="chart">${usage.series.map((s) => `
-        <div class="col" style="height:${Math.max(2, (s.spent / maxSpend) * 100)}%"
-             title="${esc(stamp(s.hour))} — ${money(s.spent)}"></div>`).join("")}
-       </div>
-       <div class="between tiny dim" style="margin-top:6px">
-         <span>${esc(stamp(usage.series[0].hour))}</span>
-         <span>${t("billing.chart.peak")} ${money(maxSpend)}</span>
-         <span>${t("billing.chart.now")}</span></div>`
-    : empty(t("billing.chart.empty"), icon.card);
+  const bars = spendChart(usage.series);
 
   const rows = tx.transactions.map((tr) => {
     const d = tr.detail || {};
@@ -74,21 +65,18 @@ export async function billingPage(_params, page = 0) {
           <tr><td>${t("billing.ports")}</td>
             <td class="num">${fmtMoney(q.per_hour.ports)}</td><td class="num">${fmtMoney(q.per_hour.ports)}</td></tr>
           <tr><td>${t("billing.cpures", fmtNum(q.tier.cpu_cores, q.tier.cpu_cores % 1 ? 1 : 0))}</td>
-            <td class="num">${fmtMoney(q.per_hour.cpu_reservation)}</td><td class="num">۰</td></tr>
+            <td class="num">${fmtMoney(q.per_hour.cpu_reservation)}</td><td class="num">${fmtMoney(0)}</td></tr>
           <tr><td>${t("billing.memres", fmtNum(q.tier.mem_gib, q.tier.mem_gib % 1 ? 1 : 0))}</td>
-            <td class="num">${fmtMoney(q.per_hour.mem_reservation)}</td><td class="num">۰</td></tr>
+            <td class="num">${fmtMoney(q.per_hour.mem_reservation)}</td><td class="num">${fmtMoney(0)}</td></tr>
           <tr><td>${t("billing.cpuuse")} <span class="dim tiny">(${t("billing.atmost")})</span></td>
-            <td class="num">${fmtMoney(q.per_hour.cpu_usage_max)}</td><td class="num">۰</td></tr>
+            <td class="num">${fmtMoney(q.per_hour.cpu_usage_max)}</td><td class="num">${fmtMoney(0)}</td></tr>
           <tr><td>${t("billing.memuse")} <span class="dim tiny">(${t("billing.atmost")})</span></td>
-            <td class="num">${fmtMoney(q.per_hour.mem_usage_max)}</td><td class="num">۰</td></tr>
+            <td class="num">${fmtMoney(q.per_hour.mem_usage_max)}</td><td class="num">${fmtMoney(0)}</td></tr>
           <tr style="font-weight:700"><td>${t("billing.maxhour")}</td>
             <td class="num">${fmtMoney(q.max_per_hour)}</td><td class="num">${fmtMoney(q.off_per_hour)}</td></tr>
-        </tbody></table></div>
+      </tbody></table></div>
       <p class="tiny dim" style="margin:12px 0 0">
-        ${`«رزرو» بابت در اختیار داشتن منابع و «مصرف» بابت استفادهٔ واقعی محاسبه می‌شود؛
-           بنابراین یک ساعتِ روشن اما بی‌کار ${fmtMoney(q.idle_per_hour)} ${CURRENCY} هزینه دارد.
-           پیش از شروع هر ساعت، موجودی شما باید حداکثر هزینه را پوشش دهد — به همین دلیل برای
-           روشن کردن ماشین ${fmtMoney(q.max_per_hour)} ${CURRENCY} موجودی لازم است.`}</p>
+        ${t("billing.explain", fmtMoney(q.idle_per_hour), fmtMoney(q.max_per_hour))}</p>
     </div>` : ""}
 
     <div class="card"><h3>${t("billing.chart")}</h3>${bars}</div>

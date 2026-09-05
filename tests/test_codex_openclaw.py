@@ -93,6 +93,27 @@ def test_openrouter_credentials_are_never_returned_in_managed_service_state(env)
     assert "sk-or-test" not in str(body["openwebui"])
 
 
+@pytest.mark.parametrize("service", ["opencode", "openwebui"])
+def test_managed_web_is_ready_only_after_its_hostname_is_published(env, service):
+    client, db, ws, *_ = env
+    setattr(ws, f"{service}_enabled", True)
+    setattr(ws, f"{service}_installed", True)
+    db.commit()
+    waiting = client.get("/api/workspace/ai").json()[service]
+    assert waiting["installed"] is True
+    assert waiting["vhost_ready"] is False
+    assert waiting["ready"] is False
+
+    setattr(ws, f"{service}_vhost_ready", True)
+    db.commit()
+    ready = client.get("/api/workspace/ai").json()[service]
+    assert ready["ready"] is True
+
+    setattr(ws, f"{service}_error", "failed health check")
+    db.commit()
+    assert client.get("/api/workspace/ai").json()[service]["ready"] is False
+
+
 def test_openwebui_reports_its_memory_requirement(env):
     client, db, ws, *_ = env
     ws.mem_mib = 1024

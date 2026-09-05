@@ -14,7 +14,7 @@ import socket
 import time
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -67,7 +67,8 @@ def post_transaction(db: Session, *, user_id: int, workspace_id: int | None,
                      kind: TxKind, amount_micro: int,
                      period_start: datetime | None = None,
                      detail: dict | None = None,
-                     scope_key: str | None = None) -> CreditTransaction | None:
+                     scope_key: str | None = None,
+                     commit: bool = True) -> CreditTransaction | None:
     """Post a ledger entry and move the balance.
 
     Returns None when this exact (workspace, period, kind) was already posted -
@@ -79,16 +80,44 @@ def post_transaction(db: Session, *, user_id: int, workspace_id: int | None,
         amount_micro=amount_micro, period_start=period_start, detail=detail or {},
         scope_key=scope_key)
     db.add(tx)
-    acct = db.get(CreditAccount, user_id)
-    if acct is None:
-        acct = CreditAccount(user_id=user_id, balance_micro=0)
-        db.add(acct)
-    acct.balance_micro += amount_micro
     try:
-        db.commit()
+        # Flushed BEFORE the balance moves, so a duplicate is rejected by the
+        # unique key while the balance is still untouched. Detecting it at
+        # commit instead meant the increment had already been applied in
+        # Python and had to be unwound by the rollback.
+        db.flush()
     except IntegrityError:
         db.rollback()
         return None
+
+    # `balance = balance + :delta` IN SQL, not read-modify-write in Python.
+    #
+    # The API and the worker are separate processes and both move balances. A
+    # Python increment reads, adds, and writes back, so two of them can read
+    # the same figure, each apply their own change, and let the last commit
+    # discard the other - leaving two ledger rows and one of their effects.
+    # The database applies this against whatever the row holds at the moment
+    # it runs, which is the only version of this that is safe under
+    # concurrency.
+    updated = db.execute(
+        update(CreditAccount)
+        .where(CreditAccount.user_id == user_id)
+        .values(balance_micro=CreditAccount.balance_micro + amount_micro)
+        .execution_options(synchronize_session=False))
+    if updated.rowcount == 0:
+        db.add(CreditAccount(user_id=user_id, balance_micro=amount_micro))
+        db.flush()
+    else:
+        # The UPDATE went round the identity map, so any CreditAccount already
+        # loaded in this session still holds the old figure. Expired, so the
+        # next read of it comes from the database rather than from a value
+        # that is now wrong.
+        acct = db.get(CreditAccount, user_id)
+        if acct is not None:
+            db.expire(acct)
+
+    if commit:
+        db.commit()
     return tx
 
 
@@ -427,9 +456,14 @@ def meter_ai_usage(db: Session, ws: Workspace, report: dict,
     # The marks move only if the charge lands. Advancing them first and failing
     # to post would hand the customer free tokens; posting first and failing to
     # advance would bill them twice on the next pass.
+    # commit=False: the charge and the usage marks that say "this much has
+    # been billed" must land together. Committing the charge first left a
+    # window where a crash lost the checkpoint but kept the money, and the
+    # next pass charged the same tokens again into a later bucket - which the
+    # duplicate key cannot catch, because it is a different bucket.
     tx = post_transaction(db, user_id=ws.user_id, workspace_id=ws.id,
                           kind=AI_TX_KIND[service], amount_micro=-total_micro,
-                          period_start=period,
+                          period_start=period, commit=False,
                           detail={"service": service,
                                   "usd_to_toman": usd_rate,
                                   "discount_percent": discount,

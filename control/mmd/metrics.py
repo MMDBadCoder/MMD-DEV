@@ -181,6 +181,10 @@ def render(extra: dict | None = None) -> list[str]:
 def snapshot() -> dict:
     with _lock:
         return {
+            # Wall-clock generation time is metadata, not a metric owned by the
+            # worker registry. The API turns it into age at scrape time, which
+            # distinguishes a valid zero counter from a stale snapshot.
+            "generated_at": time.time(),
             "counters": [[n, list(l), v] for (n, l), v in _counters.items()],
             "gauges": [[n, list(l), v] for (n, l), v in _gauges.items()],
             "hist": [[n, list(l), list(b), _hist_sum[(n, l)], _hist_count[(n, l)]]

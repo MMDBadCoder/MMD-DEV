@@ -36,6 +36,7 @@ SCHEMA_PATCHES: tuple[str, ...] = (
     "ALTER TABLE users DROP COLUMN IF EXISTS email",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_bot_token VARCHAR(256)",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS telegram_user_id VARCHAR(15)",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS session_version INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE credit_transactions ADD COLUMN IF NOT EXISTS scope_key VARCHAR(64)",
     "CREATE UNIQUE INDEX IF NOT EXISTS uq_scoped_charge_once_per_period "
     "ON credit_transactions (scope_key, period_start, kind)",
@@ -69,10 +70,12 @@ SCHEMA_PATCHES: tuple[str, ...] = (
     "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS opencode_installed BOOLEAN DEFAULT FALSE",
     "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS opencode_password VARCHAR(64)",
     "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS opencode_error TEXT",
+    "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS opencode_vhost_ready BOOLEAN NOT NULL DEFAULT FALSE",
     "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS openwebui_enabled BOOLEAN DEFAULT FALSE",
     "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS openwebui_installed BOOLEAN DEFAULT FALSE",
     "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS openwebui_password VARCHAR(64)",
     "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS openwebui_error TEXT",
+    "ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS openwebui_vhost_ready BOOLEAN NOT NULL DEFAULT FALSE",
     "ALTER TABLE exposed_ports ADD COLUMN IF NOT EXISTS web_ready BOOLEAN NOT NULL DEFAULT FALSE",
     # The SMS outbox. create_all makes the table on a fresh database; this is
     # what gives it to one that already exists.
@@ -88,6 +91,8 @@ SCHEMA_PATCHES: tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS ix_sms_pending ON sms_messages (status, next_attempt_at)",
     # Everything on by default, so an empty map is the normal state.
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS sms_prefs JSONB NOT NULL DEFAULT '{}'::jsonb",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS sms_credit_step_toman INTEGER NOT NULL DEFAULT 50000",
+    "ALTER TABLE users ADD COLUMN IF NOT EXISTS sms_credit_band BIGINT",
     "CREATE TABLE IF NOT EXISTS sms_codes ("
     "id SERIAL PRIMARY KEY, phone VARCHAR(11) NOT NULL, "
     "purpose VARCHAR(16) NOT NULL, code_hash VARCHAR(128) NOT NULL, "
@@ -95,6 +100,8 @@ SCHEMA_PATCHES: tuple[str, ...] = (
     "consumed_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT now())",
     "CREATE INDEX IF NOT EXISTS ix_sms_code_lookup ON sms_codes (phone, purpose)",
     "CREATE INDEX IF NOT EXISTS ix_sms_codes_created_at ON sms_codes (created_at)",
+    "ALTER TABLE openrouter_accounts ADD COLUMN IF NOT EXISTS limit_usd DOUBLE PRECISION",
+    "ALTER TABLE openrouter_accounts ADD COLUMN IF NOT EXISTS limit_synced_at TIMESTAMPTZ",
     # Move every existing supplier key to its owner before new code stops
     # consulting the legacy workspace columns. The insert is deliberately
     # conflict-free so restarts and partially deployed releases are harmless.

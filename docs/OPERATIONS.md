@@ -33,7 +33,10 @@ bash tests/run.sh || exit 1                 # never deploy a failing tree
 
 sudo rm -rf /opt/mmd/{control,workspace,host,web,image}
 sudo cp -r control workspace host web image /opt/mmd/
-sudo systemctl restart mmd-api mmd-worker mmd-provisioner
+sudo systemctl restart mmd-api
+curl --retry 8 --retry-delay 1 --retry-connrefused -fsS http://127.0.0.1:8000/api/health
+sudo systemctl restart mmd-worker mmd-provisioner
+sudo systemctl start mmd-vhosts.service
 
 systemctl is-active mmd-api mmd-worker mmd-provisioner
 bash verify/p0-foundation.sh
@@ -47,6 +50,10 @@ Two traps:
 - **New provisioner verbs need a provisioner restart.** Restarting only
   `mmd-api` leaves the daemon on old code, and the verb comes back as
   `unknown verb`.
+- **Let the API finish schema patching before one-shot reconcilers run.** A
+  vhost or worker process started against newly deployed code can query a new
+  column before the API has created it. The health check in the sequence above
+  is the deployment barrier.
 
 Restarting `mmd-api` drops open terminal websockets. It does not affect running
 workspaces.
@@ -179,10 +186,11 @@ sudo bash host/30-network-nftables.sh          # full, deletes docker0
 nft -c -f /etc/nftables/mmd-isolation.nft      # dry run before applying
 ```
 
-### A Hermes dashboard is not being served
+### A managed dashboard or published application is not being served
 
-`mmd-vhosts.timer` reconciles the Hermes dashboards every two minutes. It
-writes one file per customer and never reloads a config that does not parse.
+`mmd-vhosts.timer` reconciles Hermes, OpenClaw, OpenCode, Open WebUI and
+published HTTP application vhosts every two minutes. It writes isolated files
+and never reloads a config that does not parse.
 
 ```bash
 systemctl list-timers mmd-vhosts.timer
@@ -192,7 +200,8 @@ ls /etc/nginx/sites-enabled/mmd-vhost-*
 
 A dashboard that stays unreachable is almost always the certificate. On the
 HTTP-01 fallback, check whether the weekly issuance budget is spent —
-`/var/lib/mmd/hermes/issued.json` — and whether a host is in backoff
+`/var/lib/mmd/hermes/issued.json` — the legacy directory name is retained for
+compatibility — and whether a host is in backoff
 (`*.fail` in the same directory). Configuring `MMD_ACME_DNS_PLUGIN` and
 `MMD_ACME_DNS_CREDENTIALS` switches to one wildcard certificate per customer and
 makes the problem go away permanently.
@@ -316,10 +325,11 @@ zfs list -t snapshot
 
 ## Monitoring
 
-Prometheus (`127.0.0.1:9091`) scrapes the control plane every 60 seconds;
-Grafana (`127.0.0.1:3002`) serves eight dashboards. Neither is reachable from
-the internet — nginx proxies `/grafana/` behind an `auth_request` that checks
-the administrator session, and Grafana has its own login on top of that.
+Prometheus (`127.0.0.1:9091`) and the raw metrics exporter are private.
+Prometheus scrapes the control plane every 60 seconds. Grafana listens on
+`127.0.0.1:3002`, while nginx exposes `/grafana/` to the internet only after an
+`auth_request` validates an MMD administrator session; Grafana then applies its
+own login as a second layer.
 
 - **Where to look**: each dashboard is embedded in the admin tab it describes.
   Admin → Overview carries the Grafana credential (masked) and the direct link.
@@ -338,12 +348,17 @@ the administrator session, and Grafana has its own login on top of that.
 Messages are queued into an outbox by whoever causes them and sent by the
 worker, which is the only process holding the Kavenegar key.
 
-- **Nothing is arriving**: check `sms_messages` for `status`. `skipped` means
-  the number is outside the temporary trial allowlist — clear
-  `MMD_SMS_ALLOWLIST` to lift it. `failed` means five attempts were exhausted;
-  `error` carries the provider's reason.
+- **Nothing is arriving**: check `sms_messages` for `status`. Delivery accepts
+  every valid Iranian mobile number (`09` plus 9 digits). `failed` means five
+  attempts were exhausted; `error` carries the provider's reason. Historical
+  `skipped` rows may remain from the pre-1.7 trial allowlist and are not retried.
 - **Cost**: Persian is UCS-2, so a segment is 70 UTF-16 code units. Every
   template is held to one segment by test; going over doubles the price.
+- **Balance-step messages**: each customer chooses `n` on Console → SMS. The
+  worker checks `floor(balance / n)` every five seconds and sends one message
+  with the new balance and direction when that value changes. First deployment
+  sight and changing `n` establish a silent baseline. The preference switch
+  `credit_step` can disable these messages without disabling other money alerts.
 - **The worker has stopped**: `mmd-watchdog.timer` texts every administrator
   after 15 minutes without a heartbeat. It sends directly rather than queueing,
   because the process that drains the outbox is the one that failed.
