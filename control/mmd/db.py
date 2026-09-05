@@ -99,6 +99,10 @@ SCHEMA_PATCHES: tuple[str, ...] = (
     "created_at TIMESTAMPTZ NOT NULL DEFAULT now())",
     "CREATE INDEX IF NOT EXISTS ix_login_attempts_identifier "
     "ON login_attempts (identifier, created_at)",
+    # PostgreSQL enforces enum types; SQLite does not. A status added to the
+    # Python enum is therefore accepted by every test and rejected by
+    # production, which is precisely what happened when ESCALATED shipped.
+    "ALTER TYPE ticket_status ADD VALUE IF NOT EXISTS 'ESCALATED'",
     "CREATE INDEX IF NOT EXISTS ix_sms_codes_created_at ON sms_codes (created_at)",
     "ALTER TABLE openrouter_accounts ADD COLUMN IF NOT EXISTS limit_usd DOUBLE PRECISION",
     "ALTER TABLE openrouter_accounts ADD COLUMN IF NOT EXISTS limit_synced_at TIMESTAMPTZ",

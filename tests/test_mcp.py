@@ -62,18 +62,38 @@ def test_an_unset_token_refuses_everyone(monkeypatch):
 
 
 # --- the protocol ----------------------------------------------------------
-def test_the_handshake_advertises_the_three_tools(db):
-    init = mcp.handle(db, {"jsonrpc": "2.0", "id": 1, "method": "initialize"})
+def test_the_handshake_advertises_every_tool(db):
+    import asyncio
+    init = asyncio.run(mcp.handle(db, {"jsonrpc": "2.0", "id": 1,
+                                       "method": "initialize"}))
     assert init["result"]["protocolVersion"] == mcp.PROTOCOL_VERSION
 
-    listed = mcp.handle(db, {"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
+    listed = asyncio.run(mcp.handle(db, {"jsonrpc": "2.0", "id": 2,
+                                         "method": "tools/list"}))
     assert {t["name"] for t in listed["result"]["tools"]} == {
-        "list_open_tickets", "reply_to_ticket", "export_customer_data"}
+        "list_open_tickets", "reply_to_ticket", "export_customer_data",
+        "wait_for_new_ticket", "platform_guide"}
 
 
 def test_a_notification_gets_no_reply(db):
-    assert mcp.handle(db, {"jsonrpc": "2.0",
-                           "method": "notifications/initialized"}) is None
+    import asyncio
+    assert asyncio.run(mcp.handle(
+        db, {"jsonrpc": "2.0", "method": "notifications/initialized"})) is None
+
+
+def test_waiting_returns_at_once_on_the_first_call(db):
+    """A baseline call must not sit idle for a full timeout, or an agent
+    starting up loses its first minute."""
+    import asyncio
+
+    class Factory:
+        def __call__(self): return self
+        def __enter__(self): return db
+        def __exit__(self, *a): return False
+
+    out = asyncio.run(mcp.wait_for_new_ticket(Factory(), None, 60))
+    assert out["new_activity"] is False
+    assert "baseline" in out["hint"]
 
 
 # --- the queue -------------------------------------------------------------
@@ -184,3 +204,56 @@ def test_the_export_explains_itself(db):
     for table, meta in data["_schema"]["tables"].items():
         assert "columns" in meta and "rows" in meta
     assert data["_schema"]["tables"]["credit_transactions"]["description"]
+
+
+# --- escalation ------------------------------------------------------------
+def test_the_agent_can_escalate_but_still_cannot_close(db):
+    """`escalated` is how the agent says 'I read this and cannot help', which
+    is a far more useful answer than a confident wrong one. Closing remains a
+    human decision."""
+    from sqlalchemy import select as _select
+    tk = db.scalar(_select(Ticket).where(Ticket.status == TicketStatus.OPEN))
+    mcp.reply_to_ticket(db, tk.id,
+                        "این مورد نیاز به بررسی مدیر دارد.", status="escalated")
+    db.refresh(tk)
+    assert tk.status is TicketStatus.ESCALATED
+
+    with pytest.raises(mcp.McpError, match="human"):
+        mcp.reply_to_ticket(db, tk.id, "closing", status="closed")
+
+
+def test_an_escalated_ticket_is_still_in_the_queue(db):
+    """It has not been dealt with. Hiding it once the agent gives up is how a
+    customer waits forever."""
+    from sqlalchemy import select as _select
+    tk = db.scalar(_select(Ticket).where(Ticket.status == TicketStatus.OPEN))
+    mcp.reply_to_ticket(db, tk.id, "به مدیر ارجاع شد", status="escalated")
+    ids = [t["ticket_id"] for t in mcp.list_open_tickets(db)["tickets"]]
+    assert tk.id in ids
+
+
+def test_escalated_appears_everywhere_a_status_is_offered():
+    """A status the API accepts but no interface shows is a ticket that
+    vanishes."""
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    assert '"escalated"' in (root / "web" / "js" / "pages" / "support.js").read_text()
+    assert "tk.status.escalated" in (root / "web" / "js" / "i18n.js").read_text()
+    assert "escalated" in (root / "control" / "mmd" / "app.py").read_text()
+
+
+# --- the knowledge the agent works from ------------------------------------
+def test_the_platform_guide_is_served_from_the_repository(db):
+    """Read at call time rather than pasted into a prompt: a prompt in
+    someone's config goes stale the day a feature ships."""
+    guide = mcp.platform_guide(db)["guide"]
+    assert len(guide) > 2000
+    for essential in ("cannot", "escalate", "Persian", "untrusted"):
+        assert essential in guide, f"the guide never mentions {essential}"
+
+
+def test_the_guide_states_the_limits_the_agent_must_not_overstep(db):
+    guide = mcp.platform_guide(db)["guide"]
+    # The two promises an agent is most tempted to make and cannot keep.
+    assert "off-host backup" in guide or "no off-host" in guide.lower()
+    assert "Top-ups are manual" in guide

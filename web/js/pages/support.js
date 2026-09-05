@@ -9,12 +9,21 @@ import { t } from "../i18n.js";
 import { render, refreshMe } from "../main.js";
 import { navigate } from "../router.js";
 
-export const STATUSES = ["open", "in_progress", "answered", "closed"];
+// `escalated` sits between answered and closed on purpose: the queue reads
+// left to right as "waiting on us, being worked, answered, needs a person,
+// done", and the one that needs a person should not hide at the end.
+export const STATUSES = ["open", "in_progress", "answered", "escalated", "closed"];
 
 export function statusPill(status) {
-  const dot = status === "closed" ? "" : status === "answered" ? "on" : "busy";
-  return `<span class="pill"><span class="dot ${dot}"></span>${
-    t("tk.status." + status)}</span>`;
+  // `escalated` is the only status that gets the alarm colour. It means the
+  // agent read the ticket and could not help, so nobody has helped this
+  // customer yet - which is a stronger claim on an operator's attention than
+  // a merely unread ticket.
+  const dot = status === "closed" ? ""
+    : status === "escalated" ? "bad"
+    : status === "answered" ? "on" : "busy";
+  return `<span class="pill${status === "escalated" ? " pill-attention" : ""}">
+    <span class="dot ${dot}"></span>${t("tk.status." + status)}</span>`;
 }
 
 /* Chat transcript, shared by the customer and staff views. `mine` decides which

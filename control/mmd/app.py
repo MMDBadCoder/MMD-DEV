@@ -180,10 +180,16 @@ async def mcp_endpoint(request: Request,
 
     # A client may batch. Notifications produce no reply, so a batch of only
     # notifications correctly answers with nothing at all.
+    # A fresh session per waiting check, so a long poll does not pin the
+    # request's own transaction open for its whole duration.
     if isinstance(body, list):
-        replies = [r for r in (mcplib.handle(db, msg) for msg in body) if r]
+        replies = []
+        for msg in body:
+            r = await mcplib.handle(db, msg, SessionLocal)
+            if r:
+                replies.append(r)
         return Response(status_code=204) if not replies else replies
-    reply = mcplib.handle(db, body)
+    reply = await mcplib.handle(db, body, SessionLocal)
     return Response(status_code=204) if reply is None else reply
 
 
@@ -371,7 +377,7 @@ class TicketReply(BaseModel):
 
 
 class TicketStatusChange(BaseModel):
-    status: str = Field(pattern="^(open|in_progress|answered|closed)$")
+    status: str = Field(pattern="^(open|in_progress|answered|escalated|closed)$")
 
 
 class AiAction(BaseModel):

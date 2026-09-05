@@ -101,8 +101,14 @@ def test_deleting_the_customer_removes_the_ticket(db, people):
 
 
 def test_every_status_has_a_stable_wire_value(db):
-    """The web filter chips and the API both send these strings."""
-    assert [s.value for s in TicketStatus] == ["open", "in_progress", "answered", "closed"]
+    """The web filter chips and the API both send these strings.
+
+    `escalated` sits between answered and closed: the queue reads left to
+    right as "waiting on us, being worked, answered, needs a person, done",
+    and the one that needs a person must not hide at the end.
+    """
+    assert [s.value for s in TicketStatus] == [
+        "open", "in_progress", "answered", "escalated", "closed"]
 
 
 # --- the unread rule, which is the part that is easy to get backwards -------

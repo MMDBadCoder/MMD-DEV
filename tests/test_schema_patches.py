@@ -76,3 +76,29 @@ def test_workspace_schema_drops_only_the_superseded_openrouter_columns():
     # credentials must not be mistaken for the retired supplier account.
     for name in ("hermes_enabled", "hermes_installed", "hermes_dash_password"):
         assert f"{name}: Mapped" in model_source
+
+
+def test_new_ticket_statuses_reach_the_postgresql_enum():
+    """PostgreSQL enforces enum types and SQLite does not, so a status added
+    to the Python enum passes every test and is rejected by production. That
+    is not hypothetical: ESCALATED shipped, every test was green, and the
+    first real call returned 500 with `invalid input value for enum`.
+
+    Each member therefore needs an ALTER TYPE patch. The two lists are
+    compared rather than eyeballed, because the failure only appears in
+    production.
+    """
+    from pathlib import Path
+    from mmd.models import TicketStatus
+
+    patches = (Path(__file__).resolve().parents[1]
+               / "control" / "mmd" / "db.py").read_text()
+    # OPEN, IN_PROGRESS, ANSWERED and CLOSED predate the patch list: they were
+    # created with the type itself. Anything added later needs a patch.
+    original = {"OPEN", "IN_PROGRESS", "ANSWERED", "CLOSED"}
+    for member in TicketStatus:
+        if member.name in original:
+            continue
+        assert f"'{member.name}'" in patches, (
+            f"TicketStatus.{member.name} has no ALTER TYPE patch, so it will "
+            f"be rejected by PostgreSQL in production while passing on SQLite")

@@ -775,3 +775,14 @@ th.sortable .arrow { font-size: 10px; opacity: .35; }
    thing that gets full contrast. */
 th.sortable.sorted .arrow { opacity: 1; }
 th.sortable.sorted > button { font-weight: 700; }
+
+/* A ticket the agent could not resolve. The only status that raises its voice:
+   it means nobody has helped this customer yet, which is a stronger claim on
+   attention than a merely unread ticket. Colour is not the only signal - the
+   label says so in words too. */
+.pill-attention {
+  border-color: var(--bad);
+  background: color-mix(in srgb, var(--bad) 10%, transparent);
+  font-weight: 650;
+}
+.dot.bad { background: var(--bad); }

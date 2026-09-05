@@ -1228,6 +1228,7 @@ const FA = {
   "tk.status.open": "باز",
   "tk.status.in_progress": "در حال بررسی",
   "tk.status.answered": "پاسخ داده شده",
+  "tk.status.escalated": "نیازمند بررسی مدیر",
   "tk.status.closed": "بسته شده",
   "adm.tickets.open": "رفتن به صف پشتیبانی",
   "adm.tickets.waiting": (n) => `${n} تیکت در انتظار رسیدگی است.`,

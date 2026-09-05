@@ -58,6 +58,12 @@ class TicketStatus(str, enum.Enum):
     OPEN = "open"                # customer wrote last; waiting on support
     IN_PROGRESS = "in_progress"  # support is working on it
     ANSWERED = "answered"        # support wrote last; waiting on the customer
+    # The AI agent has read it and cannot resolve it: it needs a person with
+    # authority the agent does not have - restoring lost files, moving money,
+    # touching a machine. Deliberately NOT the same as `answered`, which means
+    # "probably solved, close it when you agree". This one means "nobody has
+    # helped this customer yet and nobody will until you do".
+    ESCALATED = "escalated"
     CLOSED = "closed"
 
 
