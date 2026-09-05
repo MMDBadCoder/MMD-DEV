@@ -114,6 +114,12 @@ class Config:
     # every administrator.
     worker_stall_minutes: int = field(default_factory=lambda: int(
         _env("MMD_WORKER_STALL_MINUTES", "15")))
+    # The MCP server's own bearer token. Its own, never the Prometheus one:
+    # revoking the support agent must not blind the monitoring, and the two
+    # have very different blast radii - this one can read a customer's whole
+    # history and write to their ticket.
+    mcp_token: str = field(default_factory=lambda: _secret(
+        "mcp", "MMD_MCP_TOKEN"))
     # Failed sign-ins tolerated per identifier before it is refused for the
     # rest of the window. Generous enough for a person mistyping a password,
     # far too small to guess one.

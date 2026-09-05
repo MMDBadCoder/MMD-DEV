@@ -1264,6 +1264,9 @@ const FA = {
   "err.power_bad_state": "در وضعیت فعلی ماشین، خاموش کردن آن ممکن نیست. کمی صبر کنید و دوباره تلاش کنید.",
   "err.telegram_bad_token": "توکن ربات Telegram معتبر نیست. توکن کامل BotFather را وارد کنید.",
   "err.telegram_bad_users": "شناسهٔ کاربران Telegram باید عددی باشد؛ چند شناسه را با ویرگول جدا کنید.",
+  // Never shown to a customer: the MCP endpoint answers an AI agent, not
+  // a browser. Present so the catalogue stays complete.
+  "err.mcp_auth": "دسترسی به سرویس عامل پشتیبانی مجاز نیست.",
   "err.too_many_attempts": "تعداد تلاش‌های ورود بیش از حد مجاز بود؛ چند دقیقه بعد دوباره تلاش کنید.",
   "err.phone_taken": "این شمارهٔ موبایل قبلاً برای حساب دیگری ثبت شده است.",
   "err.metrics_auth": "دسترسی به داده‌های پایش مجاز نیست.",

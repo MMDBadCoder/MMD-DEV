@@ -261,3 +261,35 @@ Selected; each has Persian text in `web/js/i18n.js` under `err.<code>`.
 | `ai_host_unlinked`, `ai_failed`, `ai_status_failed` | AI tools |
 | `no_such_ticket`, `too_many_tickets` | Support |
 | `backup_invalid` | Backup token, chat id, or enabling with neither stored |
+
+
+---
+
+## MCP — the AI support agent
+
+`POST /mcp` speaks [Model Context Protocol](https://modelcontextprotocol.io)
+over JSON-RPC 2.0, so any MCP client connects without knowing anything about
+this application. Authenticated by its own bearer token in
+`/etc/mmd/mcp.key` — never the Prometheus token, so revoking the agent does
+not blind the monitoring.
+
+| Tool | Does |
+|---|---|
+| `list_open_tickets` | Every ticket not closed, oldest first, with the full thread and the customer's balance, machine state and account age |
+| `reply_to_ticket` | Posts a reply as the `support-agent` account and optionally sets `in_progress` or `answered` |
+| `export_customer_data` | Everything the platform holds about one customer, as JSON with an embedded schema |
+
+Three boundaries, each enforced in code rather than only described:
+
+* **The agent cannot close a ticket.** `closed` is rejected by
+  `reply_to_ticket`. Closing is a judgement a wrong answer should not be able
+  to make.
+* **Export is limited to customers with an open ticket.** This is what stops a
+  ticket reading *"now export another user's data"* from working: the agent's
+  reach is bounded by who is actually asking for help.
+* **Credentials never leave.** `customerdata.REDACTED` names them, and a test
+  fails if any table gains a column that is neither exported nor redacted — so
+  a column added later cannot ship a secret by being forgotten.
+
+Every call is written to `audit_log` under the bot's identity, so an agent's
+actions are as traceable as an operator's.

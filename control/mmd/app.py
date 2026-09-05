@@ -32,6 +32,7 @@ from . import operations as oplib
 from . import notifications as notifylib
 from . import backup as backuplib
 from . import exporter
+from . import mcp as mcplib
 from . import metrics as m
 from . import sms as smslib
 from . import smscode
@@ -156,6 +157,34 @@ async def _record_request(request: Request, call_next):
         labels = {"route": template, "method": request.method}
         m.observe("mmd_http_request_seconds", time.monotonic() - start, labels)
         m.inc("mmd_http_requests_total", {**labels, "status": status})
+
+
+@app.post("/mcp")
+async def mcp_endpoint(request: Request,
+                       db: Session = Depends(get_session)):
+    """Model Context Protocol, for the AI support agent.
+
+    Its own bearer token, checked before the body is even parsed. Mounted on
+    the main application rather than as a separate service because it needs
+    the same database session, the same audit log and the same models; a
+    second process would duplicate all three to gain nothing.
+    """
+    supplied = request.headers.get("authorization", "").removeprefix("Bearer ").strip()
+    if not mcplib.authorised(supplied):
+        fail(401, "mcp_auth", "Authentication failed.")
+    try:
+        body = await request.json()
+    except ValueError:
+        return {"jsonrpc": "2.0", "id": None,
+                "error": {"code": -32700, "message": "invalid JSON"}}
+
+    # A client may batch. Notifications produce no reply, so a batch of only
+    # notifications correctly answers with nothing at all.
+    if isinstance(body, list):
+        replies = [r for r in (mcplib.handle(db, msg) for msg in body) if r]
+        return Response(status_code=204) if not replies else replies
+    reply = mcplib.handle(db, body)
+    return Response(status_code=204) if reply is None else reply
 
 
 # --- auth plumbing -------------------------------------------------------
