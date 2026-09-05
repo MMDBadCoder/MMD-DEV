@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import json as _json
+import httpx
 import logging
 import time
 import secrets
@@ -43,7 +44,7 @@ from .openrouter import OpenRouter, OpenRouterError
 from .billing.pricing import MICRO
 from .models import (AiUsageMark, AuditLog, CreditAccount, CreditTransaction,
                      ExposedPort, Notification, Operation, PortKind, SshKey, Ticket,
-                     Setting, TicketMessage, UsageSample, User, UserStatus,
+                     Setting, TicketStatus, TicketMessage, UsageSample, User, UserStatus,
                      OpenRouterAccount, Workspace, WorkspaceState)
 
 UTC = timezone.utc
@@ -1401,6 +1402,63 @@ def heartbeat_once(duration: float = 0.0, failed: bool = False) -> None:
     m.write_snapshot()
 
 
+def _prometheus_scalar(query: str) -> float | None:
+    """Ask Prometheus one instant question. None when it cannot answer.
+
+    The worker can count events but cannot compute a RATE over them - that
+    needs history, which is exactly what Prometheus already keeps. Rather than
+    build a second store, the alert asks the one that exists.
+    """
+    try:
+        r = httpx.get(f"{CONFIG.prometheus_url}/api/v1/query",
+                      params={"query": query}, timeout=10)
+        result = (r.json().get("data") or {}).get("result") or []
+        return float(result[0]["value"][1]) if result else 0.0
+    except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError):
+        # Prometheus being unreachable is not itself an alert: the watchdog
+        # already covers the worker, and inventing an alarm from a failed
+        # query is how a monitoring outage becomes a paging storm.
+        return None
+
+
+def alerts_once() -> None:
+    """Text the operator about the two conditions they asked to hear about.
+
+    Deliberately in the worker beside the pool, backup and stall alerts rather
+    than in Grafana. Those three already text administrators through a proven
+    path; a second alerting system would mean two places to look when an alert
+    does not arrive, and a webhook to keep working between them.
+
+    Each alert is deduped by a key that changes on its own cadence, so a
+    condition that stays true for a week does not send a message every pass.
+    """
+    now = svc.now()
+    with SessionLocal() as db:
+        # --- a customer waiting too long -------------------------------
+        if CONFIG.support_sla_hours > 0:
+            oldest = db.scalar(
+                select(func.min(Ticket.created_at))
+                .where(Ticket.status.notin_((TicketStatus.CLOSED,
+                                             TicketStatus.ANSWERED))))
+            if oldest is not None:
+                if oldest.tzinfo is None:
+                    oldest = oldest.replace(tzinfo=timezone.utc)
+                waiting = (now - oldest).total_seconds() / 3600
+                if waiting >= CONFIG.support_sla_hours:
+                    # Once a day: the ticket is still late tomorrow, and an
+                    # hourly reminder is how an operator learns to ignore it.
+                    text_admins(db, "admin_ticket_overdue",
+                                dedupe_key=f"ticketsla:{now:%Y%m%d}")
+
+        # --- customers seeing errors -----------------------------------
+        if CONFIG.error_rate_per_second > 0:
+            rate = _prometheus_scalar(
+                'sum(rate(mmd_http_requests_total{status="5xx"}[5m]))')
+            if rate is not None and rate >= CONFIG.error_rate_per_second:
+                text_admins(db, "admin_error_rate",
+                            dedupe_key=f"errorrate:{now:%Y%m%d%H}")
+
+
 def sms_once() -> None:
     """Send whatever is queued in the SMS outbox.
 
@@ -1495,6 +1553,7 @@ async def main() -> None:
             # every customer to find nothing changed.
             if tick % SETTLE_EVERY == 0:
                 await asyncio.to_thread(low_credit_once)
+                await asyncio.to_thread(alerts_once)
             await asyncio.to_thread(
                 heartbeat_once, time.monotonic() - tick_started, tick_failed)
             # Every settlement, not every tick: a ZFS pass over the pool is

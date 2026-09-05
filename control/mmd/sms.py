@@ -164,6 +164,12 @@ CATALOGUE: dict[str, Template] = {t.kind: t for t in [
        lambda d: "📦 پشتیبان‌گیری ناموفق بود"),
     _t("admin_pool_low", "admin", "admin", True,
        lambda d: f"⚠️ فضای دیسک سرور بحرانی است\n{d.get('free', '')} گیگابایت"),
+    # The ticket text carries no hours: the threshold is configurable, and a
+    # number baked into the sentence would go stale the moment it changed.
+    _t("admin_ticket_overdue", "admin", "admin", True,
+       lambda d: f"🎫 تیکتی بیش از حد انتظار بی‌پاسخ مانده است\n{URL}"),
+    _t("admin_error_rate", "admin", "admin", True,
+       lambda d: f"🔴 نرخ خطای سرور بالا رفته است\n{URL}"),
     _t("admin_worker_stalled", "admin", "admin", True,
        lambda d: "🔴 پردازشگر پس‌زمینه متوقف شده است"),
 ]}

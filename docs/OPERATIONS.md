@@ -343,6 +343,47 @@ own login as a second layer.
 - **Regenerating dashboards**: `python3 observability/build_dashboards.py`,
   then copy to `/var/lib/grafana/dashboards/` and restart Grafana.
 
+## Known operational limits
+
+Written down because each was a deliberate choice, not an oversight, and each
+has a trigger that should make someone revisit it.
+
+**Grafana uses one shared administrator credential.** There is a single
+`admin` account whose password is shown, masked, on the admin overview. A
+Grafana action therefore cannot be attributed to a person, and removing one
+operator's access means rotating a credential the others use.
+
+*Accepted at two operators.* **Revisit before adding a third**, or before any
+operator leaves. The replacement is a Grafana user per MMD administrator,
+provisioned from the database; that is identity infrastructure worth building
+for three people and not for two.
+
+**Prometheus storage is bounded by time, not by size.** Retention is an
+explicit 15 days (`observability/prometheus.default`). The TSDB was 5.5 MB at
+1.8 with 21 customers.
+
+Series count grows with the customer base, because several metrics carry a
+`username` label. The disk guard watches the ZFS pool, not
+`/var/lib/prometheus`, which lives on the root filesystem — and wiring one into
+the other would mean the root-owned pool guard reaching into a path it has no
+business owning. *The trigger is size, not time:* check the directory when the
+customer count changes by an order of magnitude, and shorten retention rather
+than adding a second guard.
+
+```bash
+du -sh /var/lib/prometheus/metrics2      # 5.5M at 21 customers
+```
+
+**Operator alerts are sent by the worker, not by Grafana.** Grafana has no
+alert rules. Six conditions text every administrator through the SMS outbox:
+pool free below floor, backup failure, worker stall, a ticket past the support
+target, a sustained server-error rate, and a new signup. The thresholds are in
+`MMD_SUPPORT_SLA_HOURS` and `MMD_ERROR_RATE_PER_SECOND`.
+
+This keeps one alerting path rather than two. The cost is that changing a
+threshold is a config change rather than a click; the benefit is that when an
+alert does not arrive there is one place to look.
+
 ## SMS
 
 Messages are queued into an outbox by whoever causes them and sent by the

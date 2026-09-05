@@ -16,7 +16,8 @@ const read = (p) => fs.readFileSync(path.join(ROOT, p), "utf8");
 // The bands come from their own module, which touches no DOM.
 const { band, WARN_PERCENT } = await import(path.join(ROOT, "web/js/disk.js"));
 const SRC = read("web/js/pages/adminstorage.js");
-const APP = read("control/mmd/app.py");
+// The exporter moved out of app.py; the pool series is rendered there now.
+const APP = read("control/mmd/app.py") + read("control/mmd/exporter.py");
 const BOARD = JSON.parse(read("observability/grafana/dashboards/mmd-storage.json"));
 
 const panel = (t) => BOARD.panels.find((p) => (p.title || "").includes(t));

@@ -8,6 +8,17 @@ fail=0
 echo "── backend ──────────────────────────────────────────"
 /opt/mmd/venv/bin/python -m pytest tests/ -q || fail=1
 
+# The concurrency suite needs a real PostgreSQL database, because the things it
+# proves - row locks and lost updates - do not exist on SQLite. It skips itself
+# when MMD_TEST_DATABASE_URL is unset, so this stays a no-op on a machine that
+# has not set one up. See tests/test_concurrency_postgres.py for the one-line
+# createdb.
+if [ -n "${MMD_TEST_DATABASE_URL:-}" ]; then
+  echo
+  echo "── concurrency (PostgreSQL) ─────────────────────────"
+  /opt/mmd/venv/bin/python -m pytest tests/test_concurrency_postgres.py -q || fail=1
+fi
+
 echo
 echo "── frontend ─────────────────────────────────────────"
 for f in tests/web/*.test.mjs; do node --test "$f" || fail=1; done

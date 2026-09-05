@@ -328,3 +328,65 @@ def test_any_valid_customer_number_is_sent(monkeypatch):
     assert smslib.deliver(db, smslib.due(db)[0]) is True
     assert sent == ["09121112222"]
     assert row.status == "sent" and row.attempts == 1
+
+
+# --- operator alerts --------------------------------------------------------
+def test_an_overdue_ticket_texts_the_operator_once_a_day(monkeypatch):
+    """A ticket still late tomorrow must not send a message every pass; an
+    hourly reminder is how an operator learns to ignore the alert."""
+    from datetime import timedelta
+    from mmd import worker
+    from mmd.models import Ticket, TicketStatus
+
+    db, admin, _user = database()
+    old = datetime.now(UTC) - timedelta(hours=30)
+    db.add(Ticket(user_id=admin.id, subject="s", status=TicketStatus.OPEN,
+                  created_at=old, updated_at=old))
+    db.commit()
+    monkeypatch.setattr(worker, "SessionLocal", lambda: _NoClose(db))
+    monkeypatch.setattr(worker, "_prometheus_scalar", lambda _q: 0.0)
+
+    worker.alerts_once()
+    worker.alerts_once()
+    sent = [r for r in db.scalars(select(SmsMessage))
+            if r.kind == "admin_ticket_overdue"]
+    assert len(sent) == 1
+
+
+def test_a_ticket_inside_the_target_is_not_alerted(monkeypatch):
+    from datetime import timedelta
+    from mmd import worker
+    from mmd.models import Ticket, TicketStatus
+
+    db, admin, _user = database()
+    recent = datetime.now(UTC) - timedelta(hours=2)
+    db.add(Ticket(user_id=admin.id, subject="s", status=TicketStatus.OPEN,
+                  created_at=recent, updated_at=recent))
+    db.commit()
+    monkeypatch.setattr(worker, "SessionLocal", lambda: _NoClose(db))
+    monkeypatch.setattr(worker, "_prometheus_scalar", lambda _q: 0.0)
+    worker.alerts_once()
+    assert not [r for r in db.scalars(select(SmsMessage))
+                if r.kind == "admin_ticket_overdue"]
+
+
+def test_a_server_error_spike_texts_the_operator(monkeypatch):
+    from mmd import worker
+    db, _admin, _user = database()
+    monkeypatch.setattr(worker, "SessionLocal", lambda: _NoClose(db))
+    monkeypatch.setattr(worker, "_prometheus_scalar", lambda _q: 5.0)
+    worker.alerts_once()
+    assert [r for r in db.scalars(select(SmsMessage))
+            if r.kind == "admin_error_rate"]
+
+
+def test_prometheus_being_unreachable_is_not_itself_an_alert(monkeypatch):
+    """Inventing an alarm from a failed query is how a monitoring outage
+    becomes a paging storm."""
+    from mmd import worker
+    db, _admin, _user = database()
+    monkeypatch.setattr(worker, "SessionLocal", lambda: _NoClose(db))
+    monkeypatch.setattr(worker, "_prometheus_scalar", lambda _q: None)
+    worker.alerts_once()
+    assert not [r for r in db.scalars(select(SmsMessage))
+                if r.kind == "admin_error_rate"]

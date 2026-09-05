@@ -413,26 +413,35 @@ Worth saying explicitly, because a review that only lists problems misleads:
 
 ---
 
-## 9. Remaining decisions — 7 items
+## 9. Remaining items — resolved
 
-Only work intentionally deferred under the current scope remains:
+All seven were worked through after the operator's decisions. What changed:
 
-1. **Choose AI product focus (§2.1).** Activation instrumentation, interviews,
-   and any consolidation of seven services need a product decision.
-2. **Choose a support response target and alert route (§2.4/§6.1).** The code
-   exposes the required metrics, but an alert cannot responsibly invent its
-   threshold, quiet hours, escalation recipient or SMS budget.
-3. **Add PostgreSQL concurrency tests (§5.1).** This needs an isolated PostgreSQL
-   test database or container; SQLite cannot exercise row locks.
-4. **Decide whether to split `app.py` (§4.1).** Exporter extraction is feasible,
-   but is a structural refactor rather than a live customer fix.
-5. **Optimize exporter scale (§4.2).** Its measured 0.108-second scrape at 21
-   users is healthy; grouped queries become worthwhile after material growth.
-6. **Introduce per-operator Grafana identity (§3.2).** Revisit before adding a
-   third administrator; today it would add identity infrastructure for two users.
-7. **Account separately for Prometheus TSDB disk (§6.2).** Retention is bounded,
-   but feeding `/var/lib/prometheus` into the root-owned pool guard crosses the
-   privilege boundary and needs an explicit design.
+| # | Item | Outcome |
+|---|---|---|
+| 1 | AI product focus | **Closed by decision.** Left as-is; not a defect, revisit with more customers. |
+| 2 | Support target and alert route | **Done.** 24-hour ticket target, plus a sustained 5xx alert. Both text every administrator through the existing SMS outbox. Pool-free already existed. Verified live: the alert fired on the real 4-day-old ticket and delivered. |
+| 3 | PostgreSQL concurrency tests | **Done, and proven.** Four tests against a real database. Validated by injecting the old Python read-modify-write and confirming the suite **fails** — a concurrency test that cannot fail is worthless. |
+| 4 | Split `app.py` | **Done.** The exporter moved to `control/mmd/exporter.py`. `app.py` 3,972 → 3,680 lines. Verified output-identical: all 75 metric families present before and after. |
+| 5 | Exporter scale | **Done.** One grouped fleet query replaced the per-customer loop. Scrape **0.108s → 0.023s**, measured. |
+| 6 | Per-operator Grafana identity | **Closed by decision, documented.** Accepted at two operators, with an explicit trigger to revisit before a third. |
+| 7 | Prometheus TSDB accounting | **Closed by decision, documented.** Retention is an explicit 15 days; the size trigger is written down rather than wired into the root-owned pool guard, which would cross a privilege boundary. |
+
+### A bug the new tests found
+
+The concurrency suite immediately caught something reasoning had not. When a
+customer has no `credit_accounts` row yet, two simultaneous first charges both
+see `rowcount == 0` and both `INSERT`; the loser takes a primary-key violation
+and a charge that should simply have applied is aborted instead.
+
+Invisible on SQLite, which serialises writers — which is exactly why the
+PostgreSQL suite was worth building. The insert now runs in a `SAVEPOINT`, so
+losing the race does not poison the transaction the ledger row is already in,
+and the retry is the ordinary atomic `UPDATE`.
+
+The invariant holds live: balance equals ledger sum for all 21 accounts.
+
+### Still deliberately excluded
 
 Automated payment, backup encryption, off-host workspace backup, and worker or
-migration-system restructuring remain deliberately excluded by product decision.
+migration-system restructuring remain excluded by product decision.

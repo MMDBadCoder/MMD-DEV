@@ -114,6 +114,19 @@ class Config:
     # every administrator.
     worker_stall_minutes: int = field(default_factory=lambda: int(
         _env("MMD_WORKER_STALL_MINUTES", "15")))
+    # A ticket unanswered for longer than this texts every administrator, once
+    # a day. Zero disables it. Chosen by the operator rather than assumed: an
+    # alert threshold nobody picked is one nobody trusts.
+    support_sla_hours: int = field(default_factory=lambda: int(
+        _env("MMD_SUPPORT_SLA_HOURS", "24")))
+    # Sustained server-error rate, in requests per second over five minutes,
+    # above which the operator is texted. Customers seeing errors is the one
+    # signal worth waking someone for.
+    error_rate_per_second: float = field(default_factory=lambda: float(
+        _env("MMD_ERROR_RATE_PER_SECOND", "0.2")))
+    # Where the worker asks Prometheus for rates it cannot compute itself.
+    prometheus_url: str = field(default_factory=lambda: _env(
+        "MMD_PROMETHEUS_URL", "http://127.0.0.1:9091"))
     # The apex the Hermes dashboards hang off: hermes.<username>.<domain>.
     domain: str = field(default_factory=lambda: _env("MMD_DOMAIN", "mmd-ai.ir"))
 

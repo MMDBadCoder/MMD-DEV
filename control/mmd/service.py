@@ -105,8 +105,28 @@ def post_transaction(db: Session, *, user_id: int, workspace_id: int | None,
         .values(balance_micro=CreditAccount.balance_micro + amount_micro)
         .execution_options(synchronize_session=False))
     if updated.rowcount == 0:
-        db.add(CreditAccount(user_id=user_id, balance_micro=amount_micro))
-        db.flush()
+        # No account row yet. Two first-ever charges arriving together both
+        # see rowcount 0 and both try to INSERT, and the loser gets a primary
+        # key violation that aborts a charge which should simply have applied.
+        #
+        # Found by the PostgreSQL concurrency suite, not by reasoning: it is
+        # invisible on SQLite, where writers are serialised.
+        #
+        # The insert runs in a SAVEPOINT so losing it does not poison the
+        # transaction the ledger row is already sitting in; the retry is then
+        # the ordinary atomic UPDATE, which is correct whichever thread won.
+        try:
+            with db.begin_nested():
+                db.add(CreditAccount(user_id=user_id, balance_micro=amount_micro))
+                db.flush()
+        except IntegrityError:
+            again = db.execute(
+                update(CreditAccount)
+                .where(CreditAccount.user_id == user_id)
+                .values(balance_micro=CreditAccount.balance_micro + amount_micro)
+                .execution_options(synchronize_session=False))
+            if again.rowcount == 0:
+                raise
     else:
         # The UPDATE went round the identity map, so any CreditAccount already
         # loaded in this session still holds the old figure. Expired, so the

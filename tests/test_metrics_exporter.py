@@ -13,14 +13,16 @@ os.environ.setdefault("MMD_SECRET_KEY", "test-only")
 
 import pytest                                       # noqa: E402
 from fastapi.testclient import TestClient           # noqa: E402
-from sqlalchemy import create_engine                # noqa: E402
+from sqlalchemy import create_engine, event         # noqa: E402
 from sqlalchemy.orm import Session, sessionmaker    # noqa: E402
 from sqlalchemy.pool import StaticPool              # noqa: E402
 
 from mmd import app as appmod                       # noqa: E402
+from mmd import exporter                            # noqa: E402
 from mmd import metrics as m                        # noqa: E402
-from mmd.models import (Base, CreditAccount, User,  # noqa: E402
-                        UserStatus, Workspace, WorkspaceState)
+from mmd.models import (Base, CreditAccount, ExposedPort, OpenRouterAccount,
+                        PortKind, User, UserStatus, Workspace,
+                        WorkspaceState)              # noqa: E402
 
 
 @pytest.fixture
@@ -78,6 +80,56 @@ def test_credit_block_state_and_lifecycle_state_are_exported(env):
     # Per username, not just the fleet aggregate: "three are in error" does not
     # tell you which customer to look at.
     assert 'mmd_workspace_state{username="ali",state="on"}' in body
+
+
+def test_customer_snapshot_is_one_query_and_keeps_account_only_users(env):
+    """A scrape must not become four new queries for every paying account."""
+    _client, db = env
+    ali = db.scalar(db.query(User).where(User.username == "ali").statement)
+    ws = db.scalar(db.query(Workspace).where(Workspace.user_id == ali.id).statement)
+    db.add(OpenRouterAccount(user_id=ali.id, key="sk-test", usage_usd=1.25,
+                             credit_blocked=False))
+    db.add(ExposedPort(workspace_id=ws.id, internal_port=8080,
+                       external_port=22418, protocol="tcp", kind=PortKind.USER,
+                       device="proxy-test"))
+    db.add(User(username="no-machine", phone="09120000001", password_hash="x",
+                status=UserStatus.APPROVED))
+    db.commit()
+
+    statements = []
+
+    def record(_conn, _cursor, statement, _parameters, _context, _many):
+        statements.append(statement)
+
+    event.listen(db.get_bind(), "before_cursor_execute", record)
+    try:
+        body = "\n".join(exporter.customer_metrics(db))
+    finally:
+        event.remove(db.get_bind(), "before_cursor_execute", record)
+
+    assert len(statements) == 1
+    assert 'mmd_user_workspace_present{username="no-machine"} 0' in body
+    assert 'mmd_user_openrouter_ready{username="ali"} 1' in body
+    assert 'mmd_workspace_published_ports{username="ali"} 1' in body
+
+
+def test_process_identity_lookups_are_cached_for_one_scrape_interval(monkeypatch):
+    calls = []
+
+    def systemctl(unit, prop):
+        calls.append((unit, prop))
+        return "123" if prop == "MainPID" else "2"
+
+    monkeypatch.setattr(exporter, "_systemctl", systemctl)
+    monkeypatch.setattr(exporter, "_unit_cache", {})
+    monkeypatch.setattr(exporter, "_unit_cache_at", 0.0)
+    monkeypatch.setattr(appmod.time, "monotonic", lambda: 100.0)
+
+    first = exporter._unit_identities()
+    second = exporter._unit_identities()
+
+    assert first == second
+    assert len(calls) == len(exporter._UNITS) * 2
 
 
 def test_worker_snapshot_age_distinguishes_zero_from_stale(env, monkeypatch):
