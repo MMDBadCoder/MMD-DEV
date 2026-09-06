@@ -169,7 +169,17 @@ def test_the_signature_headers_a_receiver_can_check(db, monkeypatch):
     db.commit()
     webhook.deliver(db, webhook.build("ticket_opened", 3, "ali", "s"))
 
-    assert seen["X-MMD-Signature"] == webhook.sign(
-        SECRET, seen["X-MMD-Timestamp"], seen["_body"])
-    assert seen["X-Hub-Signature-256"].startswith("sha256=")
+    expected = webhook.sign(SECRET, seen["X-MMD-Timestamp"], seen["_body"])
+    assert seen["X-MMD-Signature"] == expected
     assert seen["X-MMD-Event"] == "ticket_opened"
+
+    # The same digest under the generic name Hermes verifies, with the
+    # timestamp it needs to enforce its own replay window.
+    assert seen["X-Webhook-Signature-V2"] == expected
+    assert seen["X-Webhook-Timestamp"] == seen["X-MMD-Timestamp"]
+
+    # GitHub's header must NOT be sent. It signs the body alone, and a
+    # receiver that understands it checks it before V2 and stops there -
+    # so including it would quietly replace a replay-protected signature
+    # with one that replays forever.
+    assert "X-Hub-Signature-256" not in seen

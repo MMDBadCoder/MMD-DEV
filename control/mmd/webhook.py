@@ -108,6 +108,29 @@ def sign(secret: str, timestamp: str, body: bytes) -> str:
     return hmac.new(secret.encode(), material, hashlib.sha256).hexdigest()
 
 
+def _signature_headers(secret: str, timestamp: str, body: bytes) -> dict:
+    """Every header a receiver might check, in the one format that is safe.
+
+    `X-MMD-*` is our own name for it. `X-Webhook-Signature-V2` is the generic
+    convention Hermes implements, and it happens to sign exactly what `sign()`
+    already produces - `timestamp.body`, refused beyond a five-minute window -
+    so the same digest satisfies both under two names.
+
+    GitHub's `X-Hub-Signature-256` is deliberately NOT sent, though it would
+    also be accepted. It signs the body ALONE, and a receiver that checks it
+    checks it FIRST: Hermes tries GitHub before V2 and returns on the first
+    format it recognises. Sending both would therefore not be belt and braces
+    - it would hand the receiver the one signature with no timestamp in it and
+    silently give back the replay protection V2 exists to provide.
+    """
+    digest = sign(secret, timestamp, body)
+    return {
+        "X-MMD-Signature": digest,
+        "X-Webhook-Signature-V2": digest,
+        "X-Webhook-Timestamp": timestamp,
+    }
+
+
 def verify(secret: str, timestamp: str, body: bytes, signature: str,
            now: float | None = None) -> bool:
     """The receiver's half. Here so the contract has one definition and the
@@ -155,11 +178,7 @@ def deliver(db: Session, payload: dict) -> dict:
                "X-MMD-Timestamp": timestamp,
                "X-MMD-Event": str(payload.get("event", ""))}
     if secret:
-        headers["X-MMD-Signature"] = sign(secret, timestamp, body)
-        # GitHub's header name and format too, because several agents - Hermes
-        # among them - already know how to verify that one.
-        headers["X-Hub-Signature-256"] = "sha256=" + hmac.new(
-            secret.encode(), body, hashlib.sha256).hexdigest()
+        headers.update(_signature_headers(secret, timestamp, body))
 
     try:
         r = httpx.post(url, content=body, headers=headers, timeout=TIMEOUT)
@@ -192,9 +211,7 @@ def test(db: Session, url: str, secret: str | None) -> dict:
     headers = {"Content-Type": "application/json",
                "X-MMD-Timestamp": timestamp, "X-MMD-Event": "test"}
     if effective:
-        headers["X-MMD-Signature"] = sign(effective, timestamp, body)
-        headers["X-Hub-Signature-256"] = "sha256=" + hmac.new(
-            effective.encode(), body, hashlib.sha256).hexdigest()
+        headers.update(_signature_headers(effective, timestamp, body))
     try:
         r = httpx.post(url, content=body, headers=headers, timeout=TIMEOUT)
     except httpx.HTTPError as exc:
