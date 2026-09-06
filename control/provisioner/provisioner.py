@@ -900,6 +900,23 @@ WantedBy=multi-user.target
 """
 
 
+def _hermes_webhook_enabled(project: str) -> bool:
+    """Is Hermes' webhook platform switched on inside this machine?
+
+    The gateway has to run for it, so this decides whether the unit stays.
+    Any failure reads as False: an unreadable config must not be the reason a
+    customer's Telegram bot keeps running when it should have been torn down.
+    """
+    _, out = _run(
+        ["incus", "exec", "ws", "--project", project, "--", "bash", "-lc",
+         "python3 -c \"import yaml,os;"
+         "d=yaml.safe_load(open(os.path.expanduser('~dev/.hermes/config.yaml')))or{};"
+         "print(bool(((d.get('platforms')or{}).get('webhook')or{}).get('enabled')))\" "
+         "2>/dev/null || echo False"],
+        timeout=30)
+    return "True" in (out or "")
+
+
 def _openclaw_status(project: str) -> dict:
     probe = (
         "v=$(su - dev -c 'openclaw --version' 2>/dev/null | head -1); "
@@ -1759,7 +1776,17 @@ def handle(req: dict) -> dict:
         if not listening:
             return {"ok": False, "installed": installed, "output": (out or "")[-900:]}
 
-        if telegram_enabled:
+        # The gateway is not Telegram's private property. The same process runs
+        # the webhook listener and the cron scheduler, so tying its lifetime to
+        # a bot token meant the ticket webhook could not run at all unless the
+        # operator also connected Telegram - and any hand-installed unit was
+        # deleted the next time this reconciled.
+        #
+        # Read from the machine's own config rather than from new state on this
+        # side: the webhook platform is switched on in config.yaml, so that file
+        # is the truth, and asking it directly keeps the two from drifting.
+        webhook_enabled = _hermes_webhook_enabled(project)
+        if telegram_enabled or webhook_enabled:
             rc, gout, gerr = _run_split(
                 ["incus", "exec", "ws", "--project", project, "--", "bash", "-lc",
                  HERMES_USER_GATEWAY_PURGE +
@@ -1773,11 +1800,14 @@ def handle(req: dict) -> dict:
                  # as success. The second is Telegram refusing a duplicate
                  # poller, which is the symptom the purge above exists to stop
                  # and the one check that would notice it coming back.
-                 "! journalctl -u hermes-gateway -n 40 --no-pager | "
-                 "grep -qE 'No messaging platforms enabled|terminated by other getUpdates'"],
+                 + ("! journalctl -u hermes-gateway -n 40 --no-pager | "
+                    "grep -qE 'No messaging platforms enabled|terminated by other getUpdates'"
+                    if telegram_enabled else "true")],
                 timeout=120, stdin_text=HERMES_GATEWAY_UNIT)
             if rc != 0 or "active" not in gout.splitlines():
-                return {"ok": False, "error": "telegram gateway failed",
+                return {"ok": False,
+                        "error": ("telegram gateway failed" if telegram_enabled
+                                  else "webhook gateway failed"),
                         "output": (gout + gerr)[-900:]}
         else:
             _, gout = _run(

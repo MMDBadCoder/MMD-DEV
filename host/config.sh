@@ -16,6 +16,25 @@
 : "${INCUS_BRIDGE_SUBNET:=10.42.0.0/24}"
 : "${INCUS_BRIDGE_IP:=10.42.0.1}"
 
+# Workspace addresses permitted to reach this host's HTTPS port, space
+# separated. Empty by default, and it should stay empty for every machine that
+# does not need it.
+#
+# The isolation rules exist so a developer cannot reach out and touch the host,
+# and this does not weaken that. The only port it opens is 443, which nginx
+# already serves to the entire internet: a workspace on this list gains what
+# every stranger already has, and gains nothing else. sshd, PostgreSQL, the
+# Incus API on 8443/9101 and all of 127.0.0.0/8 stay refused for every
+# workspace, listed or not.
+#
+# It exists for one case: the operator's own machine running the support agent,
+# which must reach https://mmd-ai.ir/mcp to answer tickets. Traffic to the
+# host's public address arrives on the input hook, because that address is
+# local - so that is the chain which has to permit it, and permitting it there
+# keeps the public hostname and its real certificate working unchanged instead
+# of needing the name rewritten inside the machine.
+: "${HOST_HTTPS_ALLOWED_WORKSPACES:=}"
+
 # --- API endpoints (loopback only; nothing here is publicly reachable) ------
 : "${INCUS_HTTPS_ADDRESS:=127.0.0.1:8443}"
 : "${INCUS_METRICS_ADDRESS:=127.0.0.1:9101}"

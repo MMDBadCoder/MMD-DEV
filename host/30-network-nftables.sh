@@ -45,6 +45,24 @@ UPLINK_NET=$(ip -o -f inet addr show "$UPLINK_IF" | awk '{print $4}' | head -1)
 UPLINK_NET=$(python3 -c "import ipaddress,sys; print(ipaddress.ip_network(sys.argv[1], strict=False))" "$UPLINK_NET")
 log "uplink ${UPLINK_IF} on ${UPLINK_NET} - will be blocked from workspaces"
 
+# One accept per workspace allowed to reach this host's HTTPS, and nothing at
+# all when the list is empty - the common case, and the one that must stay
+# byte-for-byte the ruleset it was before this existed.
+#
+# The destination is the host's PUBLIC address, not the bridge address: a
+# workspace resolves mmd-ai.ir through the normal DNS and gets that address, so
+# permitting it here is what makes the ordinary public URL work from inside a
+# machine, certificate and all. The packet still arrives on this hook because
+# the address is local to the host.
+UPLINK_IP=$(ip -o -f inet addr show "$UPLINK_IF" | awk '{print $4}' | head -1 | cut -d/ -f1)
+HOST_HTTPS_RULES=""
+for ws_ip in ${HOST_HTTPS_ALLOWED_WORKSPACES}; do
+    HOST_HTTPS_RULES="${HOST_HTTPS_RULES}
+        # Operator machine: HTTPS only, to a port the internet already reaches.
+        ip saddr ${ws_ip} ip daddr ${UPLINK_IP} tcp dport 443 accept"
+    log "workspace ${ws_ip} may reach ${UPLINK_IP}:443 (support agent MCP)"
+done
+
 RULES=/etc/nftables/mmd-isolation.nft
 mkdir -p /etc/nftables
 
@@ -134,7 +152,7 @@ table inet mmd_isolation {
         ip daddr ${INCUS_BRIDGE_IP} udp dport 53 accept
         ip daddr ${INCUS_BRIDGE_IP} tcp dport 53 accept
         ip daddr ${INCUS_BRIDGE_IP} icmp type echo-request accept
-
+${HOST_HTTPS_RULES}
         # Everything else from a workspace to this host is denied: sshd, the
         # dashboard on 443, Postgres, and the Incus API on 8443/9101.
         log prefix "mmd-drop-input " level info limit rate 5/minute
