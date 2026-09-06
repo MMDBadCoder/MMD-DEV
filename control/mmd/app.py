@@ -18,7 +18,8 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from fastapi import (Depends, FastAPI, File, HTTPException, Request, Response,
+from fastapi import (BackgroundTasks, Depends, FastAPI, File, HTTPException,
+                     Request, Response,
                      UploadFile, WebSocket)
 from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
@@ -33,6 +34,7 @@ from . import notifications as notifylib
 from . import backup as backuplib
 from . import exporter
 from . import mcp as mcplib
+from . import webhook as hooklib
 from . import metrics as m
 from . import sms as smslib
 from . import smscode
@@ -2738,7 +2740,8 @@ def list_tickets(user: User = Depends(current_user),
 
 
 @app.post("/api/tickets")
-def create_ticket(body: TicketCreate, user: User = Depends(current_user),
+def create_ticket(body: TicketCreate, background: BackgroundTasks,
+                  user: User = Depends(current_user),
                   db: Session = Depends(get_session)) -> dict:
     open_count = db.scalar(select(func.count()).select_from(Ticket).where(
         Ticket.user_id == user.id, Ticket.status != TicketStatus.CLOSED))
@@ -2755,6 +2758,11 @@ def create_ticket(body: TicketCreate, user: User = Depends(current_user),
     _mark_read(db, tk, staff=False)
     db.commit()
     _notify_admins(db, "admin_ticket_opened", dedupe_key=f"newticket:{tk.id}")
+    # In the background so a slow or absent agent cannot delay the customer's
+    # own request. A delivery that never arrives loses nothing: the ticket is
+    # still in the queue and the agent's long poll finds it.
+    background.add_task(_fire_ticket_webhook, "ticket_opened", tk.id,
+                        user.username, tk.subject)
     svc.audit(db, user.id, "ticket_opened", f"#{tk.id}", subject=tk.subject)
     return {"ok": True, "ticket": _ticket_json(tk, staff=False, messages=True)}
 
@@ -2777,6 +2785,7 @@ def read_ticket(ticket_id: int, user: User = Depends(current_user),
 
 @app.post("/api/tickets/{ticket_id}/messages")
 def reply_ticket(ticket_id: int, body: TicketReply,
+                 background: BackgroundTasks,
                  user: User = Depends(current_user),
                  db: Session = Depends(get_session)) -> dict:
     tk = _my_ticket(db, user, ticket_id)
@@ -2789,6 +2798,8 @@ def reply_ticket(ticket_id: int, body: TicketReply,
     _mark_read(db, tk, staff=False)
     tk.updated_at = svc.now()
     db.commit()
+    background.add_task(_fire_ticket_webhook, "customer_replied", tk.id,
+                        user.username, tk.subject)
     return {"ok": True, "ticket": _ticket_json(tk, staff=False, messages=True)}
 
 
@@ -3396,6 +3407,62 @@ def admin_agent_model_put(service: str, body: AgentModel,
     db.commit()
     svc.audit(db, admin.id, f"admin_{service}_model", None, default_model=value)
     return {"service": service, "default_model": value}
+
+
+def _fire_ticket_webhook(event: str, ticket_id: int, username: str,
+                         subject: str) -> None:
+    """Nudge the agent, after the customer's request has already returned.
+
+    Its own session, because the request's is closed by the time a background
+    task runs. Failures are logged and dropped - see webhook.py for why that
+    is safe.
+    """
+    try:
+        with SessionLocal() as db:
+            hooklib.deliver(db, hooklib.build(event, ticket_id, username,
+                                              subject))
+    except Exception:  # noqa: BLE001
+        log.exception("ticket webhook task failed")
+
+
+class TicketWebhook(BaseModel):
+    url: str = Field(default="", max_length=500)
+    # Absent keeps the stored secret, so changing the URL cannot silently
+    # unsign every future call.
+    secret: str | None = Field(default=None, max_length=200)
+
+
+@app.get("/api/admin/ticket-webhook")
+def admin_ticket_webhook_get(_: User = Depends(require_admin),
+                             db: Session = Depends(get_session)) -> dict:
+    return hooklib.config(db)
+
+
+@app.put("/api/admin/ticket-webhook")
+def admin_ticket_webhook_put(body: TicketWebhook,
+                             admin: User = Depends(require_admin),
+                             db: Session = Depends(get_session)) -> dict:
+    try:
+        state = hooklib.save(db, body.url, body.secret)
+    except ValueError as e:
+        fail(400, "webhook_invalid", str(e))
+    db.commit()
+    # The URL is audited; the secret never is.
+    svc.audit(db, admin.id, "admin_ticket_webhook", None, url=state["url"])
+    return state
+
+
+@app.post("/api/admin/ticket-webhook/test")
+def admin_ticket_webhook_test(body: TicketWebhook,
+                              _: User = Depends(require_admin),
+                              db: Session = Depends(get_session)) -> dict:
+    """Try a destination without saving it.
+
+    An operator should not have to store a wrong address to find out it is
+    wrong, and a webhook first exercised by a real customer is one whose first
+    test is a real customer waiting.
+    """
+    return hooklib.test(db, body.url, body.secret)
 
 
 @app.get("/api/admin/grafana")

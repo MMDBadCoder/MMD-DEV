@@ -214,6 +214,15 @@ Any MCP client, by config:
 
 ### Waking up when a ticket arrives
 
+**The recommended setup is Hermes**, which this platform already ships: it is
+an MCP client, it has a webhook receiver, and it runs on your own host so no
+customer data leaves the country. `docs/AGENT-SETUP.md` is the step-by-step.
+
+Two paths wake it, and both are wanted. A signed webhook fires the moment a
+customer writes; the long poll below is the safety net for when that fails.
+
+### The fallback: waiting without a webhook
+
 Polling on a timer means a customer waits for the timer. Instead, the
 `wait_for_new_ticket` tool **blocks server-side** until a customer writes:
 

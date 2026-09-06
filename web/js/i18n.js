@@ -1228,6 +1228,18 @@ const FA = {
   "tk.status.open": "باز",
   "tk.status.in_progress": "در حال بررسی",
   "tk.status.answered": "پاسخ داده شده",
+  // The ticket webhook: how an outside AI agent is woken when a customer writes.
+  "adm.hook.title": "اعلان خودکار به عامل پشتیبانی",
+  "adm.hook.sub": "هر بار که مشتری تیکتی باز کند یا پیام تازه‌ای بنویسد، این نشانی فراخوانی می‌شود تا عامل هوش مصنوعی بلافاصله بیدار شود. اگر خالی بماند، عامل خودش به‌صورت دوره‌ای صف را بررسی می‌کند و چیزی از دست نمی‌رود.",
+  "adm.hook.url": "نشانی وب‌هوک",
+  "adm.hook.secret": "کلید امضا",
+  "adm.hook.secret.keep": "کلیدی ذخیره شده است. برای نگه داشتن آن این فیلد را خالی بگذارید، یا برای جایگزینی مقدار تازه بنویسید.",
+  "adm.hook.secret.new": "یک عبارت تصادفی و بلند بگذارید و همان را در تنظیمات عامل نیز وارد کنید.",
+  "adm.hook.test": "آزمایش بدون ذخیره",
+  "adm.hook.testing": "در حال آزمایش…",
+  "adm.hook.ok": (s) => `فراخوانی موفق بود (کد ${s}).`,
+  "adm.hook.bad": (r) => `فراخوانی ناموفق بود: ${r}`,
+  "adm.hook.security": "درخواست با کلید بالا امضا می‌شود (HMAC-SHA256) و زمان ارسال هم در امضا می‌آید، بنابراین کسی نمی‌تواند فراخوانی جعلی بفرستد یا درخواست قدیمی را دوباره بازپخش کند. بدنهٔ پیام هم هیچ دستوری ندارد؛ فقط شمارهٔ تیکت را می‌فرستد.",
   "tk.status.escalated": "نیازمند بررسی مدیر",
   "tk.status.closed": "بسته شده",
   "adm.tickets.open": "رفتن به صف پشتیبانی",
@@ -1267,6 +1279,7 @@ const FA = {
   "err.telegram_bad_users": "شناسهٔ کاربران Telegram باید عددی باشد؛ چند شناسه را با ویرگول جدا کنید.",
   // Never shown to a customer: the MCP endpoint answers an AI agent, not
   // a browser. Present so the catalogue stays complete.
+  "err.webhook_invalid": "نشانی وب‌هوک معتبر نیست؛ باید با http:// یا https:// شروع شود.",
   "err.mcp_auth": "دسترسی به سرویس عامل پشتیبانی مجاز نیست.",
   "err.too_many_attempts": "تعداد تلاش‌های ورود بیش از حد مجاز بود؛ چند دقیقه بعد دوباره تلاش کنید.",
   "err.phone_taken": "این شمارهٔ موبایل قبلاً برای حساب دیگری ثبت شده است.",
