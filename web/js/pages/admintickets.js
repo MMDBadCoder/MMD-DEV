@@ -45,10 +45,67 @@ export async function adminTicketsPage(params) {
       <thead><tr><th>${t("tk.subject")}</th><th>${t("tk.customer")}</th>
         <th>${t("tk.status")}</th><th>${t("tk.updated")}</th></tr></thead>
       <tbody>${rows}</tbody></table></div></div>`
-      : `<div class="card">${empty(t("tk.none.admin"))}</div>`}`);
+      : `<div class="card">${empty(t("tk.none.admin"))}</div>`}
+
+    ${hook ? `<div class="card">
+      <h3>${t("adm.hook.title")}</h3>
+      <p class="muted small" style="max-width:74ch;margin:2px 0 12px">${t("adm.hook.sub")}</p>
+      <label class="field" style="max-width:520px"><span>${t("adm.hook.url")}</span>
+        <input id="hook-url" class="ltr mono" dir="ltr" maxlength="500"
+               value="${esc(hook.url || "")}"
+               placeholder="http://10.42.0.11:8644/webhooks/mmd-ticket"></label>
+      <label class="field" style="max-width:520px"><span>${t("adm.hook.secret")}</span>
+        <input id="hook-secret" class="ltr mono" dir="ltr" type="password"
+               autocomplete="off" maxlength="200"
+               placeholder="${hook.secret_set ? `••••••••${esc(hook.secret_hint)}` : ""}"></label>
+      <p class="tiny dim" style="margin:2px 0 12px;max-width:74ch">${
+        hook.secret_set ? t("adm.hook.secret.keep") : t("adm.hook.secret.new")}</p>
+      <div class="btn-row">
+        <button class="btn" id="hook-test">${icon.bolt}${t("adm.hook.test")}</button>
+        <button class="btn primary" id="hook-save">${t("adm.ai.save")}</button>
+      </div>
+      ${note("info", t("adm.hook.security"))}
+      <div id="hook-msg"></div>
+    </div>` : ""}
+
+    ${dashboardCard(_gf, "tickets")}`);
+  mountDashboard();
 
   $$("[data-open]").forEach((tr) => {
     tr.onclick = () => navigate(`/console/admin/tickets/${tr.dataset.open}`);
+  });
+
+  const hookBody = () => {
+    const secret = $("#hook-secret").value.trim();
+    // Omitted rather than empty, so changing only the URL cannot silently
+    // unsign every future call.
+    return { url: $("#hook-url").value.trim(), ...(secret ? { secret } : {}) };
+  };
+  // Tested BEFORE saving: an operator should not have to store a wrong
+  // address to discover it is wrong.
+  $("#hook-test")?.addEventListener("click", async () => {
+    const b = $("#hook-test");
+    b.disabled = true;
+    $("#hook-msg").innerHTML = note("info", t("adm.hook.testing"));
+    try {
+      const r = await post("/api/admin/ticket-webhook/test", hookBody());
+      $("#hook-msg").innerHTML = r.sent
+        ? note("ok", t("adm.hook.ok", r.status))
+        : note("bad", t("adm.hook.bad", esc(String(r.reason ?? r.status))));
+    } catch (e) { $("#hook-msg").innerHTML = note("bad", esc(e.message)); }
+    b.disabled = false;
+  });
+  $("#hook-save")?.addEventListener("click", async () => {
+    const b = $("#hook-save");
+    b.disabled = true;
+    try {
+      await put("/api/admin/ticket-webhook", hookBody());
+      toast(t("adm.saved"), "ok");
+      adminTicketsPage();
+    } catch (e) {
+      $("#hook-msg").innerHTML = note("bad", esc(e.message));
+      b.disabled = false;
+    }
   });
 }
 
@@ -94,64 +151,7 @@ async function staffTicketView(id) {
         <button class="btn primary" id="tk-post">${icon.arrow}${t("tk.send")}</button>
       </div>
       <div id="tk-msg"></div>
-    </div>
-
-    ${hook ? `<div class="card">
-      <h3>${t("adm.hook.title")}</h3>
-      <p class="muted small" style="max-width:74ch;margin:2px 0 12px">${t("adm.hook.sub")}</p>
-      <label class="field" style="max-width:520px"><span>${t("adm.hook.url")}</span>
-        <input id="hook-url" class="ltr mono" dir="ltr" maxlength="500"
-               value="${esc(hook.url || "")}"
-               placeholder="http://127.0.0.1:8644/webhooks/mmd-ticket"></label>
-      <label class="field" style="max-width:520px"><span>${t("adm.hook.secret")}</span>
-        <input id="hook-secret" class="ltr mono" dir="ltr" type="password"
-               autocomplete="off" maxlength="200"
-               placeholder="${hook.secret_set ? `••••••••${esc(hook.secret_hint)}` : ""}"></label>
-      <p class="tiny dim" style="margin:2px 0 12px;max-width:74ch">${
-        hook.secret_set ? t("adm.hook.secret.keep") : t("adm.hook.secret.new")}</p>
-      <div class="btn-row">
-        <button class="btn" id="hook-test">${icon.bolt}${t("adm.hook.test")}</button>
-        <button class="btn primary" id="hook-save">${t("adm.ai.save")}</button>
-      </div>
-      ${note("info", t("adm.hook.security"))}
-      <div id="hook-msg"></div>
-    </div>` : ""}
-
-    ${dashboardCard(_gf, "tickets")}`);
-  mountDashboard();
-
-  const hookBody = () => {
-    const secret = $("#hook-secret").value.trim();
-    // Omitted rather than empty, so changing only the URL cannot silently
-    // unsign every future call.
-    return { url: $("#hook-url").value.trim(), ...(secret ? { secret } : {}) };
-  };
-  // Tested BEFORE saving: an operator should not have to store a wrong
-  // address to discover it is wrong.
-  $("#hook-test")?.addEventListener("click", async () => {
-    const b = $("#hook-test");
-    b.disabled = true;
-    $("#hook-msg").innerHTML = note("info", t("adm.hook.testing"));
-    try {
-      const r = await post("/api/admin/ticket-webhook/test", hookBody());
-      $("#hook-msg").innerHTML = r.sent
-        ? note("ok", t("adm.hook.ok", r.status))
-        : note("bad", t("adm.hook.bad", esc(r.reason || r.status)));
-    } catch (e) { $("#hook-msg").innerHTML = note("bad", esc(e.message)); }
-    b.disabled = false;
-  });
-  $("#hook-save")?.addEventListener("click", async () => {
-    const b = $("#hook-save");
-    b.disabled = true;
-    try {
-      await put("/api/admin/ticket-webhook", hookBody());
-      toast(t("adm.saved"), "ok");
-      adminTicketsPage();
-    } catch (e) {
-      $("#hook-msg").innerHTML = note("bad", esc(e.message));
-      b.disabled = false;
-    }
-  });
+    </div>`);
 
   $$("[data-status]").forEach((b) => {
     b.onclick = async () => {
