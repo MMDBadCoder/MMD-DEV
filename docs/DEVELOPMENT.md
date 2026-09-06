@@ -18,6 +18,10 @@ Five seconds, no infrastructure, safe anywhere. It runs:
 - **`node:test`** over `tests/web/` — translation catalogue completeness, every
   server error code having Persian text, currency and digit formatting, file
   path handling
+- **page execution** — `tests/web/pages-execute.test.mjs` mirrors the module
+  tree, swaps the network and DOM leaves for generated stubs, then loads and
+  *runs* every page and every handler it wires. An identifier that resolves to
+  nothing is a runtime error, so only running the code finds it
 - **syntax checks** on every JavaScript and shell file
 
 Individual suites:
@@ -25,6 +29,10 @@ Individual suites:
 ```bash
 /opt/mmd/venv/bin/python -m pytest tests/test_billing.py -q
 node --test tests/web/paths.test.mjs
+
+# The whole frontend suite. Name the files: there is no package.json, so Node
+# reads a bare `tests/web/` as a module to load rather than a directory to scan.
+node --test tests/web/*.test.mjs
 
 # Against the RUNNING host: ping from inside a workspace, and a real prompt
 # through a real workspace key. Unit tests cover the logic of both; only this

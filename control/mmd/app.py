@@ -3807,8 +3807,28 @@ def admin_activity(limit: int = 100, offset: int = 0, q: str = "",
 
 
 # --- static frontend -----------------------------------------------------
+class _RevalidatingStatic(StaticFiles):
+    """Static files that are always revalidated, never blindly reused.
+
+    The frontend is unbundled ES modules imported by fixed path, so a browser
+    holding a stale copy of one module runs it beside freshly fetched ones --
+    a mix that never existed and fails in ways no test reproduces, typically
+    as "X is not defined" for a symbol another module now expects.
+
+    Without Cache-Control a browser is free to guess a lifetime from
+    Last-Modified, so a deploy did not reliably reach anyone already using the
+    panel. "no-cache" does not mean "do not store": it means ask first. The
+    ETag is unchanged, so an unchanged file still answers 304 with no body.
+    """
+
+    def file_response(self, *args: object, **kwargs: object) -> Response:
+        resp = super().file_response(*args, **kwargs)  # type: ignore[arg-type]
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
+
+
 if WEB.is_dir():
-    app.mount("/static", StaticFiles(directory=WEB), name="static")
+    app.mount("/static", _RevalidatingStatic(directory=WEB), name="static")
 
     @app.get("/{full_path:path}")
     def spa(full_path: str) -> FileResponse:
@@ -3820,4 +3840,7 @@ if WEB.is_dir():
         """
         if full_path.startswith("api/"):
             raise HTTPException(404, "Not found")
-        return FileResponse(WEB / "index.html")
+        # The shell names every module it loads; a stale shell pins stale
+        # modules, so it is revalidated for the same reason they are.
+        return FileResponse(WEB / "index.html",
+                            headers={"Cache-Control": "no-cache"})

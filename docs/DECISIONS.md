@@ -2649,3 +2649,39 @@ The interface calls a customer's optional Incus environment a **machine**.
 second customer-facing concept. The physical Ubuntu host is always called the
 **host server**, never the bare word “server”, so a capacity refusal cannot be
 misread as a problem inside the customer's machine. Tests enforce both rules.
+
+## 2026-09-06 — Pages are verified by running them, and are never served stale
+
+Two ReferenceErrors reached the panel a week apart, both on the same page. A
+webhook card was added to the tickets page and its `dashboardCard(_gf, …)`
+landed in the ticket *detail* function, which never fetched that config, so
+opening a ticket threw `_gf is not defined`. That was fixed, and opening a
+ticket then threw `hook is not defined` — the same mistake, one identifier
+over, shipped in the same edit.
+
+Nothing we had could have caught either. `node --check` parses the file and it
+parses. `imports.test.mjs` walks the source, but it flattens every declaration
+in a file into a single set with no notion of scope, so a variable declared in
+one function and used in another looks correct. A name that resolves to
+nothing is a **runtime** error; only running the code finds it.
+
+So the pages are now run. `tests/web/pages-execute.test.mjs` mirrors `web/js`
+to a temp directory, replaces the leaves that reach the network, the DOM or the
+user — api, ui, i18n, main, grafana, router, terminal, dangerdialog — with
+stubs *generated from each real module's export list*, and then loads every
+page, calls every `…Page` export with the shapes the router really produces,
+and calls every handler those pages wired. Handlers are included deliberately:
+both bugs happened to be on the render path, and the next one may only be
+reachable from a click. The test was verified by reintroducing each bug and
+confirming it reports them by name. The narrower `dashboardCard`/`grafanaConfig`
+guard written after the first incident was removed, being wholly subsumed.
+
+The second incident also exposed why a shipped fix arrived as a *different*
+error rather than as a working page. The frontend is unbundled ES modules
+imported by fixed path and was served with an ETag but **no `Cache-Control`**,
+which leaves a browser free to invent a lifetime from `Last-Modified`. A user
+could therefore keep one stale module and run it beside freshly fetched ones —
+a combination that never existed anywhere. Static files and the app shell are
+now served `no-cache`, which does not mean "do not store" but "ask first"; the
+existing ETag makes the answer a bodiless 304. Correctness on deploy is worth
+one conditional request.

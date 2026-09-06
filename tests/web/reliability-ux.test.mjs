@@ -54,30 +54,3 @@ test("an expired session stops background polling and returns to sign-in", () =>
 test("notification links cannot leave the authenticated console", () => {
   assert.match(main, /startsWith\("\/console"\)/);
 });
-
-test("an embedded dashboard is only rendered where its config was fetched", () => {
-  // A `_gf is not defined` ReferenceError reached production this way: an
-  // automated edit put `dashboardCard(_gf, …)` into the ticket DETAIL view,
-  // whose function never called grafanaConfig(). Syntax checks pass, every
-  // test passed, and the page died the moment an operator opened one ticket.
-  //
-  // Checked per function rather than per file, because a file can hold both a
-  // list view that fetches the config and a detail view that does not.
-  const dir = "web/js/pages";
-  const offenders = [];
-  for (const name of fs.readdirSync(dir).filter((f) => f.endsWith(".js"))) {
-    const src = fs.readFileSync(`${dir}/${name}`, "utf8");
-    if (!src.includes("dashboardCard(")) continue;
-    const starts = [...src.matchAll(/^(?:export )?async function (\w+)/gm)]
-      .map((m) => ({ at: m.index, fn: m[1] }));
-    starts.push({ at: src.length, fn: null });
-    for (let i = 0; i < starts.length - 1; i += 1) {
-      const body = src.slice(starts[i].at, starts[i + 1].at);
-      if (body.includes("dashboardCard(") && !body.includes("grafanaConfig()")) {
-        offenders.push(`${name}:${starts[i].fn}`);
-      }
-    }
-  }
-  assert.deepEqual(offenders, [],
-                   "these render a dashboard without fetching its config");
-});
