@@ -13,7 +13,7 @@ import { grafanaConfig, dashboardCard, mountDashboard } from "../grafana.js";
 
 /* Where the full setup is written down. The panel can only show which fields
    exist; how to make Hermes listen, and what to paste where, is a document. */
-const HOOK_DOC = "https://github.com/MMDBadCoder/MMD-DEV/blob/main/docs/AGENT-SETUP.md";
+const HOOK_DOC = "https://github.com/MMDBadCoder/MMD-DEV/blob/main/docs/AGENT-WEBHOOK.md";
 
 export async function adminTicketsPage(params) {
   const _gf = await grafanaConfig();

@@ -1,0 +1,22 @@
+[Unit]
+Description=MMD-DEV support agent - answer waiting tickets
+After=network-online.target mmd-api.service
+Wants=mmd-api.service
+
+[Service]
+Type=oneshot
+# Root only because the MCP token is /etc/mmd/mcp.key, which is root-only.
+# The agent holds no other privilege: it reads the queue and posts replies
+# through MCP, which applies its own checks, and the model it consults runs
+# inside a machine and never sees this token.
+User=root
+WorkingDirectory=/opt/mmd
+ExecStart=/opt/mmd/venv/bin/python /opt/mmd/agent/ticket_agent.py --all
+# A failed run must not stop the timer. The next tick retries, and until then
+# the ticket is still in the queue where a human can see it - which is the
+# whole reason a missed run costs nothing.
+SuccessExitStatus=0 1
+TimeoutStartSec=900
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,14 @@
+[Unit]
+Description=Answer waiting support tickets periodically
+
+[Timer]
+# Every two minutes. The admin panel's webhook is the low-latency path; this
+# is the one that cannot be missed, so it only has to be faster than a
+# customer's patience, not instant.
+OnBootSec=3min
+OnUnitActiveSec=2min
+AccuracySec=30s
+Persistent=true
+
+[Install]
+WantedBy=timers.target
