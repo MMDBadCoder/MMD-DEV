@@ -176,17 +176,26 @@ what happened in your reply.
 
 ### Which agent
 
-**Claude Sonnet, via the Claude Agent SDK**, is the recommendation:
+**Hermes** — the agent this platform already ships into every machine. That is
+the decision, and convenience is only part of why:
 
-- Persian output is good, including the formal register support needs.
-- Sonnet is roughly a fifth the price of Opus, and support answers are short.
-  At your ticket volume the monthly cost is negligible either way.
-- The Agent SDK gives a long-running process that speaks MCP natively, which
-  is what the wake-up loop below needs.
+- It is already installed, already holds the operator's OpenRouter key, and is
+  already supervised by systemd inside a machine you control. There is no new
+  service to deploy, monitor, or pay for.
+- It speaks MCP, so the five tools in Part 4 are available to it directly.
+- Its **`webhook` platform is an HTTP listener** — the piece that turns a new
+  ticket into an immediate wake-up instead of a poll. No glue code is needed
+  on either side; it is a platform you switch on in `config.yaml`.
+- The model is a setting, not a rewrite. Support answers are short and the
+  hard part is retrieval, not generation, so a cheap model is enough. Because
+  the key is OpenRouter's, any model on it is one line of configuration.
 
-Claude Code works too and is quicker to try — but it is interactive, so it
-suits testing rather than running unattended. Any MCP-capable client will
-connect; nothing here is Anthropic-specific.
+Anything else that speaks MCP will connect too — nothing here is specific to
+Hermes, and Claude Code is a good way to try the tools by hand before wiring
+an agent up. But Claude Code is interactive and is not meant to run
+unattended, so it is a testing tool here, not the answer.
+
+`docs/AGENT-SETUP.md` is the step-by-step for the Hermes side.
 
 ### The connection
 

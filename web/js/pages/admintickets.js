@@ -11,6 +11,10 @@ import { navigate } from "../router.js";
 import { STATUSES, statusPill, thread } from "./support.js";
 import { grafanaConfig, dashboardCard, mountDashboard } from "../grafana.js";
 
+/* Where the full setup is written down. The panel can only show which fields
+   exist; how to make Hermes listen, and what to paste where, is a document. */
+const HOOK_DOC = "https://github.com/MMDBadCoder/MMD-DEV/blob/main/docs/AGENT-SETUP.md";
+
 export async function adminTicketsPage(params) {
   const _gf = await grafanaConfig();
   if (params?.id) return staffTicketView(Number(params.id));
@@ -55,9 +59,19 @@ export async function adminTicketsPage(params) {
                value="${esc(hook.url || "")}"
                placeholder="http://10.42.0.11:8644/webhooks/mmd-ticket"></label>
       <label class="field" style="max-width:520px"><span>${t("adm.hook.secret")}</span>
-        <input id="hook-secret" class="ltr mono" dir="ltr" type="password"
-               autocomplete="off" maxlength="200"
-               placeholder="${hook.secret_set ? `••••••••${esc(hook.secret_hint)}` : ""}"></label>
+        <span class="between" style="gap:8px">
+          <input id="hook-secret" class="ltr mono" dir="ltr" type="password"
+                 style="flex:1;min-width:0" autocomplete="off" maxlength="200"
+                 placeholder="${hook.secret_set ? `••••••••${esc(hook.secret_hint)}` : ""}">
+          <button class="btn ghost small" id="hook-eye" type="button"
+                  aria-label="${t("common.reveal")}">${icon.eye || "👁"}</button>
+          <button class="btn ghost small" id="hook-copy" type="button"
+                  aria-label="${t("common.copy")}">${icon.copy || "⧉"}</button>
+        </span></label>
+      <p class="tiny dim" style="margin:2px 0 8px;max-width:74ch">${t("adm.hook.secret.what")}</p>
+      <div class="btn-row" style="margin-bottom:10px">
+        <button class="btn sm ghost" id="hook-gen">${t("adm.hook.gen")}</button>
+      </div>
       <p class="tiny dim" style="margin:2px 0 12px;max-width:74ch">${
         hook.secret_set ? t("adm.hook.secret.keep") : t("adm.hook.secret.new")}</p>
       <div class="btn-row">
@@ -66,6 +80,8 @@ export async function adminTicketsPage(params) {
       </div>
       ${note("info", t("adm.hook.security"))}
       <div id="hook-msg"></div>
+      <p class="tiny" style="margin:12px 0 0"><a href="${esc(HOOK_DOC)}"
+         target="_blank" rel="noopener noreferrer">${t("adm.hook.doc")}</a></p>
     </div>` : ""}
 
     ${dashboardCard(_gf, "tickets")}`);
@@ -73,6 +89,30 @@ export async function adminTicketsPage(params) {
 
   $$("[data-open]").forEach((tr) => {
     tr.onclick = () => navigate(`/console/admin/tickets/${tr.dataset.open}`);
+  });
+
+  /* Generated in the browser and shown at once, rather than stored and read
+     back later: the only moment this value is needed is the moment it is
+     pasted into the agent's configuration, and a secret the server will
+     hand back on request is a secret with one more way out. Losing it costs
+     one regeneration and one edit on the agent side. */
+  $("#hook-gen")?.addEventListener("click", () => {
+    const bytes = new Uint8Array(32);
+    crypto.getRandomValues(bytes);
+    const box = $("#hook-secret");
+    box.value = [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
+    box.type = "text";            // shown, because it has to be copied now
+    $("#hook-msg").innerHTML = note("info", t("adm.hook.gen.done"));
+  });
+  $("#hook-eye")?.addEventListener("click", () => {
+    const box = $("#hook-secret");
+    box.type = box.type === "password" ? "text" : "password";
+  });
+  $("#hook-copy")?.addEventListener("click", async () => {
+    const v = $("#hook-secret").value;
+    if (!v) { toast(t("adm.hook.copy.empty"), "bad"); return; }
+    try { await navigator.clipboard.writeText(v); toast(t("common.copied"), "ok"); }
+    catch { toast(t("common.copied"), "bad"); }
   });
 
   const hookBody = () => {
