@@ -195,7 +195,7 @@ Hermes, and Claude Code is a good way to try the tools by hand before wiring
 an agent up. But Claude Code is interactive and is not meant to run
 unattended, so it is a testing tool here, not the answer.
 
-`docs/AGENT-SETUP.md` is the step-by-step for the Hermes side.
+`docs/support-agent/host-runner.md` is the step-by-step for the Hermes side.
 
 ### The connection
 
@@ -225,7 +225,7 @@ Any MCP client, by config:
 
 **The recommended setup is Hermes**, which this platform already ships: it is
 an MCP client, it has a webhook receiver, and it runs on your own host so no
-customer data leaves the country. `docs/AGENT-SETUP.md` is the step-by-step.
+customer data leaves the country. `docs/support-agent/host-runner.md` is the step-by-step.
 
 Two paths wake it, and both are wanted. A signed webhook fires the moment a
 customer writes; the long poll below is the safety net for when that fails.

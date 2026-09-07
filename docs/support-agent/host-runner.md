@@ -148,7 +148,7 @@ It **cannot** close a ticket, move credit, touch a machine, or change any
 account. Anything a customer needs *done* is an escalation, by design.
 
 `agent/system-prompt.md` is the instruction it runs under.
-`docs/SUPPORT-AGENT.md` is the product knowledge, fetched at runtime through
+`docs/support-agent/knowledge-base.md` is the product knowledge, fetched at runtime through
 the `platform_guide` tool so the agent reads the current document rather than
 a copy that goes stale the day a feature ships.
 
@@ -168,7 +168,7 @@ else means something is posting through a human session, not MCP.
 `/opt/mmd/agent/` beside the script.
 
 **Answers are confidently wrong about the product.** `platform_guide` serves
-`docs/SUPPORT-AGENT.md`. If a feature changed and that document did not, the
+`docs/support-agent/knowledge-base.md`. If a feature changed and that document did not, the
 agent is faithfully repeating a stale document.
 
 ---
@@ -181,7 +181,7 @@ section *اعلان خودکار به عامل پشتیبانی*.
 
 That path runs the agent inside a machine and needs Hermes' own `webhook`
 platform plus a working in-machine MCP connection: more moving parts, and it
-changes nothing about correctness, only latency. `docs/AGENT-WEBHOOK.md` has
+changes nothing about correctness, only latency. `docs/support-agent/webhook-push.md` has
 it, including the signature format and the parts of Hermes that are not
 obvious from its own documentation.
 

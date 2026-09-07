@@ -1,6 +1,6 @@
 # Waking the agent the instant a ticket arrives
 
-**Read `docs/AGENT-SETUP.md` first and get the agent answering on its timer.**
+**Read `docs/support-agent/host-runner.md` first and get the agent answering on its timer.**
 This document is the optional low-latency path on top of that: instead of
 waiting up to two minutes for the next tick, the panel pushes a signed nudge
 and the agent starts within about a second.

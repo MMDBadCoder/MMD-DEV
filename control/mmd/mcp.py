@@ -190,7 +190,7 @@ def platform_guide(db: Session) -> dict:
     X?" should be reading the current answer.
     """
     from pathlib import Path
-    guide = Path(__file__).resolve().parents[2] / "docs" / "SUPPORT-AGENT.md"
+    guide = Path(__file__).resolve().parents[2] / "docs" / "support-agent" / "knowledge-base.md"
     try:
         text_ = guide.read_text(encoding="utf-8")
     except OSError:

@@ -3465,6 +3465,48 @@ def admin_ticket_webhook_test(body: TicketWebhook,
     return hooklib.test(db, body.url, body.secret)
 
 
+@app.get("/api/admin/mcp")
+def admin_mcp(_: User = Depends(require_admin)) -> dict:
+    """Everything needed to point an outside agent at this platform.
+
+    The token is returned in full, as the Grafana password is. It exists to be
+    pasted into an agent's configuration, so an operator who cannot read it
+    back cannot finish the job - and the alternative, rotating it blindly to
+    learn its value, breaks every agent already using it. The endpoint is
+    administrator-only and the panel keeps it masked until asked.
+    """
+    return {
+        "url": f"https://{CONFIG.domain}/mcp",
+        "token": CONFIG.mcp_token,
+        "server": mcplib.SERVER_NAME,
+        "protocol": mcplib.PROTOCOL_VERSION,
+        "tools": [t["name"] for t in mcplib.TOOLS],
+    }
+
+
+@app.post("/api/admin/mcp/rotate")
+def admin_mcp_rotate(admin: User = Depends(require_admin),
+                     db: Session = Depends(get_session)) -> dict:
+    """Issue a new token and retire the old one.
+
+    The work happens in the root provisioner: this process cannot read the key
+    file, by design, so it cannot rewrite it either. mmd-api then restarts a
+    few seconds later, because the token is loaded once at unit start - which
+    means this endpoint answers, and the API it belongs to goes away briefly
+    just afterwards. The panel says so before asking for confirmation.
+    """
+    resp = svc.call_provisioner({"verb": "rotate_mcp_key"}, timeout=60)
+    if not resp.get("ok"):
+        fail(502, "mcp_rotate_failed",
+             resp.get("error") or "The key could not be replaced.")
+    # The value is never audited - only that it changed, and by whom.
+    svc.audit(db, admin.id, "admin_mcp_key_rotated", None)
+    db.commit()
+    return {"ok": True, "token": resp["token"],
+            "restart_scheduled": bool(resp.get("restart_scheduled")),
+            "warning": resp.get("warning", "")}
+
+
 @app.get("/api/admin/grafana")
 def admin_grafana(_: User = Depends(require_admin),
                   db: Session = Depends(get_session)) -> dict:

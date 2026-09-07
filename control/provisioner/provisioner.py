@@ -27,6 +27,7 @@ import logging
 import os
 import pwd
 import re
+import secrets
 import shlex
 import socket
 import struct
@@ -145,7 +146,8 @@ VERBS = {"provision", "archive", "restore", "destroy",
          "fs_list", "fs_pull", "fs_push", "fs_mkdir", "fs_delete",
          "fs_archive", "apt_repair", "ai_claude", "ai_codex", "ai_openclaw",
          "ai_managed_web",
-         "ai_usage", "codex_usage", "disk_usage", "reset", "ping"}
+         "ai_usage", "codex_usage", "disk_usage", "reset", "ping",
+         "rotate_mcp_key"}
 
 # ---------------------------------------------------------------------------
 # Claude Code sign-in propagation
@@ -1452,12 +1454,54 @@ def _verb_ai_claude(project: str, req: dict) -> dict:
             "expires_at": _claude_expiry()}
 
 
+MCP_KEY_PATH = "/etc/mmd/mcp.key"
+
+
+def _rotate_mcp_key() -> dict:
+    """Replace the MCP bearer token and bring the new one into service.
+
+    Here rather than in the web app for the obvious reason: the file is
+    root-owned mode 400 precisely so that the internet-facing process cannot
+    read it, and a process that cannot read it cannot rewrite it either.
+
+    The restart is deferred by a few seconds rather than run inline. mmd-api
+    reads this token through systemd's LoadCredential, which happens once at
+    unit start, so nothing changes until it restarts - but restarting it from
+    inside a request it is currently serving kills the response, and the
+    operator would never receive the new token they have to go and paste
+    somewhere. So: write, answer, then restart a moment later.
+    """
+    token = secrets.token_hex(32)
+    tmp = MCP_KEY_PATH + ".new"
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(token + "\n")
+        os.chmod(tmp, 0o400)
+        os.replace(tmp, MCP_KEY_PATH)      # atomic: never a half-written key
+    except OSError as e:
+        return {"ok": False, "error": f"could not write the key: {e}"}
+
+    rc, _ = _run(["systemd-run", "--on-active=3",
+                  "--unit=mmd-mcp-key-reload", "--collect",
+                  "systemctl", "restart", "mmd-api"])
+    if rc != 0:
+        # The key on disk is already the new one, so saying "failed" would be
+        # a lie that leaves the operator with a token they think is inactive.
+        return {"ok": True, "token": token, "restart_scheduled": False,
+                "warning": "key replaced, but the restart could not be "
+                           "scheduled - run: systemctl restart mmd-api"}
+    return {"ok": True, "token": token, "restart_scheduled": True}
+
+
 def handle(req: dict) -> dict:
     verb = req.get("verb")
     if verb not in VERBS:
         return {"ok": False, "error": f"unknown verb: {verb!r}"}
     if verb == "ping":
         return {"ok": True, "pong": True}
+
+    if verb == "rotate_mcp_key":
+        return _rotate_mcp_key()
 
     try:
         idx = int(req["idx"])
