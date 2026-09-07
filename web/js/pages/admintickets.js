@@ -4,7 +4,8 @@
  * looking at the conversation the customer sees, not a different rendering of
  * it. Status is a control here rather than a label. */
 import { get, post, put } from "../api.js";
-import { $, $$, icon, esc, note, toast, when, empty } from "../ui.js";
+import { $, $$, icon, esc, note, toast, when, empty, secretRow,
+         wireSecrets, destructiveDialog } from "../ui.js";
 import { t } from "../i18n.js";
 import { render, refreshMe } from "../main.js";
 import { navigate } from "../router.js";
@@ -13,6 +14,7 @@ import { grafanaConfig, dashboardCard, mountDashboard } from "../grafana.js";
 
 /* Where the full setup is written down. The panel can only show which fields
    exist; how to make Hermes listen, and what to paste where, is a document. */
+const MCP_DOC = "https://github.com/MMDBadCoder/MMD-DEV/blob/main/docs/support-agent/connect-hermes.md";
 const HOOK_DOC = "https://github.com/MMDBadCoder/MMD-DEV/blob/main/docs/support-agent/webhook-push.md";
 
 export async function adminTicketsPage(params) {
@@ -22,6 +24,12 @@ export async function adminTicketsPage(params) {
   const filter = new URLSearchParams(location.search).get("status") || "";
   const d = await get("/api/admin/tickets" + (filter ? `?status=${filter}` : ""));
   const hook = await get("/api/admin/ticket-webhook").catch(() => null);
+  // Kept separate from `hook`: a failure here must be SHOWN, not swallowed.
+  // The key is the one thing an operator comes to this tab to copy, and a
+  // card that quietly disappears sends them to read the source instead.
+  let mcp = null, mcpError = "";
+  try { mcp = await get("/api/admin/mcp"); }
+  catch (e) { mcpError = e.message; }
 
   const chip = (val, label, n) => `<a href="/console/admin/tickets${
     val ? `?status=${val}` : ""}" class="fchip ${filter === val ? "active" : ""}">${
@@ -50,6 +58,27 @@ export async function adminTicketsPage(params) {
         <th>${t("tk.status")}</th><th>${t("tk.updated")}</th></tr></thead>
       <tbody>${rows}</tbody></table></div></div>`
       : `<div class="card">${empty(t("tk.none.admin"))}</div>`}
+
+    <div class="card">
+      <h3>${t("adm.mcp.title")}</h3>
+      <p class="muted small" style="max-width:74ch;margin:2px 0 12px">${t("adm.mcp.sub")}</p>
+      ${mcp ? `<div class="row">
+        ${secretRow({ label: t("adm.mcp.url"), value: mcp.url, masked: false })}
+        ${secretRow({ label: t("adm.mcp.token"), value: mcp.token,
+                      hint: t("adm.mcp.token.hint") })}
+      </div>
+      <p class="tiny dim" style="margin:14px 0 4px;max-width:74ch">${
+        t("adm.mcp.tools", mcp.tools.length)}</p>
+      <p class="mono ltr tiny dim" dir="ltr" style="margin:0 0 14px">${
+        esc(mcp.tools.join("  ·  "))}</p>
+      <div class="btn-row">
+        <button class="btn danger" id="mcp-rotate">${t("adm.mcp.rotate")}</button>
+      </div>
+      <div id="mcp-msg" style="margin-top:10px"></div>
+      <p class="tiny" style="margin:12px 0 0"><a href="${esc(MCP_DOC)}"
+         target="_blank" rel="noopener noreferrer">${t("adm.mcp.doc")}</a></p>`
+        : note("bad", esc(mcpError || t("adm.mcp.unavailable")))}
+    </div>
 
     ${hook ? `<div class="card">
       <h3>${t("adm.hook.title")}</h3>
@@ -86,6 +115,35 @@ export async function adminTicketsPage(params) {
 
     ${dashboardCard(_gf, "tickets")}`);
   mountDashboard();
+
+  wireSecrets(document, t("common.copied"));
+
+  /* Rotation invalidates every agent already configured, and restarts the API
+     a moment later, so it asks the way the other irreversible actions in this
+     panel ask - by typing, not by an OK button. */
+  const rotate = $("#mcp-rotate");
+  if (rotate) rotate.onclick = async () => {
+    if (!await destructiveDialog({
+      title: t("adm.mcp.rotate.title"),
+      intro: t("adm.mcp.rotate.warn"),
+      destroys: [t("adm.mcp.rotate.d1"), t("adm.mcp.rotate.d2")],
+      keeps: [t("adm.mcp.rotate.k1")],
+      expect: "mcp", label: t("adm.mcp.rotate"),
+    })) return;
+    rotate.disabled = true;
+    try {
+      const r = await post("/api/admin/mcp/rotate", {});
+      // Printed here rather than re-fetched: the API is about to restart
+      // underneath this page, so this is the only chance to show it.
+      $("#mcp-msg").innerHTML = note("ok", t("adm.mcp.rotated")) +
+        `<p class="mono ltr" dir="ltr" style="word-break:break-all;margin:8px 0 0">${
+          esc(r.token)}</p>` + (r.warning ? note("bad", esc(r.warning)) : "");
+      toast(t("adm.mcp.rotated"), "ok");
+    } catch (e) {
+      $("#mcp-msg").innerHTML = note("bad", esc(e.message));
+      rotate.disabled = false;
+    }
+  };
 
   $$("[data-open]").forEach((tr) => {
     tr.onclick = () => navigate(`/console/admin/tickets/${tr.dataset.open}`);

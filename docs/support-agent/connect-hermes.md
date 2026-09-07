@@ -15,9 +15,10 @@ except step 1, which is on the platform host or in a browser.
 
 The key is a bearer token. There are two places to get it; either is fine.
 
-**From the panel** — **Admin → مدیریت**, the card *اتصال عامل هوش مصنوعی با
-MCP*. The key is masked; press the eye to reveal it, then the copy button.
-The same card shows the address and has **ساخت کلید تازه** if it ever leaks.
+**From the panel** — **Admin → تیکت‌ها**, the first card, *اتصال عامل هوش
+مصنوعی با MCP*. The key is masked; press the eye to reveal it, then the copy
+button beside it. The same card shows the address, lists the tools the agent
+will be given, and has **ساخت کلید تازه** if the key ever leaks.
 
 **From a shell on the platform host:**
 
