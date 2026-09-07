@@ -69,11 +69,24 @@ Does this server require authentication?   → yes
 API key / Bearer token                     → paste the key (hidden)
 ```
 
-The token is stored in `~/.hermes/.env` as `MCP_MMD_SUPPORT_API_KEY`;
-`config.yaml` only references it by name.
+The token goes to `~/.hermes/.env` as `MCP_MMD_SUPPORT_API_KEY`; `config.yaml`
+only references it by name. **Check it actually landed** — the command writes
+the reference even when it skips writing the value, and the result is a 401
+that looks like a wrong key:
 
-**After rotating the key**, this command prints `already configured` and keeps
-the old one. Delete that line from `~/.hermes/.env` first, then re-run.
+```bash
+grep -c '^MCP_MMD_SUPPORT_API_KEY=' ~/.hermes/.env
+```
+
+`1` is correct. `0` means the reference is dangling — write it yourself:
+
+```bash
+echo 'MCP_MMD_SUPPORT_API_KEY=paste-the-key-here' >> ~/.hermes/.env
+chmod 600 ~/.hermes/.env
+```
+
+Same fix after rotating a key: the command prints `already configured` and
+keeps the old value, so replace that line rather than re-running it.
 
 ---
 
@@ -147,7 +160,7 @@ key. Re-run steps 3 and 4.
 | `returned Content-Type 'text/html'` | The URL is wrong — it must end in `/mcp`. |
 | `Connection failed`, no message | Step 2 fails on this machine. |
 | Gateway starts then stops | Same cause: an MCP server it cannot reach. |
-| `401` | Wrong key, or rotated in the panel. |
+| `401` | Key wrong, rotated, or `MCP_MMD_SUPPORT_API_KEY` missing from `~/.hermes/.env`. |
 | `already configured`, old key used | Clear it from `~/.hermes/.env` first. |
 
 ---
