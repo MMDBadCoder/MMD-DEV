@@ -28,12 +28,36 @@ which reads like a bug and is not.
 Inside the machine running Hermes:
 
 ```bash
-uv pip install --python ~/.local/share/uv/tools/hermes-agent/bin/python "mcp>=1.24,<2"
+uv pip install \
+  --python /home/dev/.local/share/uv/tools/hermes-agent/bin/python \
+  "mcp>=1.24,<2"
 ```
+
+**Write the path out in full, not with `~`.** If `$HOME` is empty in that
+shell — which happens in `su`, in some `docker exec` and `incus exec`
+sessions, and under a few editors' terminals — the shell expands `~` to
+nothing and uv is handed the relative path `.local/share/...`, which it cannot
+find. The error names a virtual environment rather than the tilde, so it reads
+like a broken Hermes install:
+
+```
+error: No virtual environment or system Python installation found for path
+       `.local/share/uv/tools/hermes-agent/bin/python`
+```
+
+If you see a path in that message with no leading `/home/dev`, that is this
+and nothing else. Use the absolute path above.
 
 **The `<2` matters.** Hermes 0.19 imports `streamablehttp_client`, a name the
 `mcp` 2.x series removed, so 2.x fails with exactly the same message as having
 nothing installed at all.
+
+Confirm it took:
+
+```bash
+/home/dev/.local/share/uv/tools/hermes-agent/bin/python \
+  -c "import importlib.metadata as m; print(m.version('mcp'))"
+```
 
 ---
 
@@ -103,6 +127,20 @@ like a broken Hermes rather than a network problem.
 
 If you hit that, the agent has to run somewhere else: any other VPS works
 today with no changes, because the endpoint is public and token-protected.
+
+---
+
+## A factory reset undoes all of this
+
+Resetting or rebuilding the machine restores `~/.hermes/config.yaml` from the
+platform default. The `mcp_servers` block, any `platforms` you enabled, and
+the installed `mcp` package are all gone, and the model reverts to whatever
+**Admin → AI** has as the default.
+
+Nothing warns you. The symptom is an agent that worked yesterday and today
+reports no tools, or starts failing with `HTTP 429` because the default model
+is one of OpenRouter's shared `:free` ones. If that happens, walk steps 1 and
+2 again — the SSH host key changing is the other tell that a rebuild happened.
 
 ---
 
