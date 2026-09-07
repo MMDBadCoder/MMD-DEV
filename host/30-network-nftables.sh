@@ -59,8 +59,13 @@ HOST_HTTPS_RULES=""
 for ws_ip in ${HOST_HTTPS_ALLOWED_WORKSPACES}; do
     HOST_HTTPS_RULES="${HOST_HTTPS_RULES}
         # Operator machine: HTTPS only, to a port the internet already reaches.
-        ip saddr ${ws_ip} ip daddr ${UPLINK_IP} tcp dport 443 accept"
-    log "workspace ${ws_ip} may reach ${UPLINK_IP}:443 (support agent MCP)"
+        ip saddr ${ws_ip} ip daddr ${UPLINK_IP} tcp dport 443 accept
+        # And echo, because 'ping the address' is the first thing anyone tries
+        # when a connection fails. Without it the diagnostic lies: ping reports
+        # 100% loss whether the rule above is present or missing, which sends
+        # the reader looking for a DNS or routing fault that is not there.
+        ip saddr ${ws_ip} ip daddr ${UPLINK_IP} icmp type echo-request accept"
+    log "workspace ${ws_ip} may reach ${UPLINK_IP}:443 and ping it (support agent MCP)"
 done
 
 RULES=/etc/nftables/mmd-isolation.nft

@@ -2,6 +2,20 @@
 # MMD-DEV shared host configuration.
 # Sourced by every host/*.sh script. Override any value by exporting it first.
 
+# Persistent local overrides, if the operator has any. Read BEFORE the
+# defaults below, since every value here is assigned with `: "${VAR:=...}"` and
+# so yields to anything already set.
+#
+# Without this, an override only lasts as long as the shell that exported it:
+# re-running a script without it silently reverts to the default, which for a
+# firewall rule means connectivity that worked yesterday is gone today with
+# nothing to show why. Put durable settings in this file, not in your history.
+if [ -r /etc/mmd/host.env ]; then
+    set -a
+    . /etc/mmd/host.env
+    set +a
+fi
+
 # --- Incus / storage -------------------------------------------------------
 : "${INCUS_POOL_NAME:=default}"          # Incus-side pool name
 : "${ZPOOL_NAME:=mmdpool}"                # actual zpool name

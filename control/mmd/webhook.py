@@ -1,15 +1,14 @@
 """Telling an outside agent that a customer wrote something.
 
-The MCP server already lets an agent WAIT for work (`wait_for_new_ticket`).
-This is the other direction: the platform pushes, so an agent that cannot hold
-a long poll open - one woken by a webhook, like Hermes - still starts within a
-second of the customer pressing send.
+An agent finds work by calling `list_open_tickets`, which means it only
+finds it when it looks. This is the push: the platform tells the agent that
+something arrived, so it can answer within a second of the customer pressing
+send rather than at the next check.
 
-The two are deliberately both present. A webhook is faster; a long poll cannot
-be missed. If the webhook fails, is misconfigured, or the agent was restarting,
-the ticket is still sitting in `list_open_tickets` and the next poll finds it.
-Nothing is lost by a delivery that does not arrive, which is what makes it safe
-to fire and forget.
+It is an optimisation and never a dependency. If the webhook fails, is
+misconfigured, or the agent was restarting, the ticket is still sitting in
+`list_open_tickets` for the next check to find. Nothing is lost by a delivery
+that does not arrive, which is what makes it safe to fire and forget.
 
 Stopping someone else from firing it
 ------------------------------------

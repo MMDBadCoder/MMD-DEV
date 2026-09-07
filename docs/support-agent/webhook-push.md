@@ -32,9 +32,9 @@ MMD-DEV /mcp                  ← read tickets, reply, escalate, export
 ```
 
 Two independent paths, on purpose. The webhook is fast; the agent's own
-`wait_for_new_ticket` poll is the safety net. **A webhook that never arrives
-loses nothing** — the ticket is still in the queue and the next poll finds it.
-That is why the nudge can be fired and forgotten, and why a broken agent
+periodic `list_open_tickets` is the safety net. **A webhook that never arrives
+loses nothing** — the ticket is still in the queue and the next check finds
+it. That is why the nudge can be fired and forgotten, and why a broken agent
 cannot break ticket creation.
 
 ---

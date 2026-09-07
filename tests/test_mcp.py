@@ -72,28 +72,13 @@ def test_the_handshake_advertises_every_tool(db):
                                          "method": "tools/list"}))
     assert {t["name"] for t in listed["result"]["tools"]} == {
         "list_open_tickets", "reply_to_ticket", "export_customer_data",
-        "wait_for_new_ticket", "platform_guide"}
+        "platform_guide"}
 
 
 def test_a_notification_gets_no_reply(db):
     import asyncio
     assert asyncio.run(mcp.handle(
         db, {"jsonrpc": "2.0", "method": "notifications/initialized"})) is None
-
-
-def test_waiting_returns_at_once_on_the_first_call(db):
-    """A baseline call must not sit idle for a full timeout, or an agent
-    starting up loses its first minute."""
-    import asyncio
-
-    class Factory:
-        def __call__(self): return self
-        def __enter__(self): return db
-        def __exit__(self, *a): return False
-
-    out = asyncio.run(mcp.wait_for_new_ticket(Factory(), None, 60))
-    assert out["new_activity"] is False
-    assert "baseline" in out["hint"]
 
 
 # --- the queue -------------------------------------------------------------

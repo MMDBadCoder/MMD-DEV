@@ -230,18 +230,14 @@ customer data leaves the country. `docs/support-agent/host-runner.md` is the ste
 Two paths wake it, and both are wanted. A signed webhook fires the moment a
 customer writes; the long poll below is the safety net for when that fails.
 
-### The fallback: waiting without a webhook
+### The fallback: checking without a webhook
 
-Polling on a timer means a customer waits for the timer. Instead, the
-`wait_for_new_ticket` tool **blocks server-side** until a customer writes:
+There is no tool that waits. An agent finds work by calling
+`list_open_tickets`, so it finds work when it looks — on a timer, or when the
+webhook tells it to.
 
-1. Call it once with no arguments — it returns immediately with the current
-   `latest_message_id`, establishing a baseline.
-2. Call it again passing that id as `since_id`. It now waits, returning the
-   moment a customer message arrives, or after `timeout_seconds` (default 60,
-   maximum 600) with nothing.
-3. On `new_activity: true`, call `list_open_tickets` and work the queue.
-4. Loop, passing the new `latest_message_id` each time.
+That is the whole reason a missed webhook costs nothing: the ticket does not
+depend on the delivery, it simply sits in the queue until the next check.
 
 The agent is therefore idle almost all the time and starts within about two
 seconds of a customer pressing send. A waiting call costs one suspended
