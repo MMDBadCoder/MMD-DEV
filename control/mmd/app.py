@@ -161,6 +161,27 @@ async def _record_request(request: Request, call_next):
         m.inc("mmd_http_requests_total", {**labels, "status": status})
 
 
+@app.api_route("/mcp", methods=["GET", "HEAD"])
+def mcp_no_stream() -> Response:
+    """Streamable HTTP without a server-initiated stream: 405, by the spec.
+
+    Without this the catch-all SPA route below answers GET /mcp with the app
+    shell - HTTP 200 and `text/html`. Clients preflight the URL before
+    handshaking, and HTML on a 2xx is exactly how they detect "this is a web
+    page, not an MCP endpoint", so the connection is refused before a single
+    JSON-RPC message is sent. The transport works perfectly over POST; the
+    probe never got that far.
+
+    405 is both the correct answer for a server that offers no GET stream and
+    the one that lets a probe through, since a client cannot read a non-2xx as
+    a content-type verdict.
+    """
+    return Response(status_code=405, media_type="application/json",
+                    headers={"Allow": "POST"},
+                    content='{"jsonrpc":"2.0","id":null,"error":'
+                            '{"code":-32601,"message":"use POST for MCP"}}')
+
+
 @app.post("/mcp")
 async def mcp_endpoint(request: Request,
                        db: Session = Depends(get_session)):

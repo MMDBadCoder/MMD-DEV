@@ -242,3 +242,25 @@ def test_the_guide_states_the_limits_the_agent_must_not_overstep(db):
     # The two promises an agent is most tempted to make and cannot keep.
     assert "off-host backup" in guide or "no off-host" in guide.lower()
     assert "Top-ups are manual" in guide
+
+
+def test_get_on_mcp_is_not_the_web_app():
+    """GET /mcp must not fall through to the SPA.
+
+    Real failure: the catch-all served index.html with 200 and text/html, and
+    every client that preflights the URL read that as "a web page, not an MCP
+    endpoint" and refused to connect - while POST worked perfectly the whole
+    time. 405 is the spec answer for a server offering no GET stream, and a
+    non-2xx is also what lets a probe fall through to the handshake.
+    """
+    from fastapi.testclient import TestClient
+    from mmd import app as appmod
+
+    with TestClient(appmod.app) as c:
+        r = c.get("/mcp")
+        assert r.status_code == 405, "GET /mcp was answered by something else"
+        assert "html" not in r.headers.get("content-type", "")
+        assert r.headers.get("allow") == "POST"
+
+        # HEAD is probed too, and must agree.
+        assert c.head("/mcp").status_code == 405
