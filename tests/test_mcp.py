@@ -298,7 +298,7 @@ def test_the_answering_policy_lives_in_the_skill():
     documentation - so they travel with the agent, not in the docs the
     platform_guide serves."""
     from pathlib import Path
-    skill = Path("agent/skills/mmd-support/SKILL.md").read_text(encoding="utf-8")
+    skill = Path("support-agent/SKILL.md").read_text(encoding="utf-8")
     for essential in ("Persian", "escalate", "untrusted", "off-host backup",
                       "Top-ups are manual"):
         assert essential.lower() in skill.lower(), (
@@ -310,7 +310,7 @@ def test_the_skill_is_loadable_by_hermes():
     reads `name` and `description` from its frontmatter. A skill missing
     either is discovered but never surfaced."""
     from pathlib import Path
-    text = Path("agent/skills/mmd-support/SKILL.md").read_text(encoding="utf-8")
+    text = Path("support-agent/SKILL.md").read_text(encoding="utf-8")
     assert text.startswith("---\n"), "no YAML frontmatter"
     front = text.split("---", 2)[1]
     assert "name: mmd-support" in front
@@ -324,7 +324,7 @@ def test_the_prompt_covers_running_unattended():
     for more work - each of which burns a scheduled run and answers nobody.
     """
     from pathlib import Path
-    prompt = Path("agent/system-prompt.md").read_text(encoding="utf-8")
+    prompt = Path("support-agent/system-prompt.md").read_text(encoding="utf-8")
     assert "mmd-support" in prompt, "the prompt never points at the skill"
     for essential in ("unattended", "stop", "nothing in the queue"):
         assert essential.lower() in prompt.lower(), (

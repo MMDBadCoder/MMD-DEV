@@ -139,10 +139,14 @@ its own policy.
 `~/.hermes/skills/` for a `SKILL.md`, so it is a copy:
 
 ```bash
-mkdir -p ~/.hermes/skills
-cp -r /path/to/MMD-DEV/agent/skills/mmd-support ~/.hermes/skills/
+mkdir -p ~/.hermes/skills/mmd-support
+cp /path/to/MMD-DEV/support-agent/SKILL.md ~/.hermes/skills/mmd-support/
 hermes skills list
 ```
+
+The directory name is what Hermes lists it as, and it probes each
+subdirectory of `~/.hermes/skills/` for a `SKILL.md` - so the file has to sit
+one level down, not directly in `skills/`.
 
 `mmd-support` in the output means it was found. It carries the procedure, the
 answering policy, the things that must never be promised, and the escalation
@@ -150,7 +154,7 @@ rules — and it tells the agent to read a document from `platform_guide` **once
 per session** and answer the rest of the queue from what it already has, which
 is where most of the token cost otherwise goes.
 
-**The prompt.** Copy `agent/system-prompt.md` into Hermes as the system
+**The prompt.** Copy `support-agent/system-prompt.md` into Hermes as the system
 prompt. It is deliberately short: it points at the skill for everything about
 answering, and covers only what the skill cannot know — that the agent is run
 unattended, so it should do one pass and stop rather than narrate, ask
