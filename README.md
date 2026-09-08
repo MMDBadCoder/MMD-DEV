@@ -16,7 +16,7 @@ whole product runs on **one** host.
   <a href="docs/DESIGN-SYSTEM.md">Design system</a> ·
   <a href="docs/OPERATIONS.md">Operations</a> ·
   <a href="docs/METRICS.md">Metrics</a> ·
-  <a href="docs/support-agent/host-runner.md">AI agent</a> ·
+  <a href="docs/AI-SUPPORT-AGENT.md">AI support agent</a> ·
   <a href="docs/DECISIONS.md">Decisions</a> ·
   <a href="AGENTS.md">For AI agents</a>
 </p>

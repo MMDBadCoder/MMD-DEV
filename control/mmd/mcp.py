@@ -181,21 +181,65 @@ def export_customer_data(db: Session, username: str) -> dict:
     return data
 
 
-def platform_guide(db: Session) -> dict:
-    """What the platform is and does, read from the repository at call time.
+def platform_guide(db: Session, name: str = "") -> dict:
+    """The project's own documentation, read from the repository at call time.
 
-    A tool rather than a paragraph pasted into a system prompt: the prompt in
-    someone's config goes stale the day a feature ships, while this is read
-    from the file that ships WITH the feature. An agent that answers "can I do
-    X?" should be reading the current answer.
+    The whole documentation set, not a summary written for the agent. A
+    curated file has to be maintained beside the docs it duplicates, and the
+    day someone updates one and not the other the agent starts answering from
+    the stale one - confidently, because it cannot tell. These files are the
+    source of truth the team already keeps current; there is nothing extra to
+    remember to update.
+
+    Two calls rather than one blob: the set is about 220 KB, which no agent
+    wants returned on every ticket. With no argument this lists what exists,
+    which is cheap; with a name it returns that document.
     """
     from pathlib import Path
-    guide = Path(__file__).resolve().parents[2] / "docs" / "support-agent" / "knowledge-base.md"
+    root = Path(__file__).resolve().parents[2]
+    found = sorted(root.joinpath("docs").glob("*.md"))
+    readme = root / "README.md"
+    if readme.is_file():
+        found.insert(0, readme)
+
+    wanted = (name or "").strip()
+    if not wanted:
+        return {
+            "documents": [{"name": f.name, "kb": round(f.stat().st_size / 1024, 1),
+                           "first_line": _first_heading(f)} for f in found],
+            "hint": ("Call platform_guide again with `document` set to one of "
+                     "these names. ARCHITECTURE.md and BILLING.md answer most "
+                     "customer questions; API.md covers the interface."),
+            "version": _version(),
+        }
+
+    match = next((f for f in found if f.name.lower() == wanted.lower()), None)
+    if match is None:
+        raise McpError(-32602,
+                       f"no such document: {wanted!r}. Call platform_guide "
+                       f"with no argument to list them.")
+    text_ = match.read_text(encoding="utf-8")
+    # A single document can be very large - DECISIONS.md is over 130 KB - and
+    # an oversized tool result is worse than a truncated one: it can fail the
+    # call outright and leave the agent with nothing.
+    limit = 80_000
+    truncated = len(text_) > limit
+    if truncated:
+        text_ = text_[:limit]
+    return {"document": match.name, "text": text_, "truncated": truncated,
+            "version": _version()}
+
+
+def _first_heading(path) -> str:
+    """The document's own one-line description, so the list explains itself."""
     try:
-        text_ = guide.read_text(encoding="utf-8")
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#"):
+                return line[:120]
     except OSError:
-        text_ = ""
-    return {"guide": text_, "version": _version()}
+        pass
+    return ""
 
 
 TOOLS = [
@@ -237,11 +281,19 @@ TOOLS = [
     {
         "name": "platform_guide",
         "description": (
-            "What MMD-DEV is, what it can and cannot do, and how each feature "
-            "works. Read this before answering any question about whether "
-            "something is possible - it is generated from the running "
-            "product, so it is current in a way a memorised answer is not."),
-        "inputSchema": {"type": "object", "properties": {}, "required": []},
+            "The project's own documentation, read from the repository at "
+            "call time - so it is current in a way a memorised answer is not. "
+            "Call with no argument to list the documents, then again with "
+            "`document` to read one. Read before answering any question about "
+            "whether something is possible."),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "document": {"type": "string",
+                             "description": "A name from the list, e.g. ARCHITECTURE.md."},
+            },
+            "required": [],
+        },
     },
     {
         "name": "export_customer_data",
@@ -315,7 +367,7 @@ async def handle(db: Session, request: dict, db_factory=None) -> dict | None:
 
 def _call(db: Session, name: str, args: dict):
     if name == "platform_guide":
-        return platform_guide(db)
+        return platform_guide(db, str(args.get("document") or ""))
     if name == "list_open_tickets":
         return list_open_tickets(db)
     if name == "reply_to_ticket":

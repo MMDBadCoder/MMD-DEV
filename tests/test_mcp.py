@@ -230,20 +230,56 @@ def test_escalated_appears_everywhere_a_status_is_offered():
 
 
 # --- the knowledge the agent works from ------------------------------------
-def test_the_platform_guide_is_served_from_the_repository(db):
-    """Read at call time rather than pasted into a prompt: a prompt in
-    someone's config goes stale the day a feature ships."""
-    guide = mcp.platform_guide(db)["guide"]
-    assert len(guide) > 2000
-    for essential in ("cannot", "escalate", "Persian", "untrusted"):
-        assert essential in guide, f"the guide never mentions {essential}"
+def test_the_guide_lists_the_real_project_documentation(db):
+    """Served from the docs the team already keeps current.
+
+    It used to be one curated file written for the agent. That has to be
+    maintained beside the documentation it duplicates, and the day someone
+    updates one and not the other the agent answers from the stale copy -
+    confidently, because it cannot tell which it is holding.
+    """
+    listed = mcp.platform_guide(db)
+    names = {d["name"] for d in listed["documents"]}
+    assert {"ARCHITECTURE.md", "BILLING.md", "API.md"} <= names
+    assert "document" not in listed, "the bare call must not return a whole file"
+    # Each entry explains itself, so one call is enough to choose.
+    assert all(d["first_line"] for d in listed["documents"])
 
 
-def test_the_guide_states_the_limits_the_agent_must_not_overstep(db):
-    guide = mcp.platform_guide(db)["guide"]
-    # The two promises an agent is most tempted to make and cannot keep.
-    assert "off-host backup" in guide or "no off-host" in guide.lower()
-    assert "Top-ups are manual" in guide
+def test_one_document_is_returned_by_name(db):
+    got = mcp.platform_guide(db, "ARCHITECTURE.md")
+    assert got["document"] == "ARCHITECTURE.md"
+    assert len(got["text"]) > 2000
+    assert got["truncated"] is False
+
+
+def test_the_name_is_not_case_sensitive(db):
+    """An agent that types the name from memory should still get the file."""
+    assert mcp.platform_guide(db, "architecture.md")["document"] == "ARCHITECTURE.md"
+
+
+def test_an_unknown_document_says_how_to_find_the_right_one(db):
+    with pytest.raises(mcp.McpError) as e:
+        mcp.platform_guide(db, "HANDBOOK.md")
+    assert "platform_guide" in str(e.value), "the error must name the way out"
+
+
+def test_a_large_document_is_truncated_rather_than_failing(db):
+    """DECISIONS.md is over 130 KB. An oversized tool result is worse than a
+    truncated one: it can fail the call and leave the agent with nothing."""
+    got = mcp.platform_guide(db, "DECISIONS.md")
+    assert got["truncated"] is True
+    assert 0 < len(got["text"]) <= 80_000
+
+
+def test_the_agents_own_limits_are_in_its_prompt():
+    """The rules the agent must not overstep are instructions, not product
+    documentation, so they live in the prompt it runs under."""
+    from pathlib import Path
+    prompt = Path("agent/system-prompt.md").read_text(encoding="utf-8")
+    for essential in ("Persian", "escalate", "untrusted", "cannot"):
+        assert essential.lower() in prompt.lower(), (
+            f"the agent is never told about {essential}")
 
 
 def test_get_on_mcp_is_not_the_web_app():

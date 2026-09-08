@@ -14,8 +14,11 @@ import { grafanaConfig, dashboardCard, mountDashboard } from "../grafana.js";
 
 /* Where the full setup is written down. The panel can only show which fields
    exist; how to make Hermes listen, and what to paste where, is a document. */
-const MCP_DOC = "https://github.com/MMDBadCoder/MMD-DEV/blob/main/docs/support-agent/connect-hermes.md";
-const HOOK_DOC = "https://github.com/MMDBadCoder/MMD-DEV/blob/main/docs/support-agent/webhook-push.md";
+/* One document covers both halves of this tab: connecting an agent over MCP,
+   and the webhook below that wakes it. */
+const AGENT_DOC = "https://github.com/MMDBadCoder/MMD-DEV/blob/main/docs/AI-SUPPORT-AGENT.md";
+const MCP_DOC = AGENT_DOC;
+const HOOK_DOC = AGENT_DOC;
 
 export async function adminTicketsPage(params) {
   const _gf = await grafanaConfig();

@@ -1,6 +1,10 @@
-# Connecting Hermes to the MMD-DEV MCP server
+# Connecting an AI support agent
 
-Give a Hermes agent the ability to read and answer support tickets.
+Give a Hermes agent the ability to read and answer support tickets,
+then have it woken the moment a customer writes.
+
+Steps 1-4 connect it. Step 5 is optional and only changes how quickly
+it notices.
 
 Run these in one shell, as the user that owns Hermes, on the machine that
 runs it. Every block is self-contained and idempotent: re-run any of them, or
@@ -121,6 +125,61 @@ did not take. Then use it:
 hermes chat
 > Use mmd_support to list the open tickets and summarise them.
 ```
+
+---
+
+## Step 5 — Wake it on a new ticket (optional)
+
+Without this the agent only finds work when it looks. With it, the platform
+calls Hermes the moment a ticket is opened or a customer replies.
+
+**In Hermes' dashboard** (بله *Webhooks*), add a subscription. Note the route
+name and the key it generates for you. Then confirm the listener is up — it
+logs nothing when it starts, so the port is the only honest check:
+
+```bash
+ss -tln | grep 8644
+```
+
+Nothing there means the gateway is not running. It is a separate process from
+the dashboard: `hermes gateway run`, or let the platform install it, which it
+does once the webhook platform is enabled in `~/.hermes/config.yaml`.
+
+**In the panel**, **Admin → تیکت‌ها**, section *اعلان خودکار به عامل پشتیبانی*:
+
+| Field | Value |
+|---|---|
+| نشانی وب‌هوک | `http://<machine-ip>:8644/webhooks/<route>` |
+| کلید امضا | the key Hermes generated |
+
+Use the machine's **private** address (`10.42.0.x`). A published port works
+too, but it breaks silently if that port is ever reassigned, and the private
+one never leaves the host.
+
+Press **آزمایش بدون ذخیره**, then **ذخیره**. Testing does not save.
+
+| Result | Meaning |
+|---|---|
+| موفق (200) | Accepted and the signature verified. Save. |
+| 401 | The keys differ between the panel and Hermes. |
+| unreachable | Nothing listening — the gateway is not running. |
+
+A nudge that never arrives loses nothing: the ticket stays in the queue and
+the next check finds it. That is why this is optional, and why a broken agent
+cannot break ticket creation.
+
+### Why a stranger cannot fire it
+
+Every call carries `X-Webhook-Signature-V2` — HMAC-SHA256 over
+`timestamp.body` — with `X-Webhook-Timestamp` beside it. The timestamp is
+inside the signed material, so a captured request expires within five minutes
+instead of replaying forever. GitHub's `X-Hub-Signature-256` is deliberately
+**not** sent: Hermes checks it first and it signs the body alone, so including
+it would quietly discard the replay protection.
+
+The payload carries a ticket id and nothing else — no instructions, no
+customer text, no authority. A perfectly forged call can only make the agent
+look at a ticket, which it may do at any time anyway.
 
 ---
 
