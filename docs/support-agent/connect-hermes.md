@@ -2,27 +2,13 @@
 
 Give a Hermes agent the ability to read and answer support tickets.
 
-Run steps 2–5 in one shell, as the user that owns Hermes, on the machine that
+Run these in one shell, as the user that owns Hermes, on the machine that
 runs it. Every block is self-contained and idempotent: re-run any of them, or
 the whole page after a rebuild, and you end in the same place.
 
 ---
 
-## Step 1 — Get the address and the key
-
-**Admin → تیکت‌ها**, first card, *اتصال عامل هوش مصنوعی با MCP*. The key is
-masked; press the eye to reveal it, then copy.
-
-```
-https://mmd-ai.ir/mcp
-```
-
-**ساخت کلید تازه** on that card replaces the key and every agent using the old
-one stops working. Press it only when you mean to.
-
----
-
-## Step 2 — Check this machine can reach the platform
+## Step 1 — Check this machine can reach the platform
 
 ```bash
 curl -s -o /dev/null -w '%{http_code}\n' --max-time 15 https://mmd-ai.ir/mcp
@@ -31,11 +17,12 @@ curl -s -o /dev/null -w '%{http_code}\n' --max-time 15 https://mmd-ai.ir/mcp
 `405` — good, continue. That is the correct answer: the endpoint takes POST,
 so a GET is refused, and being refused proves it is reachable.
 
-`000` — stop, and see *If the machine cannot reach the platform*.
+`000` — stop. This machine cannot reach the platform; see the
+troubleshooting table for the one setting that fixes it.
 
 ---
 
-## Step 3 — Install the MCP client library
+## Step 2 — Install the MCP client library
 
 Hermes does not ship one, and it has to land in Hermes' own Python, not the
 system one. This block finds that interpreter from the launcher, so it works
@@ -62,9 +49,14 @@ that `mcp` 2.x removed and 2.x fails exactly like installing nothing.
 
 ---
 
-## Step 4 — Configure the connection
+## Step 3 — Configure the connection
 
-Paste the key from step 1 into the first line and run the whole block:
+The address and key are in **Admin → تیکت‌ها**, first card, *اتصال عامل هوش
+مصنوعی با MCP*. The key is masked — press the eye to reveal it, then copy.
+(**ساخت کلید تازه** there replaces it, and every agent using the old one stops
+working.)
+
+Paste it into the first line and run the whole block:
 
 ```bash
 KEY='paste-the-key-here'
@@ -102,7 +94,7 @@ by you.
 
 ---
 
-## Step 5 — Verify
+## Step 4 — Verify
 
 ```bash
 hermes mcp test mmd_support
@@ -122,7 +114,7 @@ Transport: HTTP → https://mmd-ai.ir/mcp
   export_customer_data  one customer's data, only while they have a ticket
 ```
 
-`Authorization: ***` with no visible characters means an empty token — step 4
+`Authorization: ***` with no visible characters means an empty token — step 3
 did not take. Then use it:
 
 ```bash
@@ -132,57 +124,18 @@ hermes chat
 
 ---
 
-## If the machine cannot reach the platform
-
-Only when step 2 printed `000`.
-
-Any ordinary VPS reaches `https://mmd-ai.ir/mcp`. A workspace **on the MMD
-host** cannot: workspaces are refused that host by design, and `mmd-ai.ir`
-resolves to its address, so `ping` and `curl` both fail. It is not a degraded
-mode — Hermes exits when an MCP server is unreachable, so the agent will not
-run at all.
-
-Either run Hermes elsewhere, or allow that one workspace. On the platform
-host, with the workspace's address:
-
-```bash
-echo 'HOST_HTTPS_ALLOWED_WORKSPACES="10.42.0.11"' | sudo tee -a /etc/mmd/host.env
-sudo bash host/30-network-nftables.sh
-```
-
-`/etc/mmd/host.env` is read by `host/config.sh`, so this survives re-runs and
-reboots; exporting the variable in a shell does not. The list is
-space-separated and empty by default. It opens port 443 — already served to
-the whole internet by nginx — plus ICMP so `ping` tells the truth; everything
-else stays refused for every workspace.
-
-Workspace addresses are in **Admin → کاربران**.
-
----
-
-## A rebuild undoes all of this
-
-A factory reset restores `~/.hermes/config.yaml` from the platform default, so
-`mcp_servers` is gone and the `mcp` package with it, and the model reverts to
-the **Admin → AI** default.
-
-Nothing warns you. The tells are an agent reporting no tools, calls failing
-with `HTTP 429` from a shared `:free` model, and a changed SSH host key. Re-run
-steps 3 and 4; that is why they are written to be idempotent.
-
----
-
 ## Troubleshooting
 
 | Symptom | Cause |
 |---|---|
-| `401`, and `Authorization: ***` with nothing masked | An empty token — the `${VAR}` form. Redo step 4. |
-| `401`, with `Bear***xxxx` shown | A real but wrong key. Copy it again from step 1. |
-| `-bash: : command not found` | `$PY` is unset in this shell. Re-run the whole step 3 block. |
+| `401`, and `Authorization: ***` with nothing masked | An empty token — the `${VAR}` form. Redo step 3. |
+| `401`, with `Bear***xxxx` shown | A real but wrong key. Copy it again from the panel. |
+| `-bash: : command not found` | `$PY` is unset in this shell. Re-run the whole step 2 block. |
 | `PermissionError: [Errno 13] ... '.'` | `ensurepip` in an unwritable directory. `cd "$HOME"` first. |
-| `requires HTTP transport but ... not available` | No `mcp` package, or 2.x. Step 3. |
+| `requires HTTP transport but ... not available` | No `mcp` package, or 2.x. Step 2. |
 | `returned Content-Type 'text/html'` | The URL is missing `/mcp`. |
-| `Connection failed`, no message | Step 2 fails on this machine. |
+| `Connection failed`, no message | Step 1 fails here. A workspace on the MMD host is refused that host by design; add its address to `HOST_HTTPS_ALLOWED_WORKSPACES` in `/etc/mmd/host.env` and re-run `host/30-network-nftables.sh`. |
+| Worked yesterday, now reports no tools | The machine was rebuilt, which restores the stock config. Re-run steps 2 and 3. |
 | Gateway starts then stops | Same cause: an MCP server it cannot reach. |
 
 ---

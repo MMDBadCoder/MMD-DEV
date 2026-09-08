@@ -45,22 +45,42 @@ def env(monkeypatch):
     return db, ws, calls
 
 
-def test_a_healthy_dashboard_is_not_touched(env):
-    """The regression itself: no provisioner call, so no restart."""
+def test_a_healthy_workspace_is_still_reconciled(env):
+    """The worker must NOT skip an installed workspace.
+
+    It cannot know whether a reconcile is needed: the customer can switch
+    Hermes' webhook platform on from its own dashboard, and that state lives
+    inside the machine. Skipping here once meant the gateway was never
+    installed for a customer who had enabled the webhook, and nothing said so.
+    """
     db, ws, calls = env
     ws.hermes_installed = True
     ws.hermes_dash_password = "pw"
     ws.hermes_error = None
-    ws.hermes_telegram_installed = False
-    ws.hermes_telegram_enabled = False
     db.commit()
 
     worker._hermes_install(db, ws)
-    assert calls == [], "a healthy dashboard must not be reconciled again"
+    assert [c["verb"] for c in calls] == ["service_hermes"]
+    assert calls[0]["install"] is False, "no reinstall, but still a reconcile"
 
-    # And still nothing on the pass after that, which is where a loop shows up.
-    worker._hermes_install(db, ws)
-    assert calls == []
+
+def test_the_dashboard_restart_is_conditional():
+    """Where the idempotency actually lives.
+
+    The worker reconciles every pass, so an unconditional `systemctl restart`
+    in the provisioner bounced every customer's dashboard every pass - and
+    Hermes mints a new session token on each start, so the page they had open
+    began answering 401 to its own API calls. The script must compare the unit
+    file and check whether it is running before restarting anything.
+    """
+    from pathlib import Path
+    src = Path("control/provisioner/provisioner.py").read_text(encoding="utf-8")
+    at = src.index("systemctl restart hermes-dashboard")
+    block = src[at - 1200:at + 200]
+    assert "is-active --quiet hermes-dashboard" in block, (
+        "the dashboard is restarted without checking whether it is running")
+    assert "changed=1" in block, (
+        "the unit file is replaced without comparing it to what is there")
 
 
 def test_an_uninstalled_dashboard_is_still_installed(env):
@@ -84,15 +104,13 @@ def test_a_recorded_error_is_retried(env):
     assert len(calls) == 1
 
 
-def test_toggling_telegram_reconciles(env):
-    """Intent changed, so the config must be rewritten even though it is
-    installed - otherwise the toggle appears to do nothing."""
+def test_a_powered_off_machine_is_left_alone(env):
+    """There is nowhere to install to, and the pass runs again on power-on."""
     db, ws, calls = env
     ws.hermes_installed = True
     ws.hermes_dash_password = "pw"
     ws.hermes_error = None
-    ws.hermes_telegram_installed = False
-    ws.hermes_telegram_enabled = True          # the customer just switched it on
+    ws.state = WorkspaceState.OFF
     db.commit()
     worker._hermes_install(db, ws)
-    assert len(calls) == 1
+    assert calls == []

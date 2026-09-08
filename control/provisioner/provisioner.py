@@ -1805,12 +1805,24 @@ def handle(req: dict) -> dict:
 
         rc, out, err = _run_split(
             ["incus", "exec", "ws", "--project", project, "--", "bash", "-lc",
-             "cat > /etc/systemd/system/hermes-dashboard.service && "
-             "chmod 0644 /etc/systemd/system/hermes-dashboard.service && "
-             "systemctl daemon-reload && "
+             # Restart ONLY when something actually changed, or when it is
+             # not running. This pass is a reconciler and runs repeatedly; an
+             # unconditional restart meant every customer's dashboard was
+             # bounced on every pass, and because Hermes mints a new session
+             # token on each start, the page they had open began answering 401
+             # to its own API calls. Comparing the unit file first makes a
+             # no-op pass genuinely a no-op.
+             "new=$(cat); old=$(cat /etc/systemd/system/hermes-dashboard.service "
+             "2>/dev/null); "
+             "if [ \"$new\" != \"$old\" ]; then "
+             "  printf '%s' \"$new\" > /etc/systemd/system/hermes-dashboard.service; "
+             "  chmod 0644 /etc/systemd/system/hermes-dashboard.service; "
+             "  systemctl daemon-reload; changed=1; "
+             "fi; "
              "systemctl enable hermes-dashboard >/dev/null 2>&1; "
-             "systemctl restart hermes-dashboard; "
-             "sleep 5; "
+             "if [ -n \"$changed\" ] || ! systemctl is-active --quiet hermes-dashboard; then "
+             "  systemctl restart hermes-dashboard; sleep 5; "
+             "fi; "
              "ss -tln | grep -c ':9119 ' | sed 's/^/listeners=/'; "
              "systemctl is-active hermes-dashboard; "
              "journalctl -u hermes-dashboard -n 15 --no-pager 2>/dev/null | tail -15"],
