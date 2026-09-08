@@ -8,6 +8,26 @@ import { renderBare, refreshMe } from "../main.js";
 
 const MIN_PW = 10;
 
+/* Where the bot lives. Built from the configured name so a rename is one
+   place, and shown on every screen that waits for a code. */
+const BALE_BOT = "mmd_ai_bot";
+const BALE_URL = `https://ble.ir/${BALE_BOT}`;
+
+/* Messages come through Bale, not SMS. A number that has never opened the bot
+   cannot be reached at all, so this explains the one prerequisite BEFORE the
+   customer waits for a code rather than after nothing arrives. */
+function baleSteps() {
+  return `<div class="note info" style="display:block;margin:0 0 12px">
+    <strong>${t("bale.link.title")}</strong>
+    <p class="tiny" style="margin:6px 0 0">${t("bale.link.why")}</p>
+    <p class="tiny" style="margin:8px 0 0">${t("bale.link.step1")}</p>
+    <p class="tiny" style="margin:2px 0 0">${t("bale.link.step2")}</p>
+    <p class="tiny" style="margin:2px 0 8px">${t("bale.link.step3")}</p>
+    <a class="btn sm" href="${esc(BALE_URL)}" target="_blank"
+       rel="noopener noreferrer">${t("bale.link.open")}</a>
+  </div>`;
+}
+
 function shell({ title, sub, fields, cta, altText, altHref, altLabel, msg }) {
   return `<div class="auth"><div class="auth-card">
     <div class="auth-head">
@@ -87,6 +107,7 @@ export function signInPage(_p, msg) {
         <p class="tiny" style="margin:-4px 0 12px"><a href="/forgot-password">${t("auth.forgot.link")}</a></p>
       </div>
       <div id="pane-sms" role="tabpanel" aria-labelledby="tab-sms" hidden>
+        ${baleSteps()}
         <div class="field"><label for="sms-phone">${t("auth.phone.label")}</label>
           <input id="sms-phone" class="ltr" dir="ltr" type="tel" inputmode="numeric"
                  autocomplete="tel" maxlength="11" placeholder="09123456789"></div>
@@ -159,6 +180,7 @@ export function forgotPasswordPage() {
     cta: t("auth.forgot.cta"),
     altText: t("auth.hasaccount"), altHref: "/signin", altLabel: t("auth.gosignin"),
     fields: `
+      ${baleSteps()}
       <div class="field"><label for="recovery-phone">${t("auth.phone.label")}</label>
         <input id="recovery-phone" class="ltr" dir="ltr" type="tel" inputmode="numeric"
                autocomplete="tel" maxlength="11" placeholder="09123456789"></div>
@@ -224,6 +246,7 @@ export function signUpPage() {
         <p class="tiny dim" style="margin:6px 0 0">${t("auth.password.hint")}</p></div>
       <div class="field"><label for="pw2">${t("auth.password.confirm")}</label>
         <input id="pw2" type="password" autocomplete="new-password"></div>
+      ${baleSteps()}
       <div class="btn-row" style="margin:4px 0 12px">
         <button type="button" class="btn" id="code-send">${t("auth.code.send")}</button>
       </div>

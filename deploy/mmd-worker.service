@@ -22,6 +22,7 @@ EnvironmentFile=/etc/mmd/api.env
 LoadCredential=openrouter:/etc/mmd/openrouter.key
 # The SMS provider key, worker-only for the same reason.
 LoadCredential=kavenegar:/etc/mmd/kavenegar.key
+LoadCredential=bale:/etc/mmd/bale.key
 ExecStart=/opt/mmd/venv/bin/python -m mmd.worker
 Restart=on-failure
 RestartSec=5

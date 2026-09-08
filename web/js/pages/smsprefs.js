@@ -42,6 +42,23 @@ export async function smsPrefsPage() {
   render(`<div class="page-head"><h1>${t("sms.title")}</h1>
       <p class="muted small" style="margin:0">${t("sms.sub")}</p></div>
 
+    ${/* First, because preferences below are meaningless while nothing can
+          reach this customer at all. */""}
+    <div class="card">
+      <h3>${t("bale.link.title")}</h3>
+      ${d.bale_linked
+        ? note("ok", t("bale.link.done"))
+        : `${note("bad", t("bale.link.pending"))}
+           <p class="muted small" style="max-width:74ch">${t("bale.link.why")}</p>
+           <p class="tiny dim" style="margin:8px 0 0">${t("bale.link.step1")}</p>
+           <p class="tiny dim" style="margin:2px 0 0">${t("bale.link.step2")}</p>
+           <div class="btn-row" style="margin-top:12px">
+             <a class="btn primary" target="_blank" rel="noopener noreferrer"
+                href="https://ble.ir/${esc(d.bale_bot || "mmd_ai_bot")}"
+                >${t("bale.link.open")}</a>
+           </div>`}
+    </div>
+
     <div class="card">
       <h3>${t("sms.credit.step.title")}</h3>
       <p class="muted small">${t("sms.credit.step.help")}</p>

@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session                 # noqa: E402
 
 from mmd import app as appmod                      # noqa: E402
 from mmd import sms as smslib                      # noqa: E402
-from mmd.models import (Base, CreditAccount, SmsMessage, User,  # noqa: E402
+from mmd.models import (BaleContact, Base, CreditAccount, SmsMessage, User,  # noqa: E402
                         UserStatus)
 from mmd.security import hash_password             # noqa: E402
 
@@ -35,6 +35,11 @@ def database():
                 password_hash=hash_password("x"), status=UserStatus.PENDING)
     db.add_all([admin, user]); db.commit()
     db.add_all([CreditAccount(user_id=admin.id), CreditAccount(user_id=user.id)])
+    # Both have opened the bot: delivery is only possible for a linked number,
+    # so a fixture without this would be exercising the unlinked path by
+    # accident and every send test would pass for the wrong reason.
+    db.add_all([BaleContact(phone=admin.phone, chat_id=1000000001),
+                BaleContact(phone=user.phone, chat_id=1000000002)])
     db.commit()
     return db, admin, user
 
@@ -87,7 +92,7 @@ def test_approval_queues_a_message_without_sending_it(monkeypatch):
     def explode(*_a, **_k):
         raise AssertionError("the API process must not send SMS itself")
 
-    monkeypatch.setattr(smslib, "send", explode)
+    monkeypatch.setattr(smslib.balelib, "send", explode)
     assert appmod.admin_approve(user.id, admin, db)["status"] == "approved"
 
     row = db.scalar(select(SmsMessage))
@@ -117,7 +122,7 @@ def test_an_unsendable_number_still_approves_the_account():
 def test_a_sent_message_records_the_provider_id(monkeypatch):
     db, admin, user = database()
     appmod.admin_approve(user.id, admin, db)
-    monkeypatch.setattr(smslib, "send", lambda *_a, **_k: "564905598")
+    monkeypatch.setattr(smslib.balelib, "send", lambda *_a, **_k: "564905598")
     row = smslib.due(db)[0]
     assert smslib.deliver(db, row) is True
     assert row.status == "sent" and row.provider_message_id == "564905598"
@@ -132,7 +137,7 @@ def test_a_failed_send_is_retried_with_backoff_then_given_up(monkeypatch):
     def refuse(*_a, **_k):
         raise smslib.SmsError("kavenegar refused: 411 receptor is invalid")
 
-    monkeypatch.setattr(smslib, "send", refuse)
+    monkeypatch.setattr(smslib.balelib, "send", refuse)
     row = smslib.due(db)[0]
 
     smslib.deliver(db, row)
@@ -315,19 +320,51 @@ def test_credit_step_is_configured_independently_per_customer(monkeypatch):
 
 
 # --- unrestricted delivery ------------------------------------------------
-def test_any_valid_customer_number_is_sent(monkeypatch):
+def test_any_linked_customer_number_is_sent(monkeypatch):
+    """No allowlist: whichever number a customer has, a linked one is sent to.
+
+    Delivery addresses the CHAT, not the phone - the phone only selects which
+    chat. Asserting on the chat id is what would catch a regression that sent
+    every message to the same person.
+    """
     db, admin, user = database()
     sent = []
-    monkeypatch.setattr(smslib, "send",
-                        lambda phone, *_a, **_k: sent.append(phone) or "1")
+    monkeypatch.setattr(smslib.balelib, "send",
+                        lambda chat_id, *_a, **_k: sent.append(chat_id) or "1")
 
     user.phone = "09121112222"
+    db.add(BaleContact(phone="09121112222", chat_id=1000000003))
     db.commit()
     appmod.admin_approve(user.id, admin, db)
     row = smslib.due(db)[0]
     assert smslib.deliver(db, smslib.due(db)[0]) is True
-    assert sent == ["09121112222"]
+    assert sent == [1000000003]
     assert row.status == "sent" and row.attempts == 1
+
+
+def test_a_number_that_never_opened_the_bot_is_parked_not_retried(monkeypatch):
+    """The state SMS never had, and the one that will surprise an operator.
+
+    Bale cannot message a number that has not written to the bot, so this is
+    permanent, not transient. Retrying would spend the attempt budget to reach
+    `failed`, burying "they never linked" under a generic error - and it must
+    not be reported as sent, because nobody received anything.
+    """
+    db, admin, user = database()
+    called = []
+    monkeypatch.setattr(smslib.balelib, "send",
+                        lambda *a, **k: called.append(a) or "1")
+
+    user.phone = "09121113333"          # linked to nothing
+    db.commit()
+    appmod.admin_approve(user.id, admin, db)
+    row = smslib.due(db)[0]
+
+    assert smslib.deliver(db, row) is False
+    assert row.status == "unlinked"
+    assert row.attempts == 0, "an unlinked number must not spend a retry"
+    assert called == [], "nothing may be sent for an unlinked number"
+    assert smslib.due(db) == [], "and it must not come back round the queue"
 
 
 # --- operator alerts --------------------------------------------------------

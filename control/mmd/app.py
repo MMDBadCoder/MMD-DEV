@@ -73,6 +73,15 @@ SAMPLE_SECONDS = 20
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
     logging.basicConfig(level=logging.INFO)
+    # httpx logs every request at INFO, including the full URL. Both providers
+    # this platform talks to put their credential IN THE PATH - Bale's bot token
+    # and Kavenegar's key - so leaving that at INFO writes a live secret into the
+    # journal on every call, and the Bale poll makes that every ten seconds.
+    # Nothing is lost by silencing it: a failure surfaces as our own log line with
+    # the provider's message, and the URL was never the useful part.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+
     init_db()
     _backfill_usernames()
     yield
@@ -788,10 +797,18 @@ def login(body: LoginBody, response: Response,
 
 
 @app.get("/api/account/sms")
-def sms_preferences_get(user: User = Depends(current_user)) -> dict:
+def sms_preferences_get(user: User = Depends(current_user),
+                        db: Session = Depends(get_session)) -> dict:
     """Which optional messages this customer receives, all on by default."""
     return {"prefs": smslib.preferences(user),
             "kinds": smslib.OPTIONAL_KINDS,
+            # Whether anything can reach this customer at all. Messages go
+            # through Bale now, and a number that has never opened the bot has
+            # no chat to send to - so this page must be able to say so rather
+            # than list preferences for messages that cannot arrive.
+            "bale_linked": smslib.chat_for(db, user.phone) is not None
+                           if user.phone else False,
+            "bale_bot": CONFIG.bale_bot,
             "credit_step_toman": (user.sms_credit_step_toman
                                   or smslib.DEFAULT_CREDIT_STEP_TOMAN),
             "credit_step_min": smslib.MIN_CREDIT_STEP_TOMAN,
@@ -828,7 +845,7 @@ def sms_preferences_put(body: SmsPreferences, user: User = Depends(current_user)
     # change, which is why this is not an in-place mutation.
     db.commit()
     svc.audit(db, user.id, "sms_preferences", user.username)
-    return sms_preferences_get(user)
+    return sms_preferences_get(user, db)
 
 
 @app.post("/api/auth/logout")

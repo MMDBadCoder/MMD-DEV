@@ -37,8 +37,9 @@ from typing import Callable
 import httpx
 from sqlalchemy import select
 
+from . import bale as balelib
 from .config import CONFIG
-from .models import SmsMessage
+from .models import BaleContact, SmsMessage
 
 log = logging.getLogger("mmd.sms")
 
@@ -277,17 +278,37 @@ def due(db, now: datetime | None = None, limit: int = 20) -> list[SmsMessage]:
         .limit(limit)))
 
 
+def chat_for(db, phone: str) -> int | None:
+    """The Bale chat that reaches this number, or None if it has never linked."""
+    row = db.scalar(select(BaleContact).where(BaleContact.phone == phone))
+    return row.chat_id if row else None
+
+
 def deliver(db, row: SmsMessage, now: datetime | None = None) -> bool:
-    """Send one queued row and record what happened. Never raises."""
+    """Send one queued row and record what happened. Never raises.
+
+    Delivery goes through Bale. A number that has never opened the bot has no
+    chat to send to, and that is a permanent condition rather than a transient
+    one: retrying cannot conjure a chat, and burning the attempt budget on it
+    would only bury the real reason under "failed". It is parked as
+    `unlinked`, where the operator can see exactly who is unreachable and why.
+    """
     now = now or datetime.now(UTC)
+    chat_id = chat_for(db, row.phone)
+    if chat_id is None:
+        row.status = "unlinked"
+        row.error = "the number has not opened the bot"
+        db.commit()
+        log.info("bale %s not sent: %s has no linked chat", row.id, row.phone)
+        return False
     row.attempts += 1
     try:
-        row.provider_message_id = send(row.phone, row.body)
+        row.provider_message_id = balelib.send(chat_id, row.body)
     except Exception as e:  # noqa: BLE001
         row.error = str(e)[:255]
         if row.attempts >= MAX_ATTEMPTS:
             row.status = "failed"
-            log.warning("sms %s permanently failed: %s", row.id, row.error)
+            log.warning("bale %s permanently failed: %s", row.id, row.error)
         else:
             delay = BACKOFF[min(row.attempts - 1, len(BACKOFF) - 1)]
             row.next_attempt_at = now + timedelta(seconds=delay)
@@ -295,5 +316,5 @@ def deliver(db, row: SmsMessage, now: datetime | None = None) -> bool:
         return False
     row.status, row.sent_at, row.error = "sent", now, None
     db.commit()
-    log.info("sms %s sent to %s (%s)", row.id, row.phone, row.kind)
+    log.info("bale %s sent to %s (%s)", row.id, row.phone, row.kind)
     return True

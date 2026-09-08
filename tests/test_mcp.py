@@ -174,12 +174,14 @@ def test_every_column_is_classified_as_exported_or_redacted(db):
             continue
         known = (table in customerdata.BY_USER or table in customerdata.BY_ACTOR
                  or table in customerdata.BY_AUTHOR
-                 or table in customerdata.BY_WORKSPACE or table == "users")
+                 or table in customerdata.BY_WORKSPACE
+                 or table in customerdata.BY_PHONE or table == "users")
         if not known:
             unclassified.append(table)
     assert not unclassified, (
         f"tables nobody classified for export: {unclassified}. Add each to "
-        f"BY_USER/BY_ACTOR/BY_AUTHOR/BY_WORKSPACE or to NOT_PER_CUSTOMER.")
+        f"BY_USER/BY_ACTOR/BY_AUTHOR/BY_WORKSPACE/BY_PHONE or to "
+        f"NOT_PER_CUSTOMER.")
 
 
 def test_the_export_explains_itself(db):

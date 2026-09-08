@@ -12,6 +12,7 @@ EnvironmentFile=/etc/mmd/api.env
 # The one place outside the worker that holds the SMS key. It has to send
 # directly, because the process that drains the outbox is the one that stopped.
 LoadCredential=kavenegar:/etc/mmd/kavenegar.key
+LoadCredential=bale:/etc/mmd/bale.key
 ExecStart=/opt/mmd/venv/bin/python -m mmd.watchdog
 # A stalled worker exits 1 by design; that is a report, not a unit failure.
 SuccessExitStatus=0 1

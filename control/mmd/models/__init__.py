@@ -494,6 +494,28 @@ class Operation(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class BaleContact(Base):
+    """A phone number that has opened the bot, and the chat it opened.
+
+    Keyed by PHONE rather than by user, because linking happens before an
+    account exists: someone signing up shares their contact with the bot and
+    only then fills the form in. A row here is the sole proof a number is
+    reachable, and its absence is why a message may be undeliverable no matter
+    how correct everything else is.
+
+    `chat_id` is unique as well: one Bale account is one person, so re-sharing
+    a different number moves the link rather than creating a second one.
+    """
+    __tablename__ = "bale_contacts"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    phone: Mapped[str] = mapped_column(String(11), unique=True, index=True)
+    chat_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
+    # What Bale calls them; only ever shown to an operator, never trusted.
+    display_name: Mapped[str | None] = mapped_column(String(120))
+    linked_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC))
+
+
 class SmsMessage(Base):
     """One outbound SMS, queued by whoever caused it and sent by the worker.
 

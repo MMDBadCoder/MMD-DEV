@@ -100,6 +100,16 @@ class Config:
     # as the same user, so a file the web app can read is a file it holds.
     kavenegar_key: str = field(default_factory=lambda: _secret(
         "kavenegar", "MMD_KAVENEGAR_KEY"))
+    # The Bale bot token. Worker-only for the same reason as the two keys
+    # above: mmd-api runs as the same user, so a file the web app can read is
+    # a file it holds, and this token can message every linked customer.
+    bale_token: str = field(default_factory=lambda: _secret(
+        "bale", "MMD_BALE_TOKEN"))
+    # The bot customers open to link their account. Not a secret - it is
+    # printed on the sign-up page - but it belongs beside the token so the two
+    # cannot drift apart.
+    bale_bot: str = field(default_factory=lambda: _env(
+        "MMD_BALE_BOT", "mmd_ai_bot"))
     # The dedicated line messages are sent from. Not a secret; an account with a
     # single line may leave it empty and let Kavenegar choose.
     sms_sender: str = field(default_factory=lambda: _env(

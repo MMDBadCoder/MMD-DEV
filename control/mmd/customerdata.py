@@ -59,9 +59,14 @@ BY_USER = {"credit_accounts", "credit_transactions", "notifications",
 BY_ACTOR = {"audit_log"}
 BY_AUTHOR = {"ticket_messages"}
 BY_WORKSPACE = {"ai_usage_marks", "exposed_ports", "ssh_keys", "usage_samples"}
+# Keyed by phone rather than by account, because a Bale contact is linked
+# before an account exists - that is the whole point of the sign-up flow. It is
+# still the customer's own data, so it is exported rather than skipped.
+BY_PHONE = {"bale_contacts"}
 
 DESCRIPTIONS = {
     "users": "The account itself: username, contact phone, status, when it was approved.",
+    "bale_contacts": "The Bale chat that receives this account's messages, and when it was linked.",
     "credit_accounts": "Current balance in integer micro-Toman. Divide by 1,000,000 for Toman.",
     "credit_transactions": "Every money movement. Negative amounts are charges, positive are grants. `kind` says what caused it.",
     "tickets": "Support tickets this customer opened.",
@@ -166,6 +171,10 @@ def export(db: Session, username: str) -> dict:
             where = "workspace_id = ANY(:w)" if db.get_bind().dialect.name == "postgresql" \
                 else "workspace_id IN (%s)" % ",".join(str(i) for i in ws_ids)
             params = {"w": ws_ids} if db.get_bind().dialect.name == "postgresql" else {}
+        elif table in BY_PHONE:
+            if not user.phone:
+                continue
+            where, params = "phone = :p", {"p": user.phone}
         elif table == "users":
             where, params = "id = :u", {"u": user.id}
         else:

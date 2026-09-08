@@ -29,6 +29,7 @@ from sqlalchemy import case, delete, func, or_, select, update
 
 from . import backup as backuplib
 from . import metrics as m
+from . import bale as balelib
 from . import sms as smslib
 from . import hermes
 from . import notifications
@@ -1459,16 +1460,22 @@ def alerts_once() -> None:
 
 
 def sms_once() -> None:
-    """Send whatever is queued in the SMS outbox.
+    """Take in new Bale links, then send whatever is queued.
 
-    Only this process holds the provider key, so this is the only place a
-    message can actually leave. Failures are recorded on the row and retried
-    with backoff rather than raised - one unreachable number must not stop the
-    rest of the queue.
+    In that order on purpose. A customer who has just shared their number
+    expects the code they are waiting for, and polling first means the link
+    exists by the time the queue is walked - rather than the message being
+    parked as `unlinked` and waiting a whole tick for a link that had already
+    arrived.
+
+    Only this process holds the bot token, so this is the only place a message
+    can leave. Failures are recorded on the row and retried with backoff
+    rather than raised: one unreachable customer must not stop the queue.
     """
-    if not CONFIG.kavenegar_key:
+    if not CONFIG.bale_token:
         return
     with SessionLocal() as db:
+        balelib.poll(db)
         for row in smslib.due(db):
             smslib.deliver(db, row)
 
@@ -1509,6 +1516,14 @@ m.inc("mmd_workspace_state_adoptions_total", {"from": "error", "to": "on"}, 0)
 async def main() -> None:
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    # httpx logs every request at INFO, including the full URL. Both providers
+    # this platform talks to put their credential IN THE PATH - Bale's bot token
+    # and Kavenegar's key - so leaving that at INFO writes a live secret into the
+    # journal on every call, and the Bale poll makes that every ten seconds.
+    # Nothing is lost by silencing it: a failure surfaces as our own log line with
+    # the provider's message, and the URL was never the useful part.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
     init_db()
     log.info("worker started")
     tick = 0
