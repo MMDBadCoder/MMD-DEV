@@ -38,8 +38,11 @@ export async function adminOpenRouterPage() {
       ${note("info", t("adm.or.model.note"))}
     </div>
 
-    <div class="btn-row"><button class="btn primary" id="or-save">${t("common.save")}</button></div></div>
-    <div id="or-msg"></div>
+    ${/* .btn-row carries no margin of its own, so without this the button sits
+          flush against the card above and whatever follows it. */""}
+    <div class="btn-row" style="margin:16px 0"><button class="btn primary"
+      id="or-save">${t("common.save")}</button></div></div>
+    <div id="or-msg" style="margin-bottom:16px"></div>
 
     ${dashboardCard(_gf, "openrouter")}`);
   mountDashboard();

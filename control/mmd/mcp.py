@@ -181,6 +181,28 @@ def export_customer_data(db: Session, username: str) -> dict:
     return data
 
 
+# What the agent may read. Not every document in the repository: the rest are
+# written for whoever maintains this platform, not for someone answering a
+# customer.
+#
+# DECISIONS.md is the pointed exclusion. It is 135 KB of design rationale
+# including how each security boundary works and why - genuinely useful to an
+# engineer, and exactly the thing that must not be paraphrased into a reply to
+# a stranger. The agent has no way to judge which half of a sentence is safe to
+# repeat, so it is not given the chance.
+#
+# The others - development setup, metrics, the design system, test invariants,
+# and this agent's own setup guide - answer no question a customer has ever
+# asked.
+AGENT_DOCS = (
+    "README.md",              # what the product is
+    "docs/ARCHITECTURE.md",   # how the pieces work
+    "docs/BILLING.md",        # charging, top-ups, what costs what
+    "docs/OPERATIONS.md",     # what an operator can and cannot do
+    "docs/API.md",            # the interface a customer drives
+)
+
+
 def platform_guide(db: Session, name: str = "") -> dict:
     """The project's own documentation, read from the repository at call time.
 
@@ -197,10 +219,7 @@ def platform_guide(db: Session, name: str = "") -> dict:
     """
     from pathlib import Path
     root = Path(__file__).resolve().parents[2]
-    found = sorted(root.joinpath("docs").glob("*.md"))
-    readme = root / "README.md"
-    if readme.is_file():
-        found.insert(0, readme)
+    found = [p for p in (root / n for n in AGENT_DOCS) if p.is_file()]
 
     wanted = (name or "").strip()
     if not wanted:

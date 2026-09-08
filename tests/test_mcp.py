@@ -264,22 +264,71 @@ def test_an_unknown_document_says_how_to_find_the_right_one(db):
     assert "platform_guide" in str(e.value), "the error must name the way out"
 
 
-def test_a_large_document_is_truncated_rather_than_failing(db):
-    """DECISIONS.md is over 130 KB. An oversized tool result is worse than a
-    truncated one: it can fail the call and leave the agent with nothing."""
+def test_internal_documents_are_not_offered(db):
+    """DECISIONS.md is the one that matters here.
+
+    It is 135 KB of design rationale, including how each security boundary
+    works and why. Useful to an engineer; exactly the thing that must not be
+    paraphrased into a reply to a stranger. The agent cannot judge which half
+    of a sentence is safe to repeat, so it is not given the chance - and the
+    same goes for the development, metrics and test documents, which answer no
+    question a customer has ever asked.
+    """
+    names = {d["name"] for d in mcp.platform_guide(db)["documents"]}
+    for internal in ("DECISIONS.md", "DEVELOPMENT.md", "METRICS.md",
+                     "TEST-INVARIANTS.md", "DESIGN-SYSTEM.md"):
+        assert internal not in names, f"{internal} is offered to the agent"
+
+    # And not reachable by asking for it directly either.
+    with pytest.raises(mcp.McpError):
+        mcp.platform_guide(db, "DECISIONS.md")
+
+
+def test_a_large_document_is_truncated_rather_than_failing(db, monkeypatch):
+    """An oversized tool result is worse than a truncated one: it can fail the
+    call outright and leave the agent with nothing."""
+    monkeypatch.setattr(mcp, "AGENT_DOCS", ("docs/DECISIONS.md",))
     got = mcp.platform_guide(db, "DECISIONS.md")
     assert got["truncated"] is True
     assert 0 < len(got["text"]) <= 80_000
 
 
-def test_the_agents_own_limits_are_in_its_prompt():
-    """The rules the agent must not overstep are instructions, not product
-    documentation, so they live in the prompt it runs under."""
+def test_the_answering_policy_lives_in_the_skill():
+    """The rules an agent must not overstep are instructions, not product
+    documentation - so they travel with the agent, not in the docs the
+    platform_guide serves."""
+    from pathlib import Path
+    skill = Path("agent/skills/mmd-support/SKILL.md").read_text(encoding="utf-8")
+    for essential in ("Persian", "escalate", "untrusted", "off-host backup",
+                      "Top-ups are manual"):
+        assert essential.lower() in skill.lower(), (
+            f"the skill never tells the agent about {essential}")
+
+
+def test_the_skill_is_loadable_by_hermes():
+    """Hermes probes each subdirectory of the skills path for SKILL.md, and
+    reads `name` and `description` from its frontmatter. A skill missing
+    either is discovered but never surfaced."""
+    from pathlib import Path
+    text = Path("agent/skills/mmd-support/SKILL.md").read_text(encoding="utf-8")
+    assert text.startswith("---\n"), "no YAML frontmatter"
+    front = text.split("---", 2)[1]
+    assert "name: mmd-support" in front
+    assert "description:" in front
+
+
+def test_the_prompt_covers_running_unattended():
+    """The one thing the skill cannot know: nobody is reading the transcript.
+
+    Without this an agent asks a clarifying question, or narrates, or waits
+    for more work - each of which burns a scheduled run and answers nobody.
+    """
     from pathlib import Path
     prompt = Path("agent/system-prompt.md").read_text(encoding="utf-8")
-    for essential in ("Persian", "escalate", "untrusted", "cannot"):
+    assert "mmd-support" in prompt, "the prompt never points at the skill"
+    for essential in ("unattended", "stop", "nothing in the queue"):
         assert essential.lower() in prompt.lower(), (
-            f"the agent is never told about {essential}")
+            f"the prompt never mentions {essential}")
 
 
 def test_get_on_mcp_is_not_the_web_app():

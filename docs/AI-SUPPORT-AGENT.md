@@ -3,8 +3,8 @@
 Give a Hermes agent the ability to read and answer support tickets,
 then have it woken the moment a customer writes.
 
-Steps 1-4 connect it. Step 5 is optional and only changes how quickly
-it notices.
+Steps 1-4 connect it, step 5 teaches it how to answer, and step 6 is
+optional and only changes how quickly it notices.
 
 Run these in one shell, as the user that owns Hermes, on the machine that
 runs it. Every block is self-contained and idempotent: re-run any of them, or
@@ -128,7 +128,53 @@ hermes chat
 
 ---
 
-## Step 5 — Wake it on a new ticket (optional)
+## Step 5 — Give it the skill and the prompt
+
+Connected, the agent can reach the tickets. It still does not know how to
+answer one — what may be promised, when to escalate, or that nobody is reading
+its transcript. Two files supply that, and without them the agent will invent
+its own policy.
+
+**The skill.** Hermes discovers skills by probing each subdirectory of
+`~/.hermes/skills/` for a `SKILL.md`, so it is a copy:
+
+```bash
+mkdir -p ~/.hermes/skills
+cp -r /path/to/MMD-DEV/agent/skills/mmd-support ~/.hermes/skills/
+hermes skills list
+```
+
+`mmd-support` in the output means it was found. It carries the procedure, the
+answering policy, the things that must never be promised, and the escalation
+rules — and it tells the agent to read a document from `platform_guide` **once
+per session** and answer the rest of the queue from what it already has, which
+is where most of the token cost otherwise goes.
+
+**The prompt.** Copy `agent/system-prompt.md` into Hermes as the system
+prompt. It is deliberately short: it points at the skill for everything about
+answering, and covers only what the skill cannot know — that the agent is run
+unattended, so it should do one pass and stop rather than narrate, ask
+questions nobody will read, or wait for more work.
+
+Attach the skill to whatever runs the agent:
+
+```bash
+# on a schedule
+hermes cron add support "Answer any waiting MMD-DEV tickets." \
+  --schedule "*/5 * * * *" --skills mmd-support
+
+# or on the webhook route from step 6
+hermes webhook subscribe mmd-ticket --skills mmd-support \
+  --prompt "A customer is waiting. Answer the queue." --deliver log
+```
+
+Either is enough on its own. The schedule cannot be missed; the webhook is
+faster. Running both is fine — a ticket already answered in one pass is not
+answered twice.
+
+---
+
+## Step 6 — Wake it on a new ticket (optional)
 
 Without this the agent only finds work when it looks. With it, the platform
 calls Hermes the moment a ticket is opened or a customer replies.
