@@ -266,6 +266,44 @@ def send(phone: str, body: str, *, key: str = "", sender: str = "") -> str:
     return str((entries[0] or {}).get("messageid") or "") if entries else ""
 
 
+# How far back a parked message is still worth sending once the number links.
+# A day is generous for an alert and far too long for a code, which is why the
+# codes are excluded outright rather than given a shorter window.
+RELINK_WINDOW = timedelta(hours=24)
+
+
+def requeue_after_linking(db, now: datetime | None = None) -> int:
+    """Return still-useful `unlinked` messages to the queue. Count requeued.
+
+    Delivery parks a message when the number has never opened the bot, which
+    is permanent until they do - so nothing retried it, and linking afterwards
+    did not reconsider it. A customer who linked five minutes after signing up
+    never received the alert that was waiting for them.
+
+    Auth codes are deliberately NOT requeued. A verification code is valid for
+    three minutes; sending a stale one invites the customer to type something
+    that will be refused, which is worse than sending nothing. Those need an
+    explicit resend, which the sign-in page already offers.
+    """
+    now = now or datetime.now(UTC)
+    stale = [k for k, t in CATALOGUE.items() if t.category == "auth"]
+    rows = list(db.scalars(
+        select(SmsMessage)
+        .where(SmsMessage.status == "unlinked",
+               SmsMessage.created_at >= now - RELINK_WINDOW,
+               SmsMessage.kind.notin_(stale))))
+    requeued = 0
+    for row in rows:
+        if chat_for(db, row.phone) is None:
+            continue                      # still unreachable; leave it parked
+        row.status, row.error, row.next_attempt_at = "queued", None, now
+        requeued += 1
+    if requeued:
+        db.commit()
+        log.info("bale: requeued %s message(s) after linking", requeued)
+    return requeued
+
+
 def due(db, now: datetime | None = None, limit: int = 20) -> list[SmsMessage]:
     now = now or datetime.now(UTC)
     return list(db.scalars(

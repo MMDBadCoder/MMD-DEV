@@ -431,3 +431,55 @@ def test_the_agent_cannot_open_or_close_a_ticket(db):
     for forbidden in ("closed", "open", "in_progress"):
         with pytest.raises(mcp.McpError):
             mcp.reply_to_ticket(db, tk.id, "x", status=forbidden)
+
+
+def test_a_malformed_request_is_a_protocol_error_not_a_crash(db):
+    """These arrive from a language model and from the open internet.
+
+    `null`, a list of numbers, a non-object `params` - none has `.get`, so an
+    AttributeError became a 500: the server looking broken for a request that
+    was merely malformed, and telling the caller nothing it could act on.
+    """
+    import asyncio
+    for bad in (None, [1, 2], "hello", 7):
+        out = asyncio.run(mcp.handle(db, bad))
+        assert out and "error" in out, f"{bad!r} did not produce a protocol error"
+        assert out["error"]["code"] == -32600
+
+    for bad_params in ("nope", [1], 3):
+        out = asyncio.run(mcp.handle(db, {"jsonrpc": "2.0", "id": 1,
+                                          "method": "tools/list",
+                                          "params": bad_params}))
+        assert out["error"]["code"] == -32602
+
+
+def test_a_non_numeric_ticket_id_is_a_tool_error(db):
+    """A model writes these arguments, so it will eventually write prose."""
+    import asyncio
+    out = asyncio.run(mcp.handle(db, {
+        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {"name": "reply_to_ticket",
+                   "arguments": {"ticket_id": "the first one", "body": "x"}}}))
+    text = out["result"]["content"][0]["text"]
+    assert "ticket_id" in text, "the agent is not told which argument was wrong"
+
+
+def test_the_bot_never_adopts_a_customer_account(db):
+    """Reserved now, but an account registered before it was could still be
+    here - and adopting it hands a customer the agent's identity."""
+    from mmd.models import User, UserStatus
+    from mmd.security import hash_password
+
+    db.add(User(username=mcp.BOT_USERNAME, full_name="impostor",
+                phone="09120009999", password_hash=hash_password("known"),
+                status=UserStatus.APPROVED))
+    db.commit()
+    with pytest.raises(mcp.McpError):
+        mcp.bot_account(db)
+
+
+def test_the_bot_name_cannot_be_registered():
+    from mmd import usernames
+    for name in ("support-agent", "supportagent"):
+        with pytest.raises(usernames.UsernameError):
+            usernames.validate(name)

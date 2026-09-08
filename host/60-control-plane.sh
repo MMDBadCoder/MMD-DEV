@@ -95,13 +95,56 @@ ENV
   chown root:"$MMD_USER" /etc/mmd/api.env
 fi
 
+# --- credentials the units load ------------------------------------------
+# systemd treats a missing LoadCredential source as fatal, so a unit whose
+# credential file does not exist refuses to start at all. mmd-api declares the
+# MCP token and mmd-worker the Bale one, and neither was created here - so a
+# rebuilt host came up with no API and no billing worker, for want of two
+# files.
+#
+# The MCP token is ours to mint, so it is generated. Only ever created, never
+# overwritten: rotating it is a deliberate act from the panel, and clobbering
+# it on every deploy would silently disconnect every configured agent.
+if [ ! -f /etc/mmd/mcp.key ]; then
+  log "generating /etc/mmd/mcp.key"
+  openssl rand -hex 32 > /etc/mmd/mcp.key
+fi
+chmod 400 /etc/mmd/mcp.key; chown root:root /etc/mmd/mcp.key
+
+# The rest come from outside and cannot be generated: a Bale bot token from
+# BotFather, an OpenRouter management key, a Kavenegar key. An empty file is
+# created so the unit starts; each caller reads empty as "not configured" and
+# declines to send rather than crashing, which is the honest state until an
+# operator pastes the value in.
+#
+# Every credential any unit declares belongs in this list. Two were missing
+# for far longer than the two added with Bale, and the symptom is the same
+# each time: a rebuilt host with a unit that will not start, and a message
+# about a credential rather than about what is broken.
+for cred in bale openrouter kavenegar; do
+  if [ ! -f "/etc/mmd/${cred}.key" ]; then
+    : > "/etc/mmd/${cred}.key"
+    log "NOTE: /etc/mmd/${cred}.key is empty - paste the credential in,"
+    log "      then restart the units that use it"
+  fi
+  chmod 400 "/etc/mmd/${cred}.key"; chown root:root "/etc/mmd/${cred}.key"
+done
+
 # --- code + units --------------------------------------------------------
 install -d -m 0755 /opt/mmd
 # `image` is needed at RUNTIME, not just at build time: the provisioner runs
 # image/apt-fixups.sh inside a workspace to repair its apt configuration, and
 # resolves that path relative to its own installed location.
 rm -rf /opt/mmd/control /opt/mmd/workspace /opt/mmd/host /opt/mmd/web /opt/mmd/image
+rm -rf /opt/mmd/docs /opt/mmd/support-agent
 cp -r "$REPO/control" "$REPO/workspace" "$REPO/host" "$REPO/web" "$REPO/image" /opt/mmd/
+# The MCP `platform_guide` tool serves these from the installed tree, so a
+# deploy that copied only code left the support agent answering from documents
+# that were not there - or, worse, from stale ones a later deploy never
+# refreshed. support-agent/ travels with them so the skill and prompt an
+# operator installs are the ones this release shipped.
+cp -r "$REPO/docs" "$REPO/support-agent" /opt/mmd/
+cp "$REPO/README.md" /opt/mmd/README.md
 # Mount point for the read-only view of the operator's Claude Code sign-in.
 # systemd will not create a missing bind-mount destination for us.
 install -d -m 0700 /var/lib/mmd/host-claude/.claude

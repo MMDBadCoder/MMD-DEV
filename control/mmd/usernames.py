@@ -34,6 +34,10 @@ RESERVED = {
     "localhost", "mmd", "mmddev", "openrouter", "anthropic", "system",
     "ssh", "rdp", "terminal", "gateway", "proxy", "registry", "health",
     "monitor", "monitoring", "storage", "backup",
+    # The AI support agent posts under this name. If a customer registered it
+    # first, bot_account() would adopt their account rather than create one -
+    # handing them the agent's identity, and a password they know for it.
+    "support-agent", "supportagent",
 }
 
 

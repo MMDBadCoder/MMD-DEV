@@ -42,9 +42,11 @@ from .incus.client import IncusClient, IncusConfig, IncusError
 from .incus.metrics import MetricsClient
 from .openrouter import OpenRouter, OpenRouterError
 from .billing.pricing import MICRO
-from .models import (AiUsageMark, AuditLog, CreditAccount, CreditTransaction,
+from .models import (AiUsageMark, AuditLog, BaleContact, CreditAccount,
+                     CreditTransaction,
                      ExposedPort, Notification, Operation, PortKind, SshKey, Ticket,
-                     Setting, TicketStatus, TicketMessage, UsageSample, User, UserStatus,
+                     Setting, SmsMessage, TicketStatus, TicketMessage,
+                     UsageSample, User, UserStatus,
                      OpenRouterAccount, Workspace, WorkspaceState)
 
 UTC = timezone.utc
@@ -954,6 +956,17 @@ def _purge_account(db, op: Operation) -> None:
     db.execute(delete(CreditAccount).where(CreditAccount.user_id == user.id))
     db.execute(delete(Notification).where(Notification.user_id == user.id))
 
+    # Keyed by phone, not by account, so neither is reached by a user_id sweep
+    # and both survived a full deletion. The Bale link is the worse of the two:
+    # left behind, it keeps delivering to that chat, so somebody who later
+    # registers the same number inherits a stranger's delivery mapping and
+    # receives their codes. The message log holds the number and every body
+    # ever sent to it, which is not erasure either.
+    if user.phone:
+        db.execute(delete(BaleContact).where(BaleContact.phone == user.phone))
+        db.execute(delete(SmsMessage).where(SmsMessage.phone == user.phone))
+    db.execute(delete(SmsMessage).where(SmsMessage.user_id == user.id))
+
     targets = [user.username]
     if ws:
         targets.append(ws.incus_project)
@@ -1473,6 +1486,10 @@ def sms_once() -> None:
         return
     with SessionLocal() as db:
         balelib.poll(db)
+        # Between the two: a link that just arrived makes messages parked as
+        # unreachable deliverable again, and this is the only thing that
+        # reconsiders them.
+        smslib.requeue_after_linking(db)
         for row in smslib.due(db):
             smslib.deliver(db, row)
 

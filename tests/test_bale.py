@@ -194,3 +194,21 @@ def test_the_bot_token_is_never_logged():
         src = Path("control/mmd") .joinpath(name).read_text(encoding="utf-8")
         assert 'logging.getLogger("httpx").setLevel(logging.WARNING)' in src, (
             f"{name} lets httpx log request URLs, which contain the bot token")
+
+
+def test_deleting_an_account_removes_its_bale_link(db, quiet):
+    """Both are keyed by phone, so neither is reached by a user_id sweep.
+
+    Left behind, the link keeps delivering to that chat - so somebody who
+    later registers the same number inherits a stranger's delivery mapping and
+    receives their codes. The message log holds the number and every body ever
+    sent to it, which is not erasure either.
+    """
+    from pathlib import Path
+    src = Path("control/mmd/worker.py").read_text(encoding="utf-8")
+    at = src.index("def _purge_account")
+    block = src[at:at + 4000]
+    assert "delete(BaleContact).where(BaleContact.phone" in block, (
+        "account deletion leaves the Bale link behind")
+    assert "delete(SmsMessage).where(SmsMessage.phone" in block, (
+        "account deletion leaves the message log behind")

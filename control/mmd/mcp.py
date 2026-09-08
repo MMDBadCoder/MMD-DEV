@@ -73,6 +73,14 @@ def bot_account(db: Session) -> User:
     authenticate as it even if the row is reachable another way.
     """
     bot = db.scalar(select(User).where(User.username == BOT_USERNAME))
+    if bot is not None and (bot.password_hash != "!" or bot.phone):
+        # The name is reserved now, but an account registered before it was
+        # could still be sitting here - and adopting it would hand a customer
+        # the agent's identity, with a password they know for it. The real
+        # bot row is unmistakable: an unusable password and no phone.
+        raise McpError(-32603,
+                       f"{BOT_USERNAME!r} is a customer account, not the "
+                       f"support agent. Rename it before running the agent.")
     if bot is None:
         bot = User(username=BOT_USERNAME, full_name="Support agent",
                    password_hash="!", status=UserStatus.APPROVED,
@@ -365,9 +373,18 @@ async def handle(db: Session, request: dict, db_factory=None) -> dict | None:
     the request's. Keeping the signature spares every caller a rewrite when
     one arrives.
     """
+    # A JSON-RPC message must be an object. `null`, a list member that is a
+    # string, a bare number - all reach here and none has `.get`, so an
+    # AttributeError became a 500: the server looking broken for a request
+    # that was simply malformed.
+    if not isinstance(request, dict):
+        return {"jsonrpc": "2.0", "id": None,
+                "error": {"code": -32600, "message": "request must be an object"}}
     method = request.get("method")
     rid = request.get("id")
     params = request.get("params") or {}
+    if not isinstance(params, dict):
+        return _err(rid, -32602, "params must be an object")
 
     if method == "initialize":
         return _ok(rid, {
@@ -384,6 +401,8 @@ async def handle(db: Session, request: dict, db_factory=None) -> dict | None:
     if method == "tools/call":
         name = params.get("name")
         args = params.get("arguments") or {}
+        if not isinstance(args, dict):
+            return _err(rid, -32602, "arguments must be an object")
         try:
             result = _call(db, name, args)
         except McpError as e:
@@ -404,7 +423,17 @@ def _call(db: Session, name: str, args: dict):
     if name == "list_open_tickets":
         return list_open_tickets(db)
     if name == "reply_to_ticket":
-        return reply_to_ticket(db, int(args.get("ticket_id") or 0),
+        # A model writes these arguments, so `ticket_id` arrives as whatever it
+        # felt like - "12", 12, or "the first one". int() raising here became a
+        # 500 the agent could not learn from; as a tool error it reads the
+        # reason and corrects itself.
+        try:
+            ticket_id = int(str(args.get("ticket_id") or 0).strip())
+        except (TypeError, ValueError):
+            raise McpError(-32602,
+                           f"ticket_id must be a number, got "
+                           f"{args.get('ticket_id')!r}") from None
+        return reply_to_ticket(db, ticket_id,
                                args.get("body") or "", args.get("status"))
     if name == "export_customer_data":
         return export_customer_data(db, args.get("username") or "")
@@ -413,6 +442,11 @@ def _call(db: Session, name: str, args: dict):
 
 def _ok(rid, result) -> dict:
     return {"jsonrpc": "2.0", "id": rid, "result": result}
+
+
+def _err(rid, code: int, message: str) -> dict:
+    """A protocol error the client can read, rather than a 500 it cannot."""
+    return {"jsonrpc": "2.0", "id": rid, "error": {"code": code, "message": message}}
 
 
 def _json_text(value) -> str:

@@ -427,3 +427,50 @@ def test_prometheus_being_unreachable_is_not_itself_an_alert(monkeypatch):
     worker.alerts_once()
     assert not [r for r in db.scalars(select(SmsMessage))
                 if r.kind == "admin_error_rate"]
+
+
+# --- linking recovers what was parked ---------------------------------------
+def test_linking_later_recovers_a_parked_message(monkeypatch):
+    """Delivery parks a message when the number has never opened the bot.
+
+    That is permanent until they do, so nothing retries it - and linking
+    afterwards did not reconsider it. A customer who linked five minutes after
+    signing up never received the alert that had been waiting for them.
+    """
+    db, admin, user = database()
+    user.phone = "09121114444"                   # linked to nothing yet
+    db.commit()
+    appmod.admin_approve(user.id, admin, db)
+    row = smslib.due(db)[0]
+    assert smslib.deliver(db, row) is False and row.status == "unlinked"
+
+    db.add(BaleContact(phone="09121114444", chat_id=1000000009))
+    db.commit()
+    assert smslib.requeue_after_linking(db) == 1
+    assert row.status == "queued"
+    assert smslib.due(db), "and it must be eligible for the next pass"
+
+
+def test_a_stale_auth_code_is_not_resent(monkeypatch):
+    """A code is valid for three minutes. Sending a stale one invites the
+    customer to type something that will be refused, which is worse than
+    sending nothing - the sign-in page already offers a resend."""
+    db, admin, user = database()
+    smslib.queue(db, user_id=user.id, phone=user.phone, kind="login_code",
+                 detail={"code": "12345"})
+    db.commit()
+    row = smslib.due(db)[-1]
+    row.status = "unlinked"
+    db.commit()
+
+    assert smslib.requeue_after_linking(db) == 0
+    assert row.status == "unlinked"
+
+
+def test_a_number_still_unlinked_stays_parked():
+    db, admin, user = database()
+    user.phone = "09121115555"
+    db.commit()
+    appmod.admin_approve(user.id, admin, db)
+    smslib.deliver(db, smslib.due(db)[0])
+    assert smslib.requeue_after_linking(db) == 0
