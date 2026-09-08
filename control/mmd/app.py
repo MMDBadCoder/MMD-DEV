@@ -2891,20 +2891,7 @@ def admin_reply_ticket(ticket_id: int, body: TicketReply,
     _mark_read(db, tk, staff=True)
     tk.updated_at = svc.now()
     db.commit()
-    notifylib.emit(db, user_id=tk.user_id, kind="support",
-                   code="support_reply", severity="info",
-                   detail={"ticket_id": tk.id, "subject": tk.subject},
-                   href=f"/console/support/{tk.id}",
-                   dedupe_key=f"ticket:{tk.id}:reply:{tk.messages[-1].id}")
-    owner = db.get(User, tk.user_id)
-    if owner is not None:
-        try:
-            smslib.queue(db, user_id=owner.id, phone=owner.phone,
-                         kind="ticket_replied", user=owner,
-                         dedupe_key=f"ticketreply:{tk.messages[-1].id}")
-            db.commit()
-        except smslib.SmsError:
-            pass
+    svc.announce_ticket_reply(db, tk)
     svc.audit(db, admin.id, "ticket_replied", f"#{tk.id}")
     return {"ok": True, "ticket": _ticket_json(tk, staff=True, messages=True)}
 

@@ -483,3 +483,58 @@ def test_the_bot_name_cannot_be_registered():
     for name in ("support-agent", "supportagent"):
         with pytest.raises(usernames.UsernameError):
             usernames.validate(name)
+
+
+def test_an_agent_reply_tells_the_customer(db):
+    """The path that answers fastest was the one that told them least.
+
+    A human reply emitted an in-app notification and queued a message; the
+    agent posted the reply and stopped. A customer who was not looking at the
+    panel never learned they had been answered at all.
+    """
+    from sqlalchemy import select as _select
+    from mmd.models import BaleContact, Notification, SmsMessage, User
+
+    tk = db.scalar(_select(Ticket).where(Ticket.status == TicketStatus.OPEN))
+    owner = db.get(User, tk.user_id)
+    db.add(BaleContact(phone=owner.phone, chat_id=1000000123))
+    db.commit()
+
+    before_n = len(list(db.scalars(_select(Notification))))
+    before_m = len(list(db.scalars(_select(SmsMessage))))
+    mcp.reply_to_ticket(db, tk.id, "پاسخ داده شد", status="answered")
+
+    notes = list(db.scalars(_select(Notification)))
+    msgs = list(db.scalars(_select(SmsMessage)))
+    assert len(notes) == before_n + 1, "no in-app notification for the customer"
+    assert len(msgs) == before_m + 1, "nothing queued to reach them outside"
+    assert msgs[-1].kind == "ticket_replied"
+    assert notes[-1].user_id == tk.user_id
+
+
+def test_announcing_the_same_reply_twice_is_one_announcement(db):
+    """Keyed off the message id, so a retry is the same announcement."""
+    from sqlalchemy import select as _select
+    from mmd.models import Notification
+    from mmd import service as svc
+
+    tk = db.scalar(_select(Ticket).where(Ticket.status == TicketStatus.OPEN))
+    mcp.reply_to_ticket(db, tk.id, "یک بار", status="answered")
+    first = len(list(db.scalars(_select(Notification))))
+    svc.announce_ticket_reply(db, tk)          # same last message
+    assert len(list(db.scalars(_select(Notification)))) == first
+
+
+def test_a_failed_announcement_does_not_undo_the_reply(db, monkeypatch):
+    """A notification nobody received beats an answer that was rolled back."""
+    from sqlalchemy import select as _select
+    from mmd import notifications as notifylib
+
+    monkeypatch.setattr(notifylib, "emit",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+    tk = db.scalar(_select(Ticket).where(Ticket.status == TicketStatus.OPEN))
+    before = len(tk.messages)
+    out = mcp.reply_to_ticket(db, tk.id, "still posted", status="answered")
+    assert out["ok"] is True
+    db.refresh(tk)
+    assert len(tk.messages) == before + 1, "the reply was rolled back"

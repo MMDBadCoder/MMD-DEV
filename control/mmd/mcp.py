@@ -184,6 +184,10 @@ def reply_to_ticket(db: Session, ticket_id: int, body: str,
     tk.status = TicketStatus(status) if status else TicketStatus.ANSWERED
     tk.updated_at = svc.now()
     db.commit()
+    # The customer is told, exactly as they are when a human answers. This
+    # was missing: the agent posted the reply and stopped, so the path that
+    # answers fastest was the one that told them least.
+    svc.announce_ticket_reply(db, tk, author_is_agent=True)
     svc.audit(db, bot.id, "agent_ticket_reply", f"#{tk.id}",
               status=tk.status.value)
     log.info("agent replied to ticket %s (status %s)", tk.id, tk.status.value)

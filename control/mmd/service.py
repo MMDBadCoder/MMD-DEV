@@ -10,6 +10,7 @@ only module allowed to compute it.
 from __future__ import annotations
 
 import json
+import logging
 import socket
 import time
 from datetime import datetime, timedelta, timezone
@@ -22,6 +23,8 @@ from .billing import pricing
 from .billing import aipricing
 from .billing.pricing import MICRO, Rates, Tier
 from . import metrics
+
+log = logging.getLogger("mmd.service")
 from . import ports
 from .config import CONFIG
 from .models import (AuditLog, CreditAccount, CreditTransaction, ExposedPort,
@@ -511,3 +514,44 @@ def _ai_period(ts: datetime) -> datetime:
     """Floor to the charge bucket, so a pass that runs twice is a no-op."""
     epoch = int(ts.timestamp()) // AI_PERIOD_SECONDS * AI_PERIOD_SECONDS
     return datetime.fromtimestamp(epoch, UTC)
+
+
+def announce_ticket_reply(db: Session, tk, author_is_agent: bool = False) -> None:
+    """Tell the customer that support replied. Never raises.
+
+    Shared because it was not. The human handler emitted an in-app
+    notification and queued a message; the agent handler posted the reply and
+    stopped - so a customer answered by the agent learned nothing unless they
+    happened to open the panel and look. The agent is the path that answers
+    fastest and told them least.
+
+    Keyed off the message id, so a retry or a second call about the same reply
+    is silently the same announcement rather than a second one.
+
+    Failures here must not undo a reply that is already posted: a notification
+    nobody received is a worse outcome than a delivery that is retried, and an
+    exception would roll back the answer itself.
+    """
+    from . import notifications as notifylib
+    from . import sms as smslib
+    from .models import User
+
+    if not tk.messages:
+        return
+    last_id = tk.messages[-1].id
+    try:
+        notifylib.emit(db, user_id=tk.user_id, kind="support",
+                       code="support_reply", severity="info",
+                       detail={"ticket_id": tk.id, "subject": tk.subject},
+                       href=f"/console/support/{tk.id}",
+                       dedupe_key=f"ticket:{tk.id}:reply:{last_id}")
+        owner = db.get(User, tk.user_id)
+        if owner is not None and owner.phone:
+            smslib.queue(db, user_id=owner.id, phone=owner.phone,
+                         kind="ticket_replied", user=owner,
+                         dedupe_key=f"ticketreply:{last_id}")
+        db.commit()
+    except Exception as exc:                                   # noqa: BLE001
+        db.rollback()
+        log.warning("ticket %s reply announced to nobody (agent=%s): %s",
+                    tk.id, author_is_agent, exc)
