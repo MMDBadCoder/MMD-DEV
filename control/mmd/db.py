@@ -103,6 +103,13 @@ SCHEMA_PATCHES: tuple[str, ...] = (
     # Python enum is therefore accepted by every test and rejected by
     # production, which is precisely what happened when ESCALATED shipped.
     "ALTER TYPE ticket_status ADD VALUE IF NOT EXISTS 'ESCALATED'",
+    # `in_progress` said only that somebody was looking, which told the
+    # customer nothing about whose turn it was. It is replaced by
+    # `waiting_for_user`, which does. Adding the value and consuming it are
+    # separate patches on purpose: Postgres refuses to use a new enum value
+    # inside the transaction that added it, and each patch here gets its own.
+    "ALTER TYPE ticket_status ADD VALUE IF NOT EXISTS 'WAITING_FOR_USER'",
+    "UPDATE tickets SET status = 'WAITING_FOR_USER' WHERE status = 'IN_PROGRESS'",
     "CREATE INDEX IF NOT EXISTS ix_sms_codes_created_at ON sms_codes (created_at)",
     "ALTER TABLE openrouter_accounts ADD COLUMN IF NOT EXISTS limit_usd DOUBLE PRECISION",
     "ALTER TABLE openrouter_accounts ADD COLUMN IF NOT EXISTS limit_synced_at TIMESTAMPTZ",

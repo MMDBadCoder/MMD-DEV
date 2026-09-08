@@ -11,7 +11,8 @@ export async function adminPage() {
     get("/api/admin/users"), get("/api/admin/tickets"), grafanaConfig(),
   ]);
   const pending = users.filter((u) => u.status === "pending");
-  const waiting = (tickets.counts.open || 0) + (tickets.counts.in_progress || 0);
+  // Only `open` is waiting on us. `waiting_for_user` is the customer's turn.
+  const waiting = (tickets.counts.open || 0) + (tickets.counts.escalated || 0);
 
   // Built from the browser's own origin rather than written down, so it stays
   // correct on any host and no live address is baked into the repository.

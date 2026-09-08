@@ -209,14 +209,31 @@ def test_the_agent_can_escalate_but_still_cannot_close(db):
         mcp.reply_to_ticket(db, tk.id, "closing", status="closed")
 
 
-def test_an_escalated_ticket_is_still_in_the_queue(db):
-    """It has not been dealt with. Hiding it once the agent gives up is how a
-    customer waits forever."""
+def test_the_agent_is_handed_only_what_is_waiting_on_it(db):
+    """`open` and nothing else.
+
+    Every other status is somebody else's turn: `waiting_for_user` is the
+    customer's, `answered` is a human's to confirm, `escalated` is a human's
+    to handle. Handing those back invited the agent to reply over a
+    colleague's escalation - which buries their queue and tells the customer
+    they were helped when nobody had looked - or to nag a customer who owed
+    the answer.
+    """
     from sqlalchemy import select as _select
+    ids = lambda: [t["ticket_id"] for t in mcp.list_open_tickets(db)["tickets"]]
     tk = db.scalar(_select(Ticket).where(Ticket.status == TicketStatus.OPEN))
-    mcp.reply_to_ticket(db, tk.id, "به مدیر ارجاع شد", status="escalated")
-    ids = [t["ticket_id"] for t in mcp.list_open_tickets(db)["tickets"]]
-    assert tk.id in ids
+    assert tk.id in ids(), "an open ticket must be handed to the agent"
+
+    for status in ("waiting_for_user", "answered", "escalated"):
+        tk.status = TicketStatus(status)
+        db.commit()
+        assert tk.id not in ids(), f"a {status} ticket must not come back"
+
+    # But it is not lost: a human still sees it, and the customer writing
+    # again puts it back in the agent's queue.
+    tk.status = TicketStatus.OPEN
+    db.commit()
+    assert tk.id in ids()
 
 
 def test_escalated_appears_everywhere_a_status_is_offered():
@@ -378,3 +395,39 @@ def test_the_operator_runbook_is_not_given_to_the_agent(db):
     only an operator can take."""
     names = {d["name"] for d in mcp.platform_guide(db)["documents"]}
     assert "OPERATIONS.md" not in names
+
+
+def test_a_customer_reply_returns_the_ticket_to_the_agent(db):
+    """The loop that makes `waiting_for_user` safe to set.
+
+    The agent asks a question and steps back. Nothing else moves the ticket -
+    so if a customer's reply did not return it to `open`, the conversation
+    would stop there and the customer would wait forever for an agent that is
+    no longer being handed the ticket.
+    """
+    from sqlalchemy import select as _select
+    from mmd.models import TicketMessage
+
+    tk = db.scalar(_select(Ticket).where(Ticket.status == TicketStatus.OPEN))
+    mcp.reply_to_ticket(db, tk.id, "کدام نسخه را نصب کرده‌اید؟",
+                        status="waiting_for_user")
+    ids = lambda: [t["ticket_id"] for t in mcp.list_open_tickets(db)["tickets"]]
+    assert tk.id not in ids(), "the agent must step back after asking"
+
+    # What the customer's reply endpoint does, which is the only thing that
+    # sets OPEN.
+    tk.messages.append(TicketMessage(author_id=tk.user_id, from_staff=False,
+                                     body="نسخهٔ ۲۴"))
+    tk.status = TicketStatus.OPEN
+    db.commit()
+    assert tk.id in ids(), "their answer must hand it back"
+
+
+def test_the_agent_cannot_open_or_close_a_ticket(db):
+    """Closing would let it empty its own queue; `open` is the customer's word,
+    set when they write. Both refused in code, not merely undocumented."""
+    from sqlalchemy import select as _select
+    tk = db.scalar(_select(Ticket).where(Ticket.status == TicketStatus.OPEN))
+    for forbidden in ("closed", "open", "in_progress"):
+        with pytest.raises(mcp.McpError):
+            mcp.reply_to_ticket(db, tk.id, "x", status=forbidden)

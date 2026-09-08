@@ -113,7 +113,7 @@ Transport: HTTP → https://mmd-ai.ir/mcp
 ✓ Tools discovered: 4
 
   list_open_tickets     tickets waiting, with the full thread
-  reply_to_ticket       reply; set answered / in_progress / escalated
+  reply_to_ticket       reply; set waiting_for_user / answered / escalated
   platform_guide        product knowledge, read fresh at call time
   export_customer_data  one customer's data, only while they have a ticket
 ```

@@ -453,7 +453,7 @@ b = Board("mmd-support", "MMD · Support",
           "Ticket queue, response age and unread notifications.")
 b.stat("Open", [('sum(mmd_tickets{status="open"})', "open")],
        thresholds=AMBER_IF_ANY)
-b.stat("In progress", [('sum(mmd_tickets{status="in_progress"})', "wip")])
+b.stat("Waiting for user", [('sum(mmd_tickets{status="waiting_for_user"})', "wfu")])
 b.stat("Oldest open", [("mmd_ticket_oldest_open_seconds", "age")], unit="s",
        thresholds=RED_IF_OLD)
 b.stat("Unread by staff", [("mmd_tickets_unread_staff", "unread")],

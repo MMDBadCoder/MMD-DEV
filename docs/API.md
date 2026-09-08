@@ -235,7 +235,7 @@ removes the gateway service and Telegram credentials without disabling Hermes.
 | `GET` | `/api/admin/tickets/{id}` | Read the thread without changing it |
 | `POST` | `/api/admin/tickets/{id}/read` | Mark the thread read |
 | `POST` | `/api/admin/tickets/{id}/messages` | Reply; marks the ticket answered |
-| `PUT` | `/api/admin/tickets/{id}/status` | `open ｜ in_progress ｜ answered ｜ closed` |
+| `PUT` | `/api/admin/tickets/{id}/status` | `open ｜ waiting_for_user ｜ answered ｜ escalated ｜ closed` |
 | `POST` | `/api/admin/workspaces/{id}/apt-repair` | Re-apply the apt configuration |
 | `POST` | `/api/admin/workspaces/{id}/power-off` | Stop a running customer workspace, settle elapsed usage, and preserve its data |
 
@@ -276,7 +276,7 @@ not blind the monitoring.
 | Tool | Does |
 |---|---|
 | `list_open_tickets` | Every ticket not closed, oldest first, with the full thread and the customer's balance, machine state and account age |
-| `reply_to_ticket` | Posts a reply as the `support-agent` account and optionally sets `in_progress` or `answered` |
+| `reply_to_ticket` | Posts a reply as the `support-agent` account and optionally sets `waiting_for_user`, `answered` or `escalated` |
 | `export_customer_data` | Everything the platform holds about one customer, as JSON with an embedded schema |
 
 Three boundaries, each enforced in code rather than only described:

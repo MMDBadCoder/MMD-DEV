@@ -409,7 +409,7 @@ class TicketReply(BaseModel):
 
 
 class TicketStatusChange(BaseModel):
-    status: str = Field(pattern="^(open|in_progress|answered|escalated|closed)$")
+    status: str = Field(pattern="^(open|waiting_for_user|answered|escalated|closed)$")
 
 
 class AiAction(BaseModel):

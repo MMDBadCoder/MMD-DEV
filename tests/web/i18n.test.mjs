@@ -69,7 +69,7 @@ test("every dynamically-built key prefix has all its variants", () => {
     "ai.tok.": ["input", "cache_write_5m", "cache_write_1h", "cache_read", "output"],
     // Every ticket status the API can return needs a label, or the queue
     // renders a raw enum name at an operator.
-    "tk.status.": ["open", "in_progress", "answered", "closed"],
+    "tk.status.": ["open", "waiting_for_user", "answered", "escalated", "closed"],
     // Why the machine cannot start. Built as t("blocked." + code) from the
     // server's code, so a missing variant prints a raw key at a customer -
     // which is how the English message got reported in the first place.

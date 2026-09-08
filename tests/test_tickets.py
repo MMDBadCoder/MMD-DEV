@@ -103,12 +103,13 @@ def test_deleting_the_customer_removes_the_ticket(db, people):
 def test_every_status_has_a_stable_wire_value(db):
     """The web filter chips and the API both send these strings.
 
-    `escalated` sits between answered and closed: the queue reads left to
-    right as "waiting on us, being worked, answered, needs a person, done",
-    and the one that needs a person must not hide at the end.
+    The order is the reading order of the queue, and every status names WHOSE
+    TURN it is: waiting on us, waiting on the customer, we think it is done,
+    a person is needed, finished. `in_progress` used to sit second and said
+    only that somebody was looking, which told the customer nothing.
     """
     assert [s.value for s in TicketStatus] == [
-        "open", "in_progress", "answered", "escalated", "closed"]
+        "open", "waiting_for_user", "answered", "escalated", "closed"]
 
 
 # --- the unread rule, which is the part that is easy to get backwards -------

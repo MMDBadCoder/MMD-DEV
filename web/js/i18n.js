@@ -1257,7 +1257,7 @@ const FA = {
   "tk.staff": "پشتیبانی",
   "tk.you.other": "کاربر",
   "tk.status.open": "باز",
-  "tk.status.in_progress": "در حال بررسی",
+  "tk.status.waiting_for_user": "در انتظار پاسخ شما",
   "tk.status.answered": "پاسخ داده شده",
   // The ticket webhook: how an outside AI agent is woken when a customer writes.
   "adm.hook.title": "اعلان خودکار به عامل پشتیبانی",

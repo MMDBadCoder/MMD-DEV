@@ -56,8 +56,14 @@ class TicketStatus(str, enum.Enum):
     for an answer or the answer is waiting for them.
     """
     OPEN = "open"                # customer wrote last; waiting on support
-    IN_PROGRESS = "in_progress"  # support is working on it
-    ANSWERED = "answered"        # support wrote last; waiting on the customer
+    # Support replied and asked for something back. The conversation is not
+    # finished: the reply was a question, and the next move is the customer's.
+    # Distinct from `answered`, which claims the matter is settled.
+    WAITING_FOR_USER = "waiting_for_user"
+    # Support believes this is resolved and it can be closed. A claim, not a
+    # fact - a human confirms it by closing, and the customer can reopen it by
+    # writing again.
+    ANSWERED = "answered"
     # The AI agent has read it and cannot resolve it: it needs a person with
     # authority the agent does not have - restoring lost files, moving money,
     # touching a machine. Deliberately NOT the same as `answered`, which means

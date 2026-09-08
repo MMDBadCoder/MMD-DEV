@@ -12,7 +12,7 @@ import { navigate } from "../router.js";
 // `escalated` sits between answered and closed on purpose: the queue reads
 // left to right as "waiting on us, being worked, answered, needs a person,
 // done", and the one that needs a person should not hide at the end.
-export const STATUSES = ["open", "in_progress", "answered", "escalated", "closed"];
+export const STATUSES = ["open", "waiting_for_user", "answered", "escalated", "closed"];
 
 export function statusPill(status) {
   // `escalated` is the only status that gets the alarm colour. It means the

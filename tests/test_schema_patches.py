@@ -93,9 +93,11 @@ def test_new_ticket_statuses_reach_the_postgresql_enum():
 
     patches = (Path(__file__).resolve().parents[1]
                / "control" / "mmd" / "db.py").read_text()
-    # OPEN, IN_PROGRESS, ANSWERED and CLOSED predate the patch list: they were
-    # created with the type itself. Anything added later needs a patch.
-    original = {"OPEN", "IN_PROGRESS", "ANSWERED", "CLOSED"}
+    # OPEN, ANSWERED and CLOSED predate the patch list: they were created with
+    # the type itself. Anything added later needs a patch - including
+    # WAITING_FOR_USER, which replaced the original IN_PROGRESS and therefore
+    # is NOT one of these however much it looks like a rename.
+    original = {"OPEN", "ANSWERED", "CLOSED"}
     for member in TicketStatus:
         if member.name in original:
             continue

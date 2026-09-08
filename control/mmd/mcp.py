@@ -52,7 +52,11 @@ BOT_USERNAME = "support-agent"
 # Statuses the agent may set. CLOSED is deliberately absent - and `escalated`
 # is the one that matters most: it is how the agent says "I have read this and
 # I cannot help", which is a far more useful answer than a confident wrong one.
-AGENT_STATUSES = {"in_progress", "answered", "escalated"}
+# The agent may say "the customer's turn", "I think this is done", or "a human
+# is needed". It may not say "open" - that is the customer's word, set when
+# they write - and it may not close, because an agent able to empty its own
+# queue has exactly the wrong incentive.
+AGENT_STATUSES = {"waiting_for_user", "answered", "escalated"}
 
 
 class McpError(Exception):
@@ -100,8 +104,14 @@ def _customer_context(db: Session, user: User) -> dict:
 def list_open_tickets(db: Session) -> dict:
     """Every ticket not yet closed, oldest first, with its whole thread."""
     now = datetime.now(UTC)
+    # Only `open`: the ones whose last word was the customer's and which are
+    # therefore waiting on support. Everything else is somebody else's turn -
+    # `waiting_for_user` is the customer's, `answered` is a human's to confirm,
+    # `escalated` is a human's to handle. Returning those invited the agent to
+    # reply again over a colleague's escalation, or to nag a customer who owed
+    # the answer.
     tickets = db.scalars(
-        select(Ticket).where(Ticket.status != TicketStatus.CLOSED)
+        select(Ticket).where(Ticket.status == TicketStatus.OPEN)
         .order_by(Ticket.created_at)).all()
 
     out = []
@@ -278,7 +288,8 @@ TOOLS = [
         "name": "reply_to_ticket",
         "description": (
             "Post a reply to one ticket, as the support agent. Set the status "
-            "to one of: 'in_progress' (you are working on it), 'answered' "
+            "to one of: 'waiting_for_user' (you asked them something and are "
+            "waiting for their answer), 'answered' "
             "(you believe it is resolved), or 'escalated' (you cannot resolve "
             "it and a human operator must). Use 'escalated' whenever the "
             "answer needs authority you do not have - restoring lost files, "
