@@ -37,20 +37,3 @@ def test_new_customer_key_is_not_attached_to_a_guarded_workspace(monkeypatch):
         client.close()
     assert sent == [{"name": "mmd-user1-ali", "limit": 2}]
     assert "workspace_id" not in sent[0]
-
-
-def test_legacy_guardrail_is_cleared_with_null_not_an_empty_allowlist(monkeypatch):
-    client = OpenRouter("management-key")
-    calls = []
-    monkeypatch.setattr(client, "_call", lambda method, path, **kw:
-                        calls.append((method, path, kw["json"])) or {})
-    try:
-        client.clear_model_restrictions("guardrail-id")
-    finally:
-        client.close()
-    assert len(calls) == 1
-    method, path, body = calls[0]
-    assert (method, path) == ("PATCH", "/guardrails/guardrail-id")
-    assert all(value is None for value in body.values())
-    assert {"allowed_models", "ignored_models", "allowed_providers",
-            "ignored_providers", "limit_usd"} <= set(body)

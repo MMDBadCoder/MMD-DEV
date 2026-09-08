@@ -3651,9 +3651,11 @@ def admin_hermes_get(_: User = Depends(require_admin),
             "workspaces_ready": int(ready),
             # Whether the worker can reach OpenRouter at all. The API cannot
             # check directly - it does not hold the management key, by design -
-            # so it reports whether the workspace has ever been discovered.
-            "configured": bool(hermes._get(db, hermes.SETTING_WORKSPACE_ID)
-                               or hermes._get(db, hermes.LEGACY_WORKSPACE_ID))}
+            # so it reports whether any key has ever been minted, which only
+            # the worker can do and only by reaching OpenRouter.
+            "configured": bool(db.scalar(
+                select(func.count()).select_from(OpenRouterAccount)
+                .where(OpenRouterAccount.key.isnot(None))))}
 
 
 class HermesConfig(BaseModel):

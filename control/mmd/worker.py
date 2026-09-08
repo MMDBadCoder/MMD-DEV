@@ -393,19 +393,6 @@ def hermes_once(meter_usage: bool = True) -> None:
             return
         try:
             with OpenRouter(CONFIG.openrouter_key) as client:
-                # Existing keys were minted into the old guarded workspace.
-                # Clearing its allowlist preserves every exposed secret while
-                # making the migration effective immediately. New keys are
-                # minted without a workspace and never enter this path.
-                if hermes._get(db, hermes.SETTING_GUARDRAIL_REMOVED) != "1":
-                    guardrail_id = (hermes._get(db, hermes.SETTING_GUARDRAIL_ID)
-                                    or hermes._get(db, hermes.LEGACY_GUARDRAIL_ID))
-                    if guardrail_id:
-                        client.clear_model_restrictions(guardrail_id)
-                    hermes._set(db, hermes.SETTING_GUARDRAIL_REMOVED, "1")
-                    db.commit()
-                    log.info("OpenRouter model restrictions removed")
-
                 usd_rate, discount = svc.ai_settings(db, hermes.SERVICE)
                 for account in accounts:
                     try:

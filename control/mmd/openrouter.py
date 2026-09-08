@@ -133,17 +133,6 @@ class OpenRouter:
     def delete_key(self, key_hash: str) -> None:
         self._call("DELETE", f"/keys/{key_hash}")
 
-    def clear_model_restrictions(self, guardrail_id: str) -> None:
-        """Remove the legacy workspace model allowlist without rotating keys."""
-        self._call("PATCH", f"/guardrails/{guardrail_id}",
-                   json={"allowed_models": None, "ignored_models": None,
-                         "allowed_providers": None, "ignored_providers": None,
-                         "content_filter_builtins": None, "content_filters": None,
-                         "limit_usd": None, "reset_interval": None,
-                         "enforce_zdr": None, "enforce_zdr_anthropic": None,
-                         "enforce_zdr_google": None, "enforce_zdr_openai": None,
-                         "enforce_zdr_other": None})
-
     @staticmethod
     def _info(d: dict) -> KeyInfo:
         limit = d.get("limit")

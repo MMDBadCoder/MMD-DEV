@@ -39,13 +39,12 @@ UTC = timezone.utc
 
 SERVICE = "openrouter"
 
-# Legacy settings are retained only so one deployment can clear the old model
-# allowlist for already-issued keys without rotating customer secrets.
-SETTING_WORKSPACE_ID = "openrouter_workspace_id"
-SETTING_GUARDRAIL_ID = "openrouter_guardrail_id"
-LEGACY_WORKSPACE_ID = "hermes_workspace_id"
-LEGACY_GUARDRAIL_ID = "hermes_guardrail_id"
-SETTING_GUARDRAIL_REMOVED = "openrouter_guardrail_removed"
+# No model, provider or content restriction is ever applied to a customer key.
+# Keys are minted without a workspace_id, so they land in the account's default
+# workspace, whose guardrail is unconfigured - checked against the live API,
+# which answers "Workspace default guardrail has not been configured yet".
+# Everything OpenRouter offers is available to every customer; the only cap is
+# the spending limit, which is billing and lives elsewhere.
 
 # Admin-configurable policy.
 # ONE model setting for every OpenRouter-backed service.
