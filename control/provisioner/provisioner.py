@@ -1753,7 +1753,29 @@ def handle(req: dict) -> dict:
         rc, out, err = _run_split(["incus", "exec", "ws", "--project", project, "--",
                                    "bash", "-lc",
                                    "install -d -m 0700 -o dev -g dev /home/dev/.hermes && "
-                                   "umask 077 && cat > /home/dev/.hermes/.env && "
+                                   "umask 077 && "
+                                   # MERGE, not overwrite. This file is also
+                                   # where an operator puts WEBHOOK_ENABLED,
+                                   # WEBHOOK_PORT and WEBHOOK_SECRET, and
+                                   # `cat >` truncated it on every pass - so
+                                   # the webhook settings someone had just
+                                   # added were silently gone again within
+                                   # seconds, with nothing to say why.
+                                   #
+                                   # Only the three variables this platform
+                                   # owns are replaced; anything else is
+                                   # carried across untouched. Dropping them
+                                   # first is what lets a changed key take
+                                   # effect, and what removes the Telegram
+                                   # pair when Telegram is switched off.
+                                   "new=$(cat); "
+                                   "touch /home/dev/.hermes/.env; "
+                                   "grep -vE "
+                                   "'^(OPENROUTER_API_KEY|TELEGRAM_BOT_TOKEN|"
+                                   "TELEGRAM_ALLOWED_USERS)=' "
+                                   "/home/dev/.hermes/.env > /home/dev/.hermes/.env.new; "
+                                   "printf '%s\\n' \"$new\" >> /home/dev/.hermes/.env.new && "
+                                   "mv /home/dev/.hermes/.env.new /home/dev/.hermes/.env && "
                                    "chown dev:dev /home/dev/.hermes/.env && "
                                    "chmod 0600 /home/dev/.hermes/.env"],
                                   timeout=60, stdin_text=(
@@ -1846,10 +1868,23 @@ def handle(req: dict) -> dict:
             rc, gout, gerr = _run_split(
                 ["incus", "exec", "ws", "--project", project, "--", "bash", "-lc",
                  HERMES_USER_GATEWAY_PURGE +
-                 "cat > /etc/systemd/system/hermes-gateway.service && "
-                 "chmod 0644 /etc/systemd/system/hermes-gateway.service && "
-                 "systemctl daemon-reload && systemctl enable hermes-gateway >/dev/null 2>&1 && "
-                 "systemctl restart hermes-gateway && sleep 6 && "
+                 # Conditional for the same reason the dashboard is, and it
+                 # was missed when the dashboard was fixed. This pass runs
+                 # every reconcile, so an unconditional restart bounced the
+                 # gateway every ~19 seconds: it bound 8644, was killed, and
+                 # bound again, so `ss` showed nothing most of the time and
+                 # no webhook could ever be delivered to it.
+                 "new=$(cat); old=$(cat /etc/systemd/system/hermes-gateway.service "
+                 "2>/dev/null); "
+                 "if [ \"$new\" != \"$old\" ]; then "
+                 "  printf '%s' \"$new\" > /etc/systemd/system/hermes-gateway.service; "
+                 "  chmod 0644 /etc/systemd/system/hermes-gateway.service; "
+                 "  systemctl daemon-reload; changed=1; "
+                 "fi; "
+                 "systemctl enable hermes-gateway >/dev/null 2>&1; "
+                 "if [ -n \"$changed\" ] || ! systemctl is-active --quiet hermes-gateway; then "
+                 "  systemctl restart hermes-gateway; sleep 6; "
+                 "fi; "
                  "systemctl is-active hermes-gateway && "
                  # Two failures look identical to the customer - a silent bot -
                  # so both are treated as a failed enable rather than reported

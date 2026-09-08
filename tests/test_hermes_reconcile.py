@@ -114,3 +114,42 @@ def test_a_powered_off_machine_is_left_alone(env):
     db.commit()
     worker._hermes_install(db, ws)
     assert calls == []
+
+
+def test_the_gateway_restart_is_conditional_too():
+    """The half that was missed when the dashboard was fixed.
+
+    Making the worker reconcile every pass - which is what lets a customer
+    switching the webhook on be noticed - also made this run every pass. With
+    an unconditional restart the gateway was bounced every ~19 seconds: it
+    bound 8644, was killed, bound again. `ss` showed nothing most of the time
+    and no webhook could be delivered.
+    """
+    from pathlib import Path
+    src = Path("control/provisioner/provisioner.py").read_text(encoding="utf-8")
+    at = src.index("systemctl restart hermes-gateway")
+    block = src[at - 1400:at + 200]
+    assert "is-active --quiet hermes-gateway" in block, (
+        "the gateway is restarted without checking whether it is running")
+    assert "changed=1" in block, (
+        "the unit file is replaced without comparing it to what is there")
+
+
+def test_the_env_file_is_merged_not_overwritten():
+    """It is shared. The platform owns the OpenRouter and Telegram variables;
+    WEBHOOK_ENABLED, WEBHOOK_PORT and WEBHOOK_SECRET belong to the operator.
+
+    Truncating it meant the webhook settings someone had just added were gone
+    again within seconds, and nothing said why.
+    """
+    from pathlib import Path
+    src = Path("control/provisioner/provisioner.py").read_text(encoding="utf-8")
+    # Anchored on the temp file the merge writes: the first mention of the
+    # env path is the gateway unit's EnvironmentFile, which is not this.
+    assert "cat > /home/dev/.hermes/.env " not in src, (
+        "the env file is still truncated on every pass")
+    at = src.index("/home/dev/.hermes/.env.new")
+    block = src[at - 1200:at + 600]
+    assert "grep -vE " in block, "nothing preserves the variables we do not own"
+    assert "OPENROUTER_API_KEY|TELEGRAM_BOT_TOKEN" in block, (
+        "the replace-list must name exactly the variables this platform owns")
