@@ -191,15 +191,18 @@ def export_customer_data(db: Session, username: str) -> dict:
 # a stranger. The agent has no way to judge which half of a sentence is safe to
 # repeat, so it is not given the chance.
 #
-# The others - development setup, metrics, the design system, test invariants,
-# and this agent's own setup guide - answer no question a customer has ever
-# asked.
+# OPERATIONS.md is excluded for a milder version of the same reason: it is a
+# runbook for whoever runs the platform - host layout, deploying, talking to
+# the provisioner - so it invites the agent to describe internals, or to offer
+# actions only an operator can take. The others (development setup, metrics,
+# the design system, test invariants, this agent's own setup guide) answer no
+# question a customer has ever asked.
 AGENT_DOCS = (
     "README.md",              # what the product is
+    "docs/USER-GUIDE.md",     # where to click - the commonest question by far
     "docs/ARCHITECTURE.md",   # how the pieces work
     "docs/BILLING.md",        # charging, top-ups, what costs what
-    "docs/OPERATIONS.md",     # what an operator can and cannot do
-    "docs/API.md",            # the interface a customer drives
+    "docs/API.md",            # the interface, for customers who drive it
 )
 
 

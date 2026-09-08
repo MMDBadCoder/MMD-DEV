@@ -351,3 +351,30 @@ def test_get_on_mcp_is_not_the_web_app():
 
         # HEAD is probed too, and must agree.
         assert c.head("/mcp").status_code == 405
+
+
+def test_the_agent_can_learn_where_to_click(db):
+    """The commonest kind of ticket is "how do I do X in the panel".
+
+    Every other document explains how the platform works; none described the
+    screens, so an agent could say what was possible but never where the
+    button was.
+    """
+    names = {d["name"] for d in mcp.platform_guide(db)["documents"]}
+    assert "USER-GUIDE.md" in names
+
+    guide = mcp.platform_guide(db, "USER-GUIDE.md")["text"]
+    # The pages a customer actually asks about, by their real labels.
+    for page in ("اتصال‌ها", "پورت‌ها", "صورتحساب", "منابع", "پیام‌ها"):
+        assert page in guide, f"the guide never covers {page}"
+    # And the three answers that account for most tickets.
+    assert "0.0.0.0" in guide, "the commonest published-port mistake is missing"
+    assert "off-host backup" in guide.lower() or "no off-host" in guide.lower()
+
+
+def test_the_operator_runbook_is_not_given_to_the_agent(db):
+    """OPERATIONS.md is host layout, deploys and provisioner commands. It
+    invites the agent to describe internals, or to offer a customer an action
+    only an operator can take."""
+    names = {d["name"] for d in mcp.platform_guide(db)["documents"]}
+    assert "OPERATIONS.md" not in names
