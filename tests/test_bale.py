@@ -58,7 +58,8 @@ def test_every_way_of_writing_one_number_normalises(given):
 # --- linking ---------------------------------------------------------------
 def test_sharing_a_contact_links_the_chat(db, quiet):
     ok = bale.link(db, 555, {"phone_number": "989395382065",
-                             "first_name": "Mohammad", "user_id": 555}, 555)
+                             "first_name": "Mohammad", "user_id": 555},
+                   555, "private")
     assert ok is True
     row = db.scalar(select(BaleContact))
     assert (row.phone, row.chat_id) == ("09395382065", 555)
@@ -77,6 +78,46 @@ def test_a_forwarded_contact_is_refused(db, quiet):
     assert ok is False
     assert db.scalar(select(BaleContact)) is None
     assert bale.WRONG_CONTACT in [t for _c, t in quiet]
+
+
+def test_a_contact_with_no_owner_id_is_refused(db, quiet):
+    """The hole the first version left, and the one the tests missed.
+
+    It rejected only when both ids were present AND differed - so a forwarded
+    card carrying no `user_id` at all was accepted, linking whatever number it
+    named to whoever forwarded it. That is enough to redirect another
+    customer's verification and recovery codes to your own chat.
+    """
+    ok = bale.link(db, 555, {"phone_number": "09121112222"}, 555, "private")
+    assert ok is False
+    assert db.scalar(select(BaleContact)) is None
+
+
+def test_linking_is_refused_without_a_known_sender(db, quiet):
+    """No sender id is no proof either: the check needs both sides."""
+    assert bale.link(db, 555, {"phone_number": "09121112222", "user_id": 555},
+                     None, "private") is False
+    assert db.scalar(select(BaleContact)) is None
+
+
+def test_a_group_chat_cannot_be_linked(db, quiet):
+    """A bot added to a group reports the GROUP as the chat. Linking one
+    delivers every future code to everybody in it."""
+    for kind in ("group", "supergroup", "channel"):
+        assert bale.link(db, 900, {"phone_number": "09395382065", "user_id": 900},
+                         900, kind) is False
+    assert db.scalar(select(BaleContact)) is None
+
+
+def test_a_group_message_never_reaches_link(db, quiet, monkeypatch):
+    """The type has to survive the trip from the update to the check."""
+    seen = {}
+    monkeypatch.setattr(bale, "link",
+                        lambda *a, **k: seen.setdefault("chat_type", a[4]))
+    bale.handle(db, {"update_id": 1, "message": {
+        "chat": {"id": 900, "type": "supergroup"}, "from": {"id": 900},
+        "contact": {"phone_number": "09395382065", "user_id": 900}}})
+    assert seen["chat_type"] == "supergroup"
 
 
 def test_a_number_that_is_not_an_iranian_mobile_is_refused(db, quiet):
@@ -147,7 +188,9 @@ def test_the_bot_token_is_never_logged():
     log somebody will later paste into a bug report.
     """
     from pathlib import Path
-    for name in ("worker.py", "app.py"):
+    # Every process that sends through Bale, not just the two that were
+    # noticed first. The watchdog was missed and logged the token for days.
+    for name in ("worker.py", "app.py", "watchdog.py"):
         src = Path("control/mmd") .joinpath(name).read_text(encoding="utf-8")
         assert 'logging.getLogger("httpx").setLevel(logging.WARNING)' in src, (
             f"{name} lets httpx log request URLs, which contain the bot token")

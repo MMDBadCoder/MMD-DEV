@@ -50,6 +50,12 @@ def check(db, now: datetime | None = None) -> bool:
 
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    # This process sends through the same Bale transport as the worker, and
+    # httpx logs every request URL at INFO - with the bot token in the path.
+    # Silenced in mmd-api and mmd-worker when that was found; this one was
+    # missed, and has been writing a live credential to the journal since.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
     now = datetime.now(UTC)
     with SessionLocal() as db:
         if check(db, now):

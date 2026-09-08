@@ -153,3 +153,20 @@ def test_the_env_file_is_merged_not_overwritten():
     assert "grep -vE " in block, "nothing preserves the variables we do not own"
     assert "OPENROUTER_API_KEY|TELEGRAM_BOT_TOKEN" in block, (
         "the replace-list must name exactly the variables this platform owns")
+
+
+def test_a_changed_env_restarts_the_gateway():
+    """The gap the conditional restart opened.
+
+    The gateway reads .env once, at start, through EnvironmentFile. Restarting
+    only on a unit-file change meant a new Telegram token or allowlist was
+    written to disk and never loaded - the process kept the old credentials
+    while the panel reported success.
+    """
+    from pathlib import Path
+    src = Path("control/provisioner/provisioner.py").read_text(encoding="utf-8")
+    assert "env_changed=1" in src, "the env write never reports a change"
+    assert 'env_changed = "env_changed=1" in (out + err)' in src, (
+        "the reported change is never read back")
+    assert '("changed=1; " if env_changed else "")' in src, (
+        "a changed environment does not reach the restart decision")

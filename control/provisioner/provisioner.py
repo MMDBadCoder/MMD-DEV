@@ -1775,6 +1775,14 @@ def handle(req: dict) -> dict:
                                    "TELEGRAM_ALLOWED_USERS)=' "
                                    "/home/dev/.hermes/.env > /home/dev/.hermes/.env.new; "
                                    "printf '%s\\n' \"$new\" >> /home/dev/.hermes/.env.new && "
+                                   # Reported, because the gateway reads this
+                                   # file once at start. Without knowing it
+                                   # changed, a new Telegram token left the
+                                   # running process on the old environment
+                                   # while the panel reported success.
+                                   "{ cmp -s /home/dev/.hermes/.env.new "
+                                   "/home/dev/.hermes/.env && echo env_changed=0 "
+                                   "|| echo env_changed=1; } && "
                                    "mv /home/dev/.hermes/.env.new /home/dev/.hermes/.env && "
                                    "chown dev:dev /home/dev/.hermes/.env && "
                                    "chmod 0600 /home/dev/.hermes/.env"],
@@ -1786,6 +1794,7 @@ def handle(req: dict) -> dict:
         if rc != 0:
             return {"ok": False, "error": "could not write key",
                     "output": (out + err)[-300:]}
+        env_changed = "env_changed=1" in (out + err)
 
         # The dashboard REFUSES to bind a non-loopback address without an auth
         # provider - there is no unauthenticated public-bind option, and
@@ -1867,6 +1876,10 @@ def handle(req: dict) -> dict:
         if telegram_enabled or webhook_enabled:
             rc, gout, gerr = _run_split(
                 ["incus", "exec", "ws", "--project", project, "--", "bash", "-lc",
+                 # A changed .env counts as changed configuration: the
+                 # gateway reads it at start, so the running process is stale
+                 # until it is restarted.
+                 ("changed=1; " if env_changed else "") +
                  HERMES_USER_GATEWAY_PURGE +
                  # Conditional for the same reason the dashboard is, and it
                  # was missed when the dashboard was fixed. This pass runs

@@ -104,3 +104,20 @@ def test_new_ticket_statuses_reach_the_postgresql_enum():
         assert f"'{member.name}'" in patches, (
             f"TicketStatus.{member.name} has no ALTER TYPE patch, so it will "
             f"be rejected by PostgreSQL in production while passing on SQLite")
+
+
+def test_the_status_rename_survives_a_fresh_database():
+    """The migration must not compare against a value the type may not have.
+
+    A database created after the rename builds ticket_status from the current
+    members, so 'IN_PROGRESS' is not a valid literal of it and Postgres
+    rejects the comparison - a permanent patch failure on every fresh install,
+    for a migration with nothing to do there. Casting to text sidesteps the
+    enum entirely.
+    """
+    from pathlib import Path
+    patches = (Path(__file__).resolve().parents[1]
+               / "control" / "mmd" / "db.py").read_text(encoding="utf-8")
+    assert "WHERE status::text = 'IN_PROGRESS'" in patches, (
+        "the rename compares an enum column to a literal the type may not have")
+    assert "WHERE status = 'IN_PROGRESS'" not in patches

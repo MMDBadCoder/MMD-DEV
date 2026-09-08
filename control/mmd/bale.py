@@ -158,21 +158,36 @@ def _setting(db, key: str, value: str | None = None) -> str:
     return value
 
 
-def link(db, chat_id: int, contact: dict, sender_id: int | None) -> bool:
+def link(db, chat_id: int, contact: dict, sender_id: int | None,
+         chat_type: str = "") -> bool:
     """Record that `chat_id` owns the contact's number. Returns True on success.
 
-    The contact must belong to the person who sent it. Bale, like Telegram,
-    lets anyone forward a saved contact - so without this check a customer
-    could link somebody else's number to their own chat and receive that
-    person's verification codes. `request_contact` sets `user_id` to the
-    sharer; a forwarded card either omits it or names someone else.
+    Linking decides where this number's verification and recovery codes are
+    delivered, so it demands positive proof rather than the absence of a
+    contradiction.
+
+    `request_contact` sets `user_id` to the person pressing the button. A
+    forwarded contact card carries someone else's id - or none at all, which
+    is the case an earlier version of this let through: it rejected only when
+    both ids were present AND differed, so a card with no `user_id` linked
+    whatever number it named to whoever forwarded it. Anyone could have
+    redirected another customer's codes to their own chat.
+
+    The chat must also be private. A bot added to a group reports that group's
+    id as the chat, and linking one would deliver every code to everybody in
+    it.
     """
     from .models import BaleContact
 
     owner = contact.get("user_id")
-    if sender_id is not None and owner is not None and int(owner) != int(sender_id):
+    if owner is None or sender_id is None or int(owner) != int(sender_id):
         send(chat_id, WRONG_CONTACT)
-        log.warning("bale: chat %s shared a contact belonging to %s", chat_id, owner)
+        log.warning("bale: chat %s shared a contact it does not own (%r)",
+                    chat_id, owner)
+        return False
+    if chat_type and chat_type != "private":
+        send(chat_id, WRONG_CONTACT)
+        log.warning("bale: refused to link in a %s chat", chat_type)
         return False
 
     phone = normalise_phone(contact.get("phone_number", ""))
@@ -200,13 +215,14 @@ def handle(db, update: dict) -> None:
     """One inbound update. Never raises: a bad update must not stop the poll."""
     try:
         msg = update.get("message") or update.get("edited_message") or {}
-        chat_id = (msg.get("chat") or {}).get("id")
+        chat = msg.get("chat") or {}
+        chat_id = chat.get("id")
         if not chat_id:
             return
         sender_id = (msg.get("from") or {}).get("id")
         contact = msg.get("contact")
         if contact:
-            link(db, chat_id, contact, sender_id)
+            link(db, chat_id, contact, sender_id, str(chat.get("type") or ""))
             return
         # Anything else - /start, a greeting, a stray message - gets the same
         # answer, because there is only one thing to do here and a customer

@@ -109,7 +109,13 @@ SCHEMA_PATCHES: tuple[str, ...] = (
     # separate patches on purpose: Postgres refuses to use a new enum value
     # inside the transaction that added it, and each patch here gets its own.
     "ALTER TYPE ticket_status ADD VALUE IF NOT EXISTS 'WAITING_FOR_USER'",
-    "UPDATE tickets SET status = 'WAITING_FOR_USER' WHERE status = 'IN_PROGRESS'",
+    # Compared as text, not as the enum. A database created after the rename
+    # has a type built from the current members, so the literal 'IN_PROGRESS'
+    # is not a valid value of it and Postgres rejects the comparison outright -
+    # leaving a permanent schema-patch failure on every fresh install, for a
+    # migration that had nothing to do there.
+    "UPDATE tickets SET status = 'WAITING_FOR_USER' "
+    "WHERE status::text = 'IN_PROGRESS'",
     "CREATE INDEX IF NOT EXISTS ix_sms_codes_created_at ON sms_codes (created_at)",
     "ALTER TABLE openrouter_accounts ADD COLUMN IF NOT EXISTS limit_usd DOUBLE PRECISION",
     "ALTER TABLE openrouter_accounts ADD COLUMN IF NOT EXISTS limit_synced_at TIMESTAMPTZ",
