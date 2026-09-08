@@ -16,7 +16,16 @@ test("profile management is named Account while the old route remains compatible
   assert.doesNotMatch(i18n, /"nav\.security"/);
 });
 
-test("the customer header and API share release 1.9.0", () => {
-  assert.match(read("control/mmd/version.py"), /APP_VERSION = "1\.9\.0"/);
-  assert.match(read("web/js/main.js"), /me\?\.version \|\| "1\.9\.0"/);
+test("the customer header and the API agree on the release", () => {
+  /* Compared rather than pinned. The fallback in the header is what a customer
+     sees before `me` arrives, so a release that bumps one and forgets the
+     other ships a version number that is wrong for the first second of every
+     visit - and pinning the literal meant editing this test every release,
+     which is how the two drifted apart in the first place. */
+  const api = read("control/mmd/version.py").match(/APP_VERSION = "([^"]+)"/);
+  const header = read("web/js/main.js").match(/me\?\.version \|\| "([^"]+)"/);
+  assert.ok(api, "no APP_VERSION in version.py");
+  assert.ok(header, "no version fallback in the header");
+  assert.equal(header[1], api[1],
+               "the header fallback and APP_VERSION are different releases");
 });

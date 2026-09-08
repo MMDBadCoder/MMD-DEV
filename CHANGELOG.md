@@ -4,6 +4,77 @@ Notable changes. Dates are the day the work landed on the production host.
 
 ## Unreleased
 
+## [1.10.0] — 2026-09-08
+
+The release the AI support agent arrives in, and the one where SMS is replaced.
+
+### Added
+
+- An MCP server at `POST /mcp`, so any agent that speaks the protocol can work
+  the support queue: read waiting tickets with the customer's balance, machine
+  state and account age attached, reply, and export one customer's own data —
+  and only while that customer has an open ticket.
+- The MCP address, access key and tool list in **Admin → تیکت‌ها**, with reveal,
+  copy, and a rotate button. Rotation runs in the root provisioner, because the
+  key file is mode 400 root-owned precisely so the web process cannot read it.
+- An admin-configured ticket webhook that wakes an agent the moment a customer
+  writes, tested before it is saved. Signed with HMAC-SHA256 over
+  `timestamp.body`, so a captured request expires within five minutes.
+- `docs/AI-SUPPORT-AGENT.md`, `docs/USER-GUIDE.md`, and a `mmd-support` skill
+  and unattended prompt under `support-agent/`.
+- `waiting_for_user`, replacing `in_progress`: every status now names whose
+  turn it is rather than that somebody is looking.
+
+### Changed
+
+- **Messages go through Bale, not SMS.** On the line this platform used, 12 of
+  the last 25 messages were accepted, charged, and then filtered by the
+  operator before reaching the handset — including every verification code
+  measured on the day it was replaced. A Bale bot addresses a chat rather than
+  a number, so each account links once by sharing its contact with the bot;
+  Bale reports the number, which is stronger evidence than a code proving
+  somebody could read a message.
+- The agent is handed only `open` tickets. It used to receive everything not
+  closed, which invited it to reply over a colleague's escalation or nag a
+  customer who owed the answer.
+- `platform_guide` serves the project's own documentation instead of a summary
+  written for the agent, which had to be maintained beside the docs it
+  duplicated. Internal documents are excluded: `DECISIONS.md` is design
+  rationale including how each security boundary works, and the agent cannot
+  judge which half of a sentence is safe to repeat.
+- Embedded Grafana dashboards load on request rather than with every admin tab.
+
+### Fixed
+
+- Bale linking demanded the absence of a contradiction rather than proof: a
+  forwarded contact card with no `user_id` was accepted, linking whatever
+  number it named to whoever forwarded it. Group chats were accepted too.
+- The Bale bot token was written to the journal on every request, because httpx
+  logs request URLs at INFO and the token is in the path. Silenced in every
+  sending process.
+- The worker restarted every customer's Hermes dashboard every few seconds.
+  Hermes mints a session token on each start, so an open page answered 401 to
+  its own API calls. Idempotency now lives in the provisioner, which compares
+  before restarting.
+- `~/.hermes/.env` was truncated on every pass, silently deleting the webhook
+  settings an operator had just added.
+- `GET /mcp` fell through to the SPA and returned HTML, which every client that
+  preflights reads as "not an MCP endpoint" — while POST worked throughout.
+- The installer never created the credential files its units declare, and
+  systemd treats a missing `LoadCredential` source as fatal. A rebuilt host
+  came up with no API and no billing worker.
+- Account deletion left the Bale link and the message log behind, both keyed by
+  phone. A later registration of the same number inherited the delivery
+  mapping.
+- An agent reply told the customer nothing: no in-app notification and no
+  message. The path that answers fastest was the one that told them least.
+- Malformed MCP requests surfaced as 500s rather than protocol errors.
+- The frontend was served without `Cache-Control`, so a browser could run one
+  stale module beside freshly fetched ones.
+- `support-agent` was a registrable username, and the bot adopted whatever sat
+  under that name.
+
+
 ### Added
 
 - Added SMS password recovery with purpose-scoped, expiring, single-use codes;
