@@ -76,6 +76,32 @@ function launcher(d) {
   </div>`;
 }
 
+/* Bring the chosen tab into view and put the cursor in it.
+ *
+ * The launcher buttons at the top of this page navigate to a tab whose panel
+ * renders BELOW the launcher and the tab bar - so pressing one of them
+ * changed something off the bottom of the screen and left the reader looking
+ * at the button they had just pressed, apparently inert.
+ *
+ * The tab bar is what gets scrolled to rather than the panel, so the customer
+ * can see WHICH tab is now active as well as its contents. Focus then moves
+ * to the first control inside the panel, so the keyboard is already where the
+ * work is; `preventScroll` stops the browser undoing the smooth scroll by
+ * jumping to the focused element.
+ */
+function revealPanel() {
+  const tabs = $(".tabs2");
+  if (!tabs) return;
+  tabs.scrollIntoView({ behavior: "smooth", block: "start" });
+
+  // The first thing worth typing into or pressing that comes AFTER the tab
+  // bar - everything before it is the launcher the customer just used.
+  const after = $$("input, textarea, select, button, a.btn").find((el) =>
+    tabs.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING);
+  (after || tabs.querySelector('[aria-current="page"]') || tabs)
+    .focus?.({ preventScroll: true });
+}
+
 export async function connectionsPage(params) {
   const tab = params?.tab && TABS.some((x) => x.key === params.tab) ? params.tab : "terminal";
   if (tab !== "terminal") term.disconnect();
@@ -100,9 +126,12 @@ export async function connectionsPage(params) {
     ${tabBar(tab, d)}
     ${d.machine_running ? "" : note("warn", t("conn.machineoff"))}`;
 
-  if (tab === "terminal") return renderTerminal(head, d);
-  if (tab === "ssh") return renderSsh(head, d);
-  return renderRdp(head, d);
+  if (tab === "terminal") renderTerminal(head, d);
+  else if (tab === "ssh") renderSsh(head, d);
+  else renderRdp(head, d);
+  // Only when a tab was explicitly chosen. Landing on /console/connections
+  // itself must not yank the page past the launcher the customer came to read.
+  if (params?.tab) revealPanel();
 }
 
 /* ---- terminal ---- */
