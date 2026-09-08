@@ -500,6 +500,24 @@ def _hermes_install(db, ws: Workspace) -> None:
         ws.hermes_error = None
         db.commit()
         return
+    # Already installed and healthy: leave it alone.
+    #
+    # Without this the pass called the provisioner every tick, and its enable
+    # path ends in `systemctl restart hermes-dashboard` - so every customer's
+    # dashboard was restarted every few seconds, forever. That is not a slow
+    # background annoyance: the dashboard's session token is regenerated on
+    # each start, so the browser's open page was authenticated against a token
+    # that no longer existed and every API call it made answered 401, while a
+    # request landing mid-restart got 502 from the proxy instead.
+    #
+    # The retry-every-pass behaviour is still what installs Hermes for a
+    # customer who enabled it while powered off; it just stops once there is
+    # something running to leave alone. A Telegram toggle changes the config,
+    # so it reconciles like any other intent rather than being skipped here.
+    if (ws.hermes_installed and ws.hermes_dash_password
+            and not ws.hermes_error
+            and ws.hermes_telegram_installed == bool(ws.hermes_telegram_enabled)):
+        return
     account = db.get(OpenRouterAccount, ws.user_id)
     if ws.state != WorkspaceState.ON or account is None or not account.key:
         return
