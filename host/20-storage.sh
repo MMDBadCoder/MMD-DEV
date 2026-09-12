@@ -114,14 +114,49 @@ profiles:
       type: nic
 PRESEED
 
+# --- Import the pool even when the cache is gone -------------------------
+# zfs-import-cache.service imports from /etc/zfs/zpool.cache, and that was the
+# single point of failure that took this platform down for two days: the cache
+# file was emptied, so there was nothing to import, and Incus's own fallback
+# (`zpool import mmdpool`) cannot find a FILE-backed pool because plain
+# `zpool import` scans /dev only. Every workspace was unstartable and the only
+# symptom was a warning in the worker log every ten minutes.
+#
+# This unit imports by scanning the directory the vdev actually lives in, and
+# does nothing at all when the pool is already there - so it is a no-op on a
+# healthy boot and the recovery path on a broken one.
+importer=/etc/systemd/system/mmd-zfs-import.service
+cat > "$importer" <<UNIT
+[Unit]
+Description=Import the ${ZPOOL_NAME} pool from its file vdev
+DefaultDependencies=no
+After=zfs-import-cache.service
+Before=zfs-mount.service incus.service
+RequiresMountsFor=$(dirname "$INCUS_POOL_FILE")
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Already imported is success, not a reason to try again.
+ExecStart=/bin/sh -c 'zpool list ${ZPOOL_NAME} >/dev/null 2>&1 || \
+  zpool import -d $(dirname "$INCUS_POOL_FILE") \
+    -o cachefile=/etc/zfs/zpool.cache ${ZPOOL_NAME}'
+
+[Install]
+WantedBy=zfs.target
+UNIT
+systemctl daemon-reload
+systemctl enable mmd-zfs-import.service >/dev/null 2>&1
+log "pool import fallback installed"
+
 # --- Make Incus wait for ZFS at boot -------------------------------------
 # The pool must be imported before incusd tries to touch its datasets.
 dropin=/etc/systemd/system/incus.service.d/10-zfs.conf
 mkdir -p "$(dirname "$dropin")"
 cat > "$dropin" <<'UNIT'
 [Unit]
-After=zfs.target zfs-import.target zfs-mount.service
-Wants=zfs.target
+After=zfs.target zfs-import.target zfs-mount.service mmd-zfs-import.service
+Wants=zfs.target mmd-zfs-import.service
 UNIT
 systemctl daemon-reload
 

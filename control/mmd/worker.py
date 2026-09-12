@@ -1074,9 +1074,22 @@ async def _workspace_create(db, op: Operation, ws: Workspace) -> None:
         "cores": max(1, round(ws.cpu_milli / 1000)), "mem_mib": ws.mem_mib,
         "root_gib": ws.root_gib, "docker_gib": ws.docker_gib}, timeout=1800)
     if not resp.get("ok"):
-        ws.state = WorkspaceState.ERROR
-        ws.error = (resp.get("error") or resp.get("output", ""))[-500:]
+        # The row goes, not just the state. Creation is the one failure where
+        # nothing exists yet: no instance, no datasets, nothing to preserve.
+        # Leaving an `error` row behind made the customer permanently stuck -
+        # create_workspace refuses when ANY row exists, so the panel answered
+        # "this account already has a machine" about a machine that was never
+        # built, and only an operator could clear it. The reason is kept on the
+        # operation, which is what the customer's activity page reads.
+        #
+        # A failed start or stop is different and still leaves ERROR: there the
+        # machine and its disk are real, and forgetting them would orphan data.
+        detail = (resp.get("error") or resp.get("output", ""))[-500:]
         oplib.fail(db, op, "provision_failed", svc.now())
+        log.warning("provision failed for ws %s, removing the empty row: %s",
+                    ws.incus_project, detail)
+        db.delete(ws)
+        db.commit()
         return
     oplib.progress(db, op, "stopping_machine")
     client = _incus()
