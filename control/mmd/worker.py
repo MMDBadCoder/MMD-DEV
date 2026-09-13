@@ -1088,6 +1088,15 @@ async def _workspace_create(db, op: Operation, ws: Workspace) -> None:
         oplib.fail(db, op, "provision_failed", svc.now())
         log.warning("provision failed for ws %s, removing the empty row: %s",
                     ws.incus_project, detail)
+        # Detach before deleting. operations.workspace_id is ON DELETE CASCADE,
+        # so dropping the row took the failed operation with it - and that
+        # operation is the only place the customer's activity page can read why
+        # their machine was never built. The first version of this fix claimed
+        # the reason was kept there and then deleted it; the record survived
+        # exactly as long as nobody looked.
+        db.execute(update(Operation).where(Operation.workspace_id == ws.id)
+                   .values(workspace_id=None))
+        db.flush()
         db.delete(ws)
         db.commit()
         return
