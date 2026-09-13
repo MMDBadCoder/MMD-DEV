@@ -1086,6 +1086,30 @@ async def _workspace_create(db, op: Operation, ws: Workspace) -> None:
         # machine and its disk are real, and forgetting them would orphan data.
         detail = (resp.get("error") or resp.get("output", ""))[-500:]
         oplib.fail(db, op, "provision_failed", svc.now())
+        # Destroy whatever the failed attempt left behind, BEFORE the row goes.
+        #
+        # ws-create.sh gets partway: it creates the Incus project first, so a
+        # failure leaves that project (and sometimes its datasets) behind.
+        # Deleting only the database row then frees the index, so the
+        # customer's next attempt is handed the SAME index, collides with the
+        # orphan, and fails with "project ws-N already exists" - forever. One
+        # customer hit exactly that: the pool outage broke the first attempt,
+        # and every retry afterwards failed for this reason instead.
+        #
+        # Best effort: if the cleanup itself fails the row must still go, or
+        # the customer is stuck behind a row they cannot use either way. The
+        # index stays allocated in that case only because the orphan remains,
+        # which is the lesser of the two.
+        try:
+            gone = svc.call_provisioner({"verb": "destroy", "idx": ws.idx},
+                                        timeout=600)
+            if not gone.get("ok"):
+                log.warning("could not clean up after the failed provision of "
+                            "%s; the index is left in use: %s",
+                            ws.incus_project, str(gone.get("output"))[-200:])
+        except Exception as exc:                               # noqa: BLE001
+            log.warning("cleanup after failed provision of %s raised: %s",
+                        ws.incus_project, exc)
         log.warning("provision failed for ws %s, removing the empty row: %s",
                     ws.incus_project, detail)
         # Detach before deleting. operations.workspace_id is ON DELETE CASCADE,

@@ -1,10 +1,12 @@
-"""What a failed machine creation must leave behind: nothing.
+"""What a failed machine creation must leave behind, and in what order.
 
-A customer tried to create a machine while the ZFS pool was unmounted. The
-provision failed in under a second, the workspace row was left in `error`, and
-create_workspace refuses when ANY row exists - so the panel answered "this
-account already has a machine" about a machine that had never been built, and
-only an operator could clear it.
+Two customers were stranded by the same sequence. A ZFS pool outage broke the
+first attempt; then every retry failed with "project ws-N already exists",
+because the failure had left an Incus project behind while the database row was
+removed - which freed the index for the next attempt to collide with.
+
+These pin the order of the cleanup rather than its wording, because the order
+is the part that was wrong each time.
 """
 import os
 from pathlib import Path
@@ -13,56 +15,66 @@ os.environ.setdefault("MMD_DATABASE_URL", "sqlite://")
 os.environ.setdefault("MMD_SECRET_KEY", "test-only")
 
 ROOT = Path(__file__).resolve().parents[1]
+WORKER = (ROOT / "control" / "mmd" / "worker.py").read_text(encoding="utf-8")
 
 
-def test_a_failed_creation_removes_the_empty_row():
-    """Creation is the one failure where nothing exists yet."""
-    src = (ROOT / "control" / "mmd" / "worker.py").read_text(encoding="utf-8")
-    at = src.index('oplib.fail(db, op, "provision_failed"')
-    block = src[at - 900:at + 1400]
-    assert "db.delete(ws)" in block, (
-        "a failed provision leaves a workspace row, which blocks the customer "
-        "from ever creating one - create_workspace refuses if any row exists")
+def _failure_branch() -> str:
+    """The provision-failure branch, from its `fail()` call to its `return`."""
+    at = WORKER.index('oplib.fail(db, op, "provision_failed"')
+    end = WORKER.index("\n        return", at)
+    return WORKER[at:end]
 
 
-def test_a_failed_power_operation_still_keeps_the_row():
+BRANCH = _failure_branch()
+
+
+def test_the_empty_row_is_removed():
+    """create_workspace refuses when ANY row exists, so a row left in `error`
+    means the customer can never create one - the panel answers "this account
+    already has a machine" about a machine that was never built."""
+    assert "db.delete(ws)" in BRANCH
+
+
+def test_the_partial_workspace_is_destroyed_before_the_row():
+    """ws-create.sh creates the Incus project first, so a failure leaves it
+    behind. Removing only the row frees the index, so the next attempt is
+    handed the SAME index, collides with the orphan, and fails forever with a
+    message about a project the customer has never heard of."""
+    assert BRANCH.index('"verb": "destroy"') < BRANCH.index("db.delete(ws)"), (
+        "the row is deleted before the partial workspace is destroyed")
+
+
+def test_the_failure_reason_outlives_the_row():
+    """operations.workspace_id is ON DELETE CASCADE, so dropping the row took
+    the failed operation with it - and that operation is the only place the
+    activity page can read why the machine was never built."""
+    assert BRANCH.index("Operation.workspace_id == ws.id") < BRANCH.index("db.delete(ws)"), (
+        "the cascade destroys the only record of the failure")
+
+
+def test_a_failed_cleanup_still_releases_the_customer():
+    """If the destroy itself fails, the row must still go. Otherwise the
+    customer is stuck behind a row they cannot use either way."""
+    assert "try:" in BRANCH, "the cleanup is not guarded"
+    assert BRANCH.index("try:") < BRANCH.index("db.delete(ws)")
+    assert "except Exception" in BRANCH
+
+
+def test_the_cascade_this_depends_on_is_real():
+    """If it ever stops cascading the detach is harmless, but the test above
+    would pass for the wrong reason - so the premise is pinned."""
+    models = (ROOT / "control" / "mmd" / "models" / "__init__.py").read_text(encoding="utf-8")
+    at = models.index('__tablename__ = "operations"')
+    assert 'ForeignKey("workspaces.id", ondelete="CASCADE")' in models[at:at + 600]
+
+
+def test_a_failed_power_operation_still_keeps_its_row():
     """The opposite case: there the machine and its disk are real, and
     forgetting them would orphan a customer's data."""
-    src = (ROOT / "control" / "mmd" / "worker.py").read_text(encoding="utf-8")
-    assert "WorkspaceState.ERROR" in src, (
-        "nothing records an error state any more, so a failed start or stop "
-        "has nowhere to be reported")
+    assert "WorkspaceState.ERROR" in WORKER
 
 
-def test_the_create_endpoint_still_refuses_a_second_machine():
-    """The guard that made this matter must stay: one machine per account."""
-    src = (ROOT / "control" / "mmd" / "app.py").read_text(encoding="utf-8")
-    assert 'fail(409, "already_has_machine"' in src
-
-
-def test_the_failure_reason_outlives_the_deleted_row():
-    """operations.workspace_id is ON DELETE CASCADE.
-
-    So deleting the workspace took the failed operation with it - and that
-    operation is the only place the customer's activity page can read why their
-    machine was never built. The first version of this fix claimed the reason
-    was kept and then deleted it; the record survived exactly as long as nobody
-    looked at it.
-    """
-    src = (ROOT / "control" / "mmd" / "worker.py").read_text(encoding="utf-8")
-    at = src.index('oplib.fail(db, op, "provision_failed"')
-    block = src[at:at + 1200]
-    detach = block.index("Operation.workspace_id == ws.id")
-    drop = block.index("db.delete(ws)")
-    assert detach < drop, (
-        "the workspace is deleted before the operation is detached, so the "
-        "cascade destroys the only record of why it failed")
-
-
-def test_the_cascade_that_makes_this_necessary_is_real():
-    """If this ever stops cascading, the detach above is harmless - but the
-    test above would pass for the wrong reason, so the premise is pinned."""
-    src = (ROOT / "control" / "mmd" / "models" / "__init__.py").read_text(encoding="utf-8")
-    at = src.index('__tablename__ = "operations"')
-    block = src[at:at + 600]
-    assert 'ForeignKey("workspaces.id", ondelete="CASCADE")' in block
+def test_one_machine_per_account_still_holds():
+    """The guard that made all of this matter must stay."""
+    app = (ROOT / "control" / "mmd" / "app.py").read_text(encoding="utf-8")
+    assert 'fail(409, "already_has_machine"' in app
