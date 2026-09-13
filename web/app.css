@@ -436,8 +436,13 @@ tbody tr[data-row] a.ltr{unicode-bidi:isolate;direction:ltr}
 /* --- support tickets ---------------------------------------------------- */
 /* Conversation transcript. `mine` flips the bubble to the reading side, which
    under RTL is the right - so `margin-inline-start:auto` rather than left. */
-.chat{display:flex;flex-direction:column;gap:14px;max-height:56vh;overflow-y:auto;
-  padding:4px 2px}
+/* Deliberately NOT a scrollable box. A thread capped at 56vh put a second
+   scrollbar inside a page that already scrolls, so reading a long ticket meant
+   dragging a small pane while the rest of the page sat still - and the reply
+   box below it was pushed off-screen on short viewports. The thread grows to
+   whatever it needs and the page scrolls, which is what every other section
+   here does. */
+.chat{display:flex;flex-direction:column;gap:14px;padding:4px 2px}
 .msg{max-width:min(78%,620px)}
 .msg.mine{margin-inline-start:auto;text-align:start}
 .msg-who{font-size:12px;font-weight:700;color:var(--ink-3);margin-bottom:4px}
