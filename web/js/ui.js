@@ -33,6 +33,11 @@ const P = (d, extra = "") =>
     aria-hidden="true" focusable="false" ${extra}>${d}</svg>`;
 
 export const icon = {
+  // The brand mark: an M drawn as two prompt chevrons. Redrawn on this set's
+  // 24x24 grid rather than scaled down from the 512 artwork, so it carries the
+  // same stroke weight as every other icon beside it instead of a fractional
+  // one that antialiases differently.
+  brand: P('<path d="M6 17V7l6 6 6-6v10"/>'),
   machine: P('<rect x="2" y="4" width="20" height="13" rx="2"/><path d="M7 21h10M12 17v4"/>'),
   power: P('<path d="M12 3v9"/><path d="M18.4 6.6a9 9 0 1 1-12.8 0"/>'),
   sliders: P('<path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/>'),

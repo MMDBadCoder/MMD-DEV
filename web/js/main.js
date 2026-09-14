@@ -149,7 +149,7 @@ function chrome(bodyHtml) {
            the landing page at all - so a customer who wanted it had no way there
            short of editing the URL, and clicking the logo is what they tried. -->
       <a href="/" class="brand" style="color:inherit;text-decoration:none">
-        <span class="logo">${icon.machine}</span><span>${t("brand")}</span>
+        <span class="logo">${icon.brand}</span><span>${t("brand")}</span>
         <small class="app-version" dir="ltr">v${me?.version || "1.10.0"}</small></a>
       <nav class="nav" aria-label="${t("nav.primary")}">${nav}</nav>
       <div class="spacer"></div>

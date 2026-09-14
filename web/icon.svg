@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img"
+     aria-label="MMD-DEV">
+  <rect width="512" height="512" rx="112" fill="#2f6df6"/>
+  <path d="M132 350 V182 L256 306 L380 182 V350" fill="none" stroke="#ffffff"
+        stroke-width="48" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
