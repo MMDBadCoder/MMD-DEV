@@ -77,6 +77,37 @@ alias fd=fdfind
 RC
 chown -R "$WORKSPACE_USER:$WORKSPACE_USER" "/home/$WORKSPACE_USER"
 
+# A global npm prefix the developer owns, inside their own home.
+#
+# Claude Code and Codex are installed globally above, as root, so npm's prefix
+# is /usr and their own update commands - `codex update`, `claude update` -
+# try to rewrite /usr/bin/codex and fail with EACCES, printing "try running
+# the command again as root". A customer reads that as "I am not allowed to
+# update my own tools" and opens a ticket, which is exactly what happened.
+#
+# Chowning /usr/bin would be the wrong fix: it holds several hundred system
+# binaries that have nothing to do with npm. A prefix under $HOME is the
+# conventional answer, costs nothing, and keeps every npm write inside the
+# developer's own directory. The image copies stay where they are and are
+# simply shadowed by PATH once a newer one is installed.
+NPM_PREFIX="/home/$WORKSPACE_USER/.npm-global"
+install -d -o "$WORKSPACE_USER" -g "$WORKSPACE_USER" "$NPM_PREFIX"
+sudo -u "$WORKSPACE_USER" npm config set prefix "$NPM_PREFIX"
+# Both files, because they cover different shells and neither covers both.
+# Ubuntu's .bashrc returns immediately when the shell is not interactive, so a
+# login shell - `ssh machine 'codex ...'`, anything scripted - would still find
+# the older copy in /usr/bin and run a different version than the terminal
+# does. .profile is what a login shell reads.
+for rc in .bashrc .profile; do
+  f="/home/$WORKSPACE_USER/$rc"
+  touch "$f"
+  cat >> "$f" <<'RC'
+# npm installs here, so `codex update` and `claude update` need no sudo.
+export PATH="$HOME/.npm-global/bin:$PATH"
+RC
+  chown "$WORKSPACE_USER:$WORKSPACE_USER" "$f"
+done
+
 systemctl enable docker containerd
 # sshd is installed but deliberately NOT enabled. The machine is reachable
 # through the dashboard by default; SSH is opt-in, switched on by the customer
