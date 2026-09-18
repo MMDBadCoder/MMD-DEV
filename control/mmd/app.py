@@ -1190,8 +1190,20 @@ async def workspace_power(body: PowerRequest, user: User = Depends(current_user)
                 return {"ok": True, "status": "on"}
             if ws.state == WorkspaceState.ARCHIVED:
                 fail(409, "archived", "This machine is archived.")
-            if ws.state != WorkspaceState.OFF:
+            # `error` is startable. It records that something failed once, not
+            # that the machine is unusable - and a stopped machine is exactly
+            # what starting expects. Refusing it left a customer looking at a
+            # button that returned 409 every time they pressed it, under a
+            # label reading "needs review" that named nobody, with no way
+            # forward from the interface at all. The worker does adopt reality
+            # eventually, but "eventually" was seven hours.
+            #
+            # Starting from here is safe because it is the same call either
+            # way: if the machine really cannot start, the start fails and puts
+            # it back in `error` with the reason, which is where it already was.
+            if ws.state not in (WorkspaceState.OFF, WorkspaceState.ERROR):
                 fail(409, "busy", f"The machine is {ws.state.value}.", state=ws.state.value)
+            recovering = ws.state == WorkspaceState.ERROR
 
             affordable, have, need = svc.can_afford_next_hour(db, ws)
             if not affordable:
@@ -1203,6 +1215,12 @@ async def workspace_power(body: PowerRequest, user: User = Depends(current_user)
                 fail(503, "no_capacity", adm.reason, resource=adm.resource)
 
             ws.state = WorkspaceState.STARTING
+            if recovering:
+                # The recorded reason described the failure that put it here.
+                # It is answered now; leaving it would show a stale fault on a
+                # machine that just started.
+                ws.error = None
+                log.info("%s started from error by its owner", ws.incus_project)
             db.commit()
             # Apply the size before starting. A change made while the machine
             # was off only updated the database - without this the machine

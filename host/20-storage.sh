@@ -136,8 +136,12 @@ RequiresMountsFor=$(dirname "$INCUS_POOL_FILE")
 
 [Service]
 Type=oneshot
-RemainAfterExit=yes
-# Already imported is success, not a reason to try again.
+# Deliberately NOT RemainAfterExit. This has to run before EVERY incus start,
+# not once per boot: incus exports the pool when it stops and cannot re-import
+# a file vdev when it starts, so the one moment this is needed is the moment
+# incus comes back. A unit that stays "active" after its first success is
+# never re-run, which is exactly how the first version of this failed to
+# prevent the second outage.
 ExecStart=/bin/sh -c 'zpool list ${ZPOOL_NAME} >/dev/null 2>&1 || \
   zpool import -d $(dirname "$INCUS_POOL_FILE") \
     -o cachefile=/etc/zfs/zpool.cache ${ZPOOL_NAME}'
@@ -145,8 +149,25 @@ ExecStart=/bin/sh -c 'zpool list ${ZPOOL_NAME} >/dev/null 2>&1 || \
 [Install]
 WantedBy=zfs.target
 UNIT
+
+# And a timer, because not every way the pool can vanish goes through incus.
+# Two outages were found by a customer rather than by us; this closes the gap
+# between "storage went away" and "somebody notices", to a couple of minutes.
+cat > /etc/systemd/system/mmd-zfs-import.timer <<'UNIT'
+[Unit]
+Description=Re-check that the storage pool is imported
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=2min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target
+UNIT
 systemctl daemon-reload
-systemctl enable mmd-zfs-import.service >/dev/null 2>&1
+systemctl enable mmd-zfs-import.service mmd-zfs-import.timer >/dev/null 2>&1
+systemctl start mmd-zfs-import.timer >/dev/null 2>&1
 log "pool import fallback installed"
 
 # --- Make Incus wait for ZFS at boot -------------------------------------
