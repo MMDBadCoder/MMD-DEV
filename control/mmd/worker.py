@@ -1576,10 +1576,10 @@ m.inc("mmd_workspace_state_adoptions_total", {"from": "error", "to": "on"}, 0)
 async def main() -> None:
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s %(message)s")
-    # httpx logs every request at INFO, including the full URL. Both providers
-    # this platform talks to put their credential IN THE PATH - Bale's bot token
-    # and Kavenegar's key - so leaving that at INFO writes a live secret into the
-    # journal on every call, and the Bale poll makes that every ten seconds.
+    # httpx logs every request at INFO, including the full URL, and Bale puts
+    # its bot token IN THE PATH - so leaving that at INFO writes a live secret
+    # into the journal on every call, and the Bale poll makes that every ten
+    # seconds.
     # Nothing is lost by silencing it: a failure surfaces as our own log line with
     # the provider's message, and the URL was never the useful part.
     logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -1643,8 +1643,8 @@ async def main() -> None:
             # external OpenRouter user a notification within one worker tick.
             await asyncio.to_thread(credit_step_once)
             # Drain after every producer above, especially the credit-band
-            # comparison, so a detected crossing reaches Kavenegar in this
-            # tick rather than waiting for the next one.
+            # comparison, so a detected crossing reaches the customer in
+            # this tick rather than waiting for the next one.
             await asyncio.to_thread(sms_once)
             if tick % RECONCILE_EVERY == 0:
                 await reconcile_once()

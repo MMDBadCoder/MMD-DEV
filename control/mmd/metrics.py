@@ -8,7 +8,7 @@ has to be counted where it happens, because by scrape time it is gone. That
 needs a registry that lives for the process, which is what this is.
 
 No dependency, for the same reason the rest of this codebase talks to
-OpenRouter, Telegram and Kavenegar over httpx instead of three SDKs: the whole
+OpenRouter, Telegram and Bale over httpx instead of three SDKs: the whole
 surface used here is counters, gauges and histograms rendered as text, and a
 library would be more code to audit than to write.
 

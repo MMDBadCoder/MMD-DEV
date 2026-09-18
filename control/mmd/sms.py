@@ -1,22 +1,33 @@
-"""Outbound SMS through Kavenegar: catalogue, preferences and delivery.
+"""Outbound messages: the catalogue, the preferences and the outbox.
+
+Delivery itself lives in `bale.py`. This module decides WHAT is said and WHEN,
+and holds the queue; it does not talk to a provider. The name is historical -
+these went out as SMS until Bale replaced it - and the queue is unchanged,
+because none of the reasoning below was ever about the transport.
 
 Why an outbox and not a call at the event
 -----------------------------------------
-The provider key spends real money and can message any number, so it is a
-worker-only credential delivered by `LoadCredential`, exactly like the
-OpenRouter management key - the internet-facing API process cannot read it.
-That alone settles the design: whoever causes a message writes a row, and the
-worker sends it. Two other properties fall out of the same choice: approving a
-customer no longer depends on an SMS gateway being up or quick, and a failed
-send is retried rather than lost.
+The bot token can message every linked customer, so it is a worker-only
+credential delivered by `LoadCredential`, exactly like the OpenRouter
+management key - the internet-facing API process cannot read it. That alone
+settles the design: whoever causes a message writes a row, and the worker
+sends it. Two other properties fall out of the same choice: approving a
+customer no longer depends on the messaging provider being up or quick, and a
+failed send is retried rather than lost.
 
-Length is a cost decision, measured in UTF-16
----------------------------------------------
-Persian and emoji are both non-GSM, so every message is UCS-2 and a segment
-holds **70 UTF-16 code units** - not 70 Python characters. Those differ: `🔴`
-is one Python character and two units, `🖥️` is two characters and three. A
-naive `len()` under-counts and silently doubles the bill, so `segments()`
-encodes before measuring and a test holds every template to its budget.
+Length, measured in UTF-16
+--------------------------
+Every template fits 70 UTF-16 code units. That number began as money: Persian
+and emoji are both non-GSM, so an SMS was UCS-2 and a segment held exactly 70
+units - not 70 Python characters, and the two differ, since `🔴` is one Python
+character and two units while `🖥️` is two characters and three. A naive `len()`
+under-counted and silently doubled the bill.
+
+Bale charges nothing, so the budget is now a length discipline rather than a
+cost one, and it is kept for a better reason than inertia: at this size a
+message is read in one glance on a phone, and an alert nobody finishes reading
+is worse than a short one. `segments()` still encodes before measuring, and a
+test still holds every template to it.
 
 One script per line
 -------------------
@@ -34,17 +45,12 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Callable
 
-import httpx
 from sqlalchemy import select
 
 from . import bale as balelib
-from .config import CONFIG
 from .models import BaleContact, SmsMessage
 
 log = logging.getLogger("mmd.sms")
-
-BASE = "https://api.kavenegar.com/v1"
-TIMEOUT = 30.0
 
 # One UCS-2 segment. Persian is never GSM-7, so this is the only limit here.
 SEGMENT_CHARS = 70
@@ -227,7 +233,7 @@ def queue(db, *, user_id: int | None, phone: str, kind: str,
     """Record one message to send. Returns None if suppressed or duplicate.
 
     Callers are endpoints and worker passes; neither holds the provider key.
-    Nothing here talks to Kavenegar.
+    Nothing here talks to a provider.
     """
     phone = (phone or "").strip()
     if not PHONE_RE.fullmatch(phone):
@@ -244,33 +250,6 @@ def queue(db, *, user_id: int | None, phone: str, kind: str,
                      dedupe_key=dedupe_key, next_attempt_at=datetime.now(UTC))
     db.add(row)
     return row
-
-
-# --- sending --------------------------------------------------------------
-def send(phone: str, body: str, *, key: str = "", sender: str = "") -> str:
-    """Hand one message to Kavenegar. Returns the provider's message id."""
-    key = key or CONFIG.kavenegar_key
-    if not key:
-        raise SmsError("no kavenegar key configured")
-    data = {"receptor": phone, "message": body}
-    if sender or CONFIG.sms_sender:
-        data["sender"] = sender or CONFIG.sms_sender
-    try:
-        r = httpx.post(f"{BASE}/{key}/sms/send.json", data=data, timeout=TIMEOUT)
-    except httpx.HTTPError as e:
-        raise SmsError(f"kavenegar unreachable: {e}") from e
-    try:
-        payload = r.json()
-    except ValueError:
-        raise SmsError(f"kavenegar returned HTTP {r.status_code}") from None
-    # Kavenegar reports refusal inside a 200 body as often as by status code,
-    # so the envelope decides. The key is in the URL, so nothing is logged.
-    ret = payload.get("return") or {}
-    if int(ret.get("status") or 0) != 200:
-        raise SmsError(f"kavenegar refused: {ret.get('status')} "
-                       f"{ret.get('message') or ''}".strip())
-    entries = payload.get("entries") or []
-    return str((entries[0] or {}).get("messageid") or "") if entries else ""
 
 
 # How far back a parked message is still worth sending once the number links.

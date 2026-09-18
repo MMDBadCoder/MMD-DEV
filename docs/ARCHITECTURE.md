@@ -91,11 +91,12 @@ decorative.
 | `mmd-watchdog` | `mmd` | none — reads the database and asks `zpool` | report a stalled worker or an unusable storage pool |
 
 Two credentials are delivered by `LoadCredential` to the worker alone — the
-OpenRouter management key and the Kavenegar SMS key. Both spend money, and
-`mmd-api` runs as the same user, so any file mode that let the worker read them
-would let the internet-facing process read them too. `mmd-watchdog` holds the
-SMS key as well, because it has to report the failure of the process that would
-otherwise send the message.
+OpenRouter management key and the Bale bot token. One spends money and the
+other can message every linked customer, and `mmd-api` runs as the same user,
+so any file mode that let the worker read them would let the internet-facing
+process read them too. `mmd-watchdog` holds the bot token as well, because it
+has to report the failure of the process that would otherwise send the
+message.
 
 `mmd-vhosts` is a fourth component for one reason: it needs root *and* the
 internet, and neither of the others can give it both. `mmd-provisioner` is root

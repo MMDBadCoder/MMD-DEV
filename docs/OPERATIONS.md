@@ -384,17 +384,21 @@ This keeps one alerting path rather than two. The cost is that changing a
 threshold is a config change rather than a click; the benefit is that when an
 alert does not arrive there is one place to look.
 
-## SMS
+## Messages
 
 Messages are queued into an outbox by whoever causes them and sent by the
-worker, which is the only process holding the Kavenegar key.
+worker, which is the only process holding the Bale bot token — except the
+watchdog, which holds it too because it has to report the worker's own
+failure. They go through Bale; there is no SMS path left.
 
 - **Nothing is arriving**: check `sms_messages` for `status`. Delivery accepts
   every valid Iranian mobile number (`09` plus 9 digits). `failed` means five
   attempts were exhausted; `error` carries the provider's reason. Historical
   `skipped` rows may remain from the pre-1.7 trial allowlist and are not retried.
-- **Cost**: Persian is UCS-2, so a segment is 70 UTF-16 code units. Every
-  template is held to one segment by test; going over doubles the price.
+- **Length**: every template is held to 70 UTF-16 code units by test. It was
+  a cost limit under SMS, where Persian is UCS-2 and a segment held exactly
+  that; Bale charges nothing, and it is kept so a message is read in one glance
+  on a phone.
 - **Balance-step messages**: each customer chooses `n` on Console → SMS. The
   worker checks `floor(balance / n)` every five seconds and sends one message
   with the new balance and direction when that value changes. First deployment

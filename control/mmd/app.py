@@ -73,10 +73,10 @@ SAMPLE_SECONDS = 20
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
     logging.basicConfig(level=logging.INFO)
-    # httpx logs every request at INFO, including the full URL. Both providers
-    # this platform talks to put their credential IN THE PATH - Bale's bot token
-    # and Kavenegar's key - so leaving that at INFO writes a live secret into the
-    # journal on every call, and the Bale poll makes that every ten seconds.
+    # httpx logs every request at INFO, including the full URL, and Bale puts
+    # its bot token IN THE PATH - so leaving that at INFO writes a live secret
+    # into the journal on every call, and the Bale poll makes that every ten
+    # seconds.
     # Nothing is lost by silencing it: a failure surfaces as our own log line with
     # the provider's message, and the URL was never the useful part.
     logging.getLogger("httpx").setLevel(logging.WARNING)

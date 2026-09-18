@@ -4,6 +4,41 @@ Notable changes. Dates are the day the work landed on the production host.
 
 ## Unreleased
 
+### Added
+
+- The watchdog checks the storage pool as well as the worker, every five
+  minutes, and messages every operator when it is not `ONLINE`. Both pool
+  outages so far were discovered by a customer opening a ticket, hours in —
+  the panel, the database and the worker all stay up while no machine on the
+  host can start, so nothing else notices.
+
+### Fixed
+
+- **Storage survives the nightly upgrade.** `apt-daily-upgrade` restarts Incus;
+  Incus exports the ZFS pool when it stops and cannot re-import a file vdev on
+  the way back up, so storage stayed down until somebody imported it by hand. A
+  systemd timer now re-imports it. The earlier attempt never ran, because
+  `RemainAfterExit=yes` left it `active (exited)` and a `Wants=` dependency does
+  not restart an active unit.
+- **A machine in `error` can be started by its owner.** Every press of the power
+  button answered 409 under a label reading *نیازمند بررسی* that named nobody,
+  with no way forward from the interface. `error` records that something failed
+  once, not that the machine is unusable.
+- **Restarting Incus no longer takes the panel down.** The provisioner stopped
+  with Incus and never came back, which deleted `/run/mmd` — a directory
+  `mmd-api` needs to build its mount namespace, so the next API restart
+  crash-looped forever and the site served 502. Cost 63 minutes of downtime
+  before it was understood.
+- The installer now installs and enables the watchdog, which had been placed by
+  hand and therefore existed on exactly one host: a rebuild came up with no
+  alerting at all, looking perfectly healthy.
+
+### Removed
+
+- The Kavenegar SMS transport, dead since Bale replaced it — the HTTP client,
+  the key, the sender line, and the credential in two units and the installer.
+  A test now fails if any of it returns.
+
 ## [1.10.0] — 2026-09-08
 
 The release the AI support agent arrives in, and the one where SMS is replaced.

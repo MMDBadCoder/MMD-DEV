@@ -14,7 +14,6 @@ os.environ.setdefault("MMD_SECRET_KEY", "test-only")
 from datetime import UTC, datetime, timedelta      # noqa: E402
 from pathlib import Path                           # noqa: E402
 
-import pytest                                      # noqa: E402
 from sqlalchemy import create_engine, select       # noqa: E402
 from sqlalchemy.orm import Session                 # noqa: E402
 
@@ -51,10 +50,12 @@ SAMPLE = {"code": "12345", "balance": "250,000", "increased": True,
           "free": "6.2", "state": "SUSPENDED"}
 
 
-def test_every_template_bills_as_one_segment():
-    """Persian and emoji are both UCS-2, so a segment is 70 UTF-16 code units.
-    Measured in the wrong unit this passes and the bill silently doubles: a
-    73-unit draft was billed 3808 where 70 would have been half."""
+def test_every_template_fits_one_short_message():
+    """70 UTF-16 code units. It began as money - Persian and emoji are UCS-2,
+    so an SMS segment held exactly that, and measuring in the wrong unit
+    silently doubled the bill: a 73-unit draft was billed 3808 where 70 would
+    have been half. Bale charges nothing and the limit stays, because at this
+    size an alert is read in one glance on a phone."""
     for kind, tpl in smslib.CATALOGUE.items():
         body = tpl.build(SAMPLE)
         assert smslib.segments(body) == 1, (
@@ -137,7 +138,7 @@ def test_a_failed_send_is_retried_with_backoff_then_given_up(monkeypatch):
     appmod.admin_approve(user.id, admin, db)
 
     def refuse(*_a, **_k):
-        raise smslib.SmsError("kavenegar refused: 411 receptor is invalid")
+        raise smslib.SmsError("bale refused: 403 blocked by the user")
 
     monkeypatch.setattr(smslib.balelib, "send", refuse)
     row = smslib.due(db)[0]
@@ -147,7 +148,7 @@ def test_a_failed_send_is_retried_with_backoff_then_given_up(monkeypatch):
     # Backed off, so the next tick does not immediately hammer the provider.
     assert smslib.due(db) == []
     assert row.next_attempt_at > datetime.now(UTC)
-    assert "411" in row.error
+    assert "403" in row.error
 
     for _ in range(smslib.MAX_ATTEMPTS - 1):
         row.next_attempt_at = datetime.now(UTC) - timedelta(seconds=1)
@@ -158,35 +159,33 @@ def test_a_failed_send_is_retried_with_backoff_then_given_up(monkeypatch):
     assert smslib.due(db) == []
 
 
-def test_a_200_body_that_reports_failure_is_a_failure(monkeypatch):
-    """Kavenegar reports a refusal inside a 200 body as often as by status
-    code, so the envelope decides - not r.status_code."""
-    class Response:
-        status_code = 200
-
-        @staticmethod
-        def json():
-            return {"return": {"status": 411, "message": "invalid receptor"}}
-
-    monkeypatch.setattr(smslib.httpx, "post", lambda *_a, **_k: Response())
-    with pytest.raises(smslib.SmsError, match="411"):
-        smslib.send("09395382065", "x", key="k")
-
-
 # --- the credential -------------------------------------------------------
 def test_the_provider_key_is_delivered_to_the_worker_only():
     root = Path(__file__).resolve().parents[1]
     worker = (root / "deploy" / "mmd-worker.service").read_text()
     api = (root / "deploy" / "mmd-api.service").read_text()
-    assert "LoadCredential=kavenegar:/etc/mmd/kavenegar.key" in worker
+    assert "LoadCredential=bale:/etc/mmd/bale.key" in worker
     # Both units run as the same user, so anything mmd-api can read it holds.
-    assert "kavenegar" not in api
+    assert "bale" not in api
 
 
-def test_only_the_worker_ever_calls_send():
+def test_only_the_worker_ever_sends():
     root = Path(__file__).resolve().parents[1]
-    assert "smslib.send" not in (root / "control" / "mmd" / "app.py").read_text()
+    app = (root / "control" / "mmd" / "app.py").read_text()
+    assert "balelib" not in app and "bale.send" not in app
     assert "sms_once" in (root / "control" / "mmd" / "worker.py").read_text()
+
+
+def test_the_sms_transport_is_gone_not_merely_unused():
+    """Dead code that still holds a live third-party key is a liability, not
+    clutter: it keeps the credential in the units, in the installer and in
+    config, where the next reader has to work out whether it is load-bearing."""
+    root = Path(__file__).resolve().parents[1]
+    for sub in ("control", "deploy", "host", "web"):
+        for f in (root / sub).rglob("*"):
+            if f.is_file() and "__pycache__" not in f.parts:
+                assert "kavenegar" not in f.read_text(
+                    encoding="utf-8", errors="ignore").lower(), f
 
 
 # --- rejection ------------------------------------------------------------

@@ -112,7 +112,7 @@ fi
 chmod 400 /etc/mmd/mcp.key; chown root:root /etc/mmd/mcp.key
 
 # The rest come from outside and cannot be generated: a Bale bot token from
-# BotFather, an OpenRouter management key, a Kavenegar key. An empty file is
+# BotFather, an OpenRouter management key. An empty file is
 # created so the unit starts; each caller reads empty as "not configured" and
 # declines to send rather than crashing, which is the honest state until an
 # operator pastes the value in.
@@ -121,7 +121,7 @@ chmod 400 /etc/mmd/mcp.key; chown root:root /etc/mmd/mcp.key
 # for far longer than the two added with Bale, and the symptom is the same
 # each time: a rebuilt host with a unit that will not start, and a message
 # about a credential rather than about what is broken.
-for cred in bale openrouter kavenegar; do
+for cred in bale openrouter; do
   if [ ! -f "/etc/mmd/${cred}.key" ]; then
     : > "/etc/mmd/${cred}.key"
     log "NOTE: /etc/mmd/${cred}.key is empty - paste the credential in,"
