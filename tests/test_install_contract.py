@@ -54,3 +54,29 @@ def test_the_documents_the_agent_serves_are_installed():
     # And every document the tool offers actually lives in one of those.
     for doc in AGENT_DOCS:
         assert (ROOT / doc).is_file(), f"{doc} is offered but does not exist"
+
+
+def test_every_unit_in_deploy_is_installed_by_the_installer():
+    """A unit file that exists in the repo but is never copied lives only on
+    whichever host somebody ran the commands on by hand.
+
+    That has happened three times: mmd-hermes-vhosts, two credentials, and the
+    watchdog - which is the alerting itself, so a rebuilt host came up looking
+    perfectly healthy with nothing left to notice that it wasn't.
+    """
+    missing = sorted(u.name for u in (ROOT / "deploy").iterdir()
+                     if u.suffix in (".service", ".timer")
+                     and f"deploy/{u.name}" not in INSTALLER)
+    assert not missing, (
+        f"{missing} exist in deploy/ but the installer never copies them, so "
+        f"a rebuilt host will not have them at all")
+
+
+def test_every_timer_is_enabled():
+    """Copying a timer starts nothing. An installed-but-disabled watchdog is
+    indistinguishable from a working one until the day it is needed."""
+    timers = [u.stem for u in (ROOT / "deploy").glob("*.timer")]
+    not_enabled = [t for t in timers
+                   if not re.search(rf"systemctl enable[^\n]*\b{t}\.timer\b",
+                                    INSTALLER)]
+    assert not not_enabled, f"{not_enabled} are installed but never enabled"

@@ -1,5 +1,5 @@
 [Unit]
-Description=Check that the MMD-DEV worker is still ticking
+Description=Check the MMD-DEV worker and storage pool
 
 [Timer]
 OnBootSec=10min

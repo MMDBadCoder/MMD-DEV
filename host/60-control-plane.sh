@@ -154,6 +154,13 @@ install -m 0644 "$REPO/deploy/mmd-api.service" /etc/systemd/system/
 install -m 0644 "$REPO/deploy/mmd-worker.service" /etc/systemd/system/
 install -m 0644 "$REPO/deploy/mmd-vhosts.service" /etc/systemd/system/
 install -m 0644 "$REPO/deploy/mmd-vhosts.timer" /etc/systemd/system/
+# The watchdog was installed by hand and therefore existed on exactly one host.
+# It is the only thing that reports a stalled worker or a storage pool that
+# failed to come back, so a rebuild was silently dropping the alerting while
+# looking entirely healthy - the same shape as mmd-hermes-vhosts below, and
+# the reason test_install_contract now checks every unit in deploy/.
+install -m 0644 "$REPO/deploy/mmd-watchdog.service" /etc/systemd/system/
+install -m 0644 "$REPO/deploy/mmd-watchdog.timer" /etc/systemd/system/
 
 # The vhost reconciler used to be installed by hand, which meant it existed on
 # the one host somebody had run the commands on and nowhere else - a rebuild
@@ -179,7 +186,7 @@ systemctl enable mmd-provisioner.service mmd-api.service mmd-worker.service
 # reproducing, because the API had been up for eleven hours and never restarted.
 systemctl restart mmd-provisioner.service
 systemctl restart mmd-api.service mmd-worker.service
-systemctl enable --now mmd-vhosts.timer
+systemctl enable --now mmd-vhosts.timer mmd-watchdog.timer
 
 log "control plane installed"
 systemctl is-active mmd-provisioner.service

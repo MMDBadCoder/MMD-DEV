@@ -45,8 +45,10 @@ def database():
 
 
 # --- cost -----------------------------------------------------------------
+# `state` is the longest word ZFS reports, so the budget below is measured
+# against the worst case rather than the tidy one.
 SAMPLE = {"code": "12345", "balance": "250,000", "increased": True,
-          "free": "6.2"}
+          "free": "6.2", "state": "SUSPENDED"}
 
 
 def test_every_template_bills_as_one_segment():

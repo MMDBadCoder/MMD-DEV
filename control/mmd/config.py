@@ -181,6 +181,11 @@ class Config:
     # the same host.
     pool_floor_gib: float = field(default_factory=lambda: float(
         _env("MMD_POOL_FLOOR_GIB", "8")))
+    # The ZFS pool Incus keeps every machine on. Named here so the watchdog can
+    # ask whether it is still imported at all - a different question from the
+    # floor above, and the one that took two customer tickets to notice. Reads
+    # the same variable the provisioner does, so one setting moves both.
+    zpool_name: str = field(default_factory=lambda: _env("MMD_ZPOOL", "mmdpool"))
     prometheus_token: str = field(default_factory=lambda: _env(
         "MMD_PROMETHEUS_TOKEN", ""))
 

@@ -179,6 +179,13 @@ CATALOGUE: dict[str, Template] = {t.kind: t for t in [
        lambda d: f"🔴 نرخ خطای سرور بالا رفته است\n{URL}"),
     _t("admin_worker_stalled", "admin", "admin", True,
        lambda d: "🔴 پردازشگر پس‌زمینه متوقف شده است"),
+    # Deliberately not worded as a space problem - `admin_pool_low` is that
+    # one, and an operator woken at night has to tell them apart at a glance.
+    # The state rides on its own line because it is the only Latin word here,
+    # and because MISSING and SUSPENDED call for different first moves.
+    _t("admin_pool_down", "admin", "admin", True,
+       lambda d: "🔴 ذخیره‌سازی سرور در دسترس نیست\nماشین‌ها کار نمی‌کنند"
+                 + (f"\n{str(d.get('state'))[:10]}" if d.get("state") else "")),
 ]}
 
 # What a customer may switch off, in the order the settings page shows them.

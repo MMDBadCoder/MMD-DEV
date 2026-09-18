@@ -69,7 +69,7 @@ decorative.
 
  mmd-worker (user `mmd`) ── metrics scrape · hourly settlement
                             lifecycle · reconciliation · SMS outbox
- mmd-watchdog (timer)   ── notices when the worker stops, and says so
+ mmd-watchdog (timer)   ── notices a stopped worker or a missing pool
  PostgreSQL ── the authority on desired state and on money
 
  Observability, all on loopback and never exposed:
@@ -88,7 +88,7 @@ decorative.
 | `mmd-worker` | `mmd` | metrics cert + the restricted client cert | scrape usage, stop on exhaustion |
 | `mmd-provisioner` | `root` | unix socket (full admin) | create, reset, archive, restore, destroy |
 | `mmd-vhosts` | `root` | none — reads the database only | write `/etc/nginx/sites-enabled`, run certbot |
-| `mmd-watchdog` | `mmd` | none — reads the database only | send one SMS when the worker stops ticking |
+| `mmd-watchdog` | `mmd` | none — reads the database and asks `zpool` | report a stalled worker or an unusable storage pool |
 
 Two credentials are delivered by `LoadCredential` to the worker alone — the
 OpenRouter management key and the Kavenegar SMS key. Both spend money, and

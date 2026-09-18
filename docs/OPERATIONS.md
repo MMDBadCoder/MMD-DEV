@@ -400,9 +400,16 @@ worker, which is the only process holding the Kavenegar key.
   with the new balance and direction when that value changes. First deployment
   sight and changing `n` establish a silent baseline. The preference switch
   `credit_step` can disable these messages without disabling other money alerts.
-- **The worker has stopped**: `mmd-watchdog.timer` texts every administrator
+- **The worker has stopped**: `mmd-watchdog.timer` messages every administrator
   after 15 minutes without a heartbeat. It sends directly rather than queueing,
   because the process that drains the outbox is the one that failed.
+- **Storage has gone**: the same timer asks `zpool list` about the pool every
+  five minutes and reports anything that is not `ONLINE`. The state rides on
+  its own line of the message, because `MISSING` is fixed by an import and
+  `SUSPENDED` means a disk is failing. Checked even when the worker looks
+  healthy: through both outages it *was* healthy, billing away while no machine
+  on the host could start. A host with no `zpool` at all stays silent — that is
+  a developer machine, not an outage.
 
 ## Recovery
 
