@@ -80,3 +80,49 @@ def test_every_timer_is_enabled():
                    if not re.search(rf"systemctl enable[^\n]*\b{t}\.timer\b",
                                     INSTALLER)]
     assert not not_enabled, f"{not_enabled} are installed but never enabled"
+
+
+# --- how the units depend on each other -----------------------------------
+def _units() -> dict[str, str]:
+    return {u.name: u.read_text(encoding="utf-8")
+            for u in (ROOT / "deploy").glob("*.service")}
+
+
+def test_a_runtime_directory_another_unit_needs_is_preserved():
+    """systemd deletes a RuntimeDirectory when its unit stops, and a path in
+    ReadWritePaths is a mount-namespace requirement rather than a preference -
+    so the unit that needs it cannot start AT ALL once it is gone. It fails at
+    step NAMESPACE, Restart=on-failure retries forever, and nothing recreates
+    the directory.
+
+    The trap is the delay. A running process keeps the namespace it already
+    built, so stopping the owner does no visible damage until the next restart
+    of the dependent unit - which may be a deploy hours later, by which time
+    the cause is out of view. That cost an hour of 502 on the public site.
+    """
+    units = _units()
+    for name, text in units.items():
+        for m in re.finditer(r"^RuntimeDirectory=(\S+)$", text, re.M):
+            path = f"/run/{m.group(1)}"
+            needed_by = [other for other, t in units.items()
+                         if other != name
+                         and re.search(rf"^ReadWritePaths=.*{re.escape(path)}",
+                                       t, re.M)]
+            if not needed_by:
+                continue
+            assert "RuntimeDirectoryPreserve=yes" in text, (
+                f"{name} owns {path} and deletes it on stop, but {needed_by} "
+                f"cannot start without it")
+
+
+def test_a_unit_that_requires_another_comes_back_with_it():
+    """Requires= propagates a STOP and never a restart, and Restart=on-failure
+    does not cover being shut down as somebody else's dependency. So
+    `systemctl restart incus` - which the nightly apt-daily-upgrade does - left
+    the provisioner stopped indefinitely. PartOf= propagates the restart."""
+    for name, text in _units().items():
+        for m in re.finditer(r"^Requires=(\S+\.service)$", text, re.M):
+            dep = m.group(1)
+            assert re.search(rf"^PartOf={re.escape(dep)}$", text, re.M), (
+                f"{name} requires {dep} but is not PartOf it, so restarting "
+                f"{dep} stops {name} and never starts it again")

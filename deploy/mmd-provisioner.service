@@ -2,6 +2,12 @@
 Description=MMD-DEV workspace provisioner (privileged)
 After=incus.service
 Requires=incus.service
+# PartOf, not just Requires. Requires propagates a STOP but never a restart, so
+# `systemctl restart incus` - which is what the nightly apt-daily-upgrade does -
+# stopped this unit and left it stopped: Restart=on-failure does not cover being
+# shut down as somebody else's dependency. PartOf propagates the restart too, so
+# it comes back with incus.
+PartOf=incus.service
 
 [Service]
 Type=simple
@@ -60,6 +66,21 @@ RestartSec=3
 
 RuntimeDirectory=mmd
 RuntimeDirectoryMode=0750
+# Keep /run/mmd when this unit stops. systemd deletes a RuntimeDirectory on
+# stop, and mmd-api lists /run/mmd in ReadWritePaths - which is not a
+# preference but a mount-namespace requirement, so with the directory gone the
+# API cannot start AT ALL. It fails at step NAMESPACE, Restart=on-failure
+# retries forever, and nothing ever recreates the directory: the site serves
+# 502 until a human notices.
+#
+# The trap is that stopping the provisioner does no visible damage. A running
+# API keeps the namespace it already built, so everything looks fine until the
+# next API restart - which may be hours later, or a deploy, and by then the
+# incus restart that actually caused it is long out of view. One hour of 502
+# was spent looking in the wrong place before this was understood.
+#
+# Safe to preserve: serve() unlinks a stale socket before binding.
+RuntimeDirectoryPreserve=yes
 
 # No network at all. The provisioner speaks only over its unix socket, so it
 # cannot be reached from the dashboard's port, from a workspace, or from the

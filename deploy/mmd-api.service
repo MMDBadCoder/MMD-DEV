@@ -1,7 +1,11 @@
 [Unit]
 Description=MMD-DEV control plane API
-After=network-online.target postgresql.service incus.service
-Wants=postgresql.service
+After=network-online.target postgresql.service incus.service mmd-provisioner.service
+# The provisioner owns /run/mmd, which this unit's mount namespace requires, so
+# on a cold boot it has to exist first. Wants rather than Requires: if the
+# provisioner is broken the panel should still come up and say so, rather than
+# both being dark together.
+Wants=postgresql.service mmd-provisioner.service
 
 [Service]
 Type=simple
